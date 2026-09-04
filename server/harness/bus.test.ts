@@ -73,6 +73,18 @@ describe("EventBus", () => {
     expect(logged[0].type).toBe("turn.started");
   });
 
+  it("delivers live screen frames without persisting their base64 payload", () => {
+    const append = vi.fn<typeof appendFileSync>();
+    const bus = new EventBus(append);
+    const seen: RuntimeEvent[] = [];
+    bus.subscribe((event) => seen.push(event));
+
+    bus.publish(testEvent({ type: "screen.frame", png: "large-base64", mime: "image/png" }));
+
+    expect(seen).toHaveLength(1);
+    expect(append).not.toHaveBeenCalled();
+  });
+
   it("redacts credential-shaped content before writing the NDJSON log", () => {
     const key = `sk-ant-api03-${"abcdefghijklmnopqrstuvwxyz0123456789"}`;
     const bus = new EventBus();

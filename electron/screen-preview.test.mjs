@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
-const { createDisplayMediaGuard, invokeDisplayMediaCallback, selectCaptureSource } = require(
+const { createDisplayMediaGuard, encodeScreenThumbnail, invokeDisplayMediaCallback, selectCaptureSource } = require(
   "./screen-preview.cjs",
 );
 
@@ -69,6 +69,13 @@ describe("display source selection", () => {
     expect(selectCaptureSource({ sources, host: "x11", primaryDisplayId: 99 })).toBeNull();
   });
 
+  it("matches the Windows primary display instead of choosing the first source", () => {
+    expect(selectCaptureSource({ sources, host: "win32", primaryDisplayId: 42 })).toEqual(
+      sources[1],
+    );
+    expect(selectCaptureSource({ sources, host: "win32", primaryDisplayId: 99 })).toBeNull();
+  });
+
   it("uses an unambiguous Xorg source when display_id is absent or mismatched", () => {
     const onlySource = { id: "only", display_id: "" };
     expect(
@@ -89,6 +96,21 @@ describe("display source selection", () => {
       selectCaptureSource({ sources: [sources[0]], host: "wayland", primaryDisplayId: 42 }),
     ).toEqual(sources[0]);
     expect(selectCaptureSource({ sources, host: "wayland", primaryDisplayId: 42 })).toBeNull();
+  });
+});
+
+describe("screen thumbnail encoding", () => {
+  it("uses a compact JPEG frame instead of a large PNG data URL", () => {
+    const thumbnail = {
+      toJPEG: (quality) => {
+        expect(quality).toBeGreaterThanOrEqual(70);
+        return Buffer.from("jpeg-frame");
+      },
+      toDataURL: () => { throw new Error("PNG fallback should not run"); },
+    };
+    expect(encodeScreenThumbnail(thumbnail)).toBe(
+      `data:image/jpeg;base64,${Buffer.from("jpeg-frame").toString("base64")}`,
+    );
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendNativeEvent, shortcutLabel, type RecordedSkillEvent } from "./skill-recorder";
+import { appendNativeEvent, appendVisualFrame, shortcutLabel, type RecordedSkillEvent } from "./skill-recorder";
 
 const event = (patch: Partial<NativeSkillRecordingEvent>): NativeSkillRecordingEvent => ({
   type: "key", atMs: 100, app: "Notes", windowTitle: "Ideas", ...patch,
@@ -77,6 +77,15 @@ describe("skill recording events", () => {
     const first = appendNativeEvent([], event({ type: "click", atMs: 100 }));
     const second = appendNativeEvent(first.events, event({ type: "click", atMs: 100 }));
     expect(second.events[0]?.id).not.toBe(second.events[1]?.id);
+  });
+
+  it("adds a privacy-reviewed visual checkpoint without inventing an action", () => {
+    const result = appendVisualFrame([], { atMs: 3_250, screenshot: "data:image/webp;base64,AQID" });
+    expect(result.events).toEqual([expect.objectContaining({
+      type: "frame",
+      atMs: 3_250,
+      screenshot: "data:image/webp;base64,AQID",
+    })]);
   });
 
   it("caps the timeline at 600 events and keeps the first ones", () => {

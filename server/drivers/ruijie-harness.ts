@@ -1,0 +1,697 @@
+/**
+ * Adapter for the already-running Ruijie Harness desktop Host.
+ *
+ * The desktop owns OAuth, quota, plugins, tools, and machine routing. This
+ * driver only speaks its loopback API, so credentials never cross into
+ * OpenMausBot and both products use the same authenticated account.
+ */
+import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, readlink, rename, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { promisify } from "node:util";
+
+import type {
+  DriverCreateInput,
+  ModelCatalog,
+  ProviderDriver,
+  ProviderInstance,
+  RequestOutcome,
+  RuntimeEvent,
+  RuntimeEventListener,
+  SendTurnInput,
+  TurnId,
+} from "../contracts.ts";
+import { newEventId, newId } from "../contracts.ts";
+import { computerProxyEnv } from "../container-computer.ts";
+import { SPAWNED_PROXIES } from "../proxy-paths.ts";
+
+const DRIVER_KIND = "ruijieHarness";
+const BRIDGE_FILENAME = "openmaus-bridge.json";
+const DEFAULT_MODEL = "deepseek-official::deepseek-v4-flash";
+const DEFAULT_MODELS: ModelCatalog = {
+  default: DEFAULT_MODEL,
+  options: [
+    { id: DEFAULT_MODEL, label: "DeepSeek-V4-Flash", provider: "deepseek-official" },
+    { id: "gpt::gpt-5.6-luna", label: "GPT-5.6-Luna", provider: "gpt" },
+    { id: "deepseek-vision::deepseek-v4-flash", label: "DeepSeek-V4-Flash", provider: "deepseek-vision" },
+    { id: "deepseek-vision::deepseek-v4-pro", label: "DeepSeek-V4-Pro", provider: "deepseek-vision" },
+  ],
+};
+
+export interface RuijieHarnessConfig {
+  endpoint?: string;
+  bridgePath?: string;
+  expectedAccountEmail?: string;
+  /** Optional override for non-standard Harness launchers. Ordinary installs
+   * use ~/.dsh; the local development launcher is discovered from its pid. */
+  dshHome?: string;
+}
+
+interface BridgeRecord {
+  schemaVersion: 1;
+  endpoint: string;
+  pid: number;
+  generationId: string;
+}
+
+interface PendingTurn {
+  turnId: TurnId;
+  sessionId: string;
+  abort: AbortController;
+  providerTurn?: number;
+  interrupted: boolean;
+  settled: boolean;
+  toolNames: Map<string, string>;
+}
+
+interface PendingRequest {
+  kind: "approval" | "question";
+  endpoint: string;
+  rpcId: string;
+  sessionId: string;
+  approvalId?: string;
+  questions?: Array<{ id?: unknown }>;
+}
+
+interface HarnessSession {
+  id: string;
+  integrationKey: string;
+}
+
+type DriverEvent = RuntimeEvent extends infer Event
+  ? Event extends RuntimeEvent
+    ? Omit<Event, "eventId" | "provider" | "providerInstanceId" | "createdAt">
+    : never
+  : never;
+
+function decodeConfig(raw: unknown): RuijieHarnessConfig {
+  const value = (raw ?? {}) as Record<string, unknown>;
+  return {
+    endpoint: typeof value.endpoint === "string" && value.endpoint.trim() ? value.endpoint.trim() : undefined,
+    bridgePath: typeof value.bridgePath === "string" && value.bridgePath.trim() ? value.bridgePath.trim() : undefined,
+    expectedAccountEmail: typeof value.expectedAccountEmail === "string" && value.expectedAccountEmail.trim()
+      ? value.expectedAccountEmail.trim().toLowerCase()
+      : undefined,
+    dshHome: typeof value.dshHome === "string" && value.dshHome.trim() ? value.dshHome.trim() : undefined,
+  };
+}
+
+export function toolResultImageAttachment(value: unknown): {
+  attachmentId: string;
+  mime: "image/png" | "image/jpeg" | "image/webp";
+} | null {
+  const seen = new Set<object>();
+  const visit = (node: unknown, depth: number): ReturnType<typeof toolResultImageAttachment> => {
+    if (depth > 8 || !node || typeof node !== "object") return null;
+    if (seen.has(node)) return null;
+    seen.add(node);
+    const record = node as Record<string, unknown>;
+    const attachment = record.attachment as Record<string, unknown> | undefined;
+    if (record.type === "image" && attachment && typeof attachment.attachmentId === "string") {
+      const mime = attachment.mediaType;
+      if (mime === "image/png" || mime === "image/jpeg" || mime === "image/webp") {
+        return { attachmentId: attachment.attachmentId, mime };
+      }
+    }
+    for (const child of Array.isArray(node) ? node : Object.values(record)) {
+      const found = visit(child, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  };
+  return visit(value, 0);
+}
+
+export function defaultRuijieBridgePath(
+  platform: NodeJS.Platform = process.platform,
+  environment: NodeJS.ProcessEnv = process.env,
+  home: string = homedir(),
+): string {
+  const appData = platform === "win32"
+    ? environment.APPDATA ?? join(home, "AppData", "Roaming")
+    : platform === "darwin"
+      ? join(home, "Library", "Application Support")
+      : environment.XDG_CONFIG_HOME ?? join(home, ".config");
+  return join(appData, "锐捷 Harness", BRIDGE_FILENAME);
+}
+
+function validLoopbackEndpoint(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) return undefined;
+    if (!url.port) return undefined;
+    return url.origin;
+  } catch {
+    return undefined;
+  }
+}
+
+async function endpointFromBridge(path: string): Promise<string | undefined> {
+  try {
+    const record = JSON.parse(await readFile(path, "utf8")) as Partial<BridgeRecord>;
+    if (record.schemaVersion !== 1 || !Number.isSafeInteger(record.pid) || !record.generationId) return undefined;
+    return validLoopbackEndpoint(record.endpoint);
+  } catch {
+    return undefined;
+  }
+}
+
+async function bridgeRecord(path: string): Promise<BridgeRecord | undefined> {
+  try {
+    const record = JSON.parse(await readFile(path, "utf8")) as Partial<BridgeRecord>;
+    if (record.schemaVersion !== 1 || !Number.isSafeInteger(record.pid) || !record.generationId) return undefined;
+    const endpoint = validLoopbackEndpoint(record.endpoint);
+    return endpoint ? { ...record, endpoint } as BridgeRecord : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveEndpoint(config: RuijieHarnessConfig): Promise<string> {
+  const explicit = validLoopbackEndpoint(config.endpoint ?? process.env.RUIJIE_HARNESS_ENDPOINT);
+  if (explicit) return explicit;
+  const bridgePath = config.bridgePath ?? process.env.RUIJIE_HARNESS_BRIDGE ?? defaultRuijieBridgePath();
+  const discovered = await endpointFromBridge(bridgePath);
+  if (discovered) return discovered;
+  throw new Error("锐捷 Harness 未运行，请先打开锐捷 Harness 桌面客户端并完成登录");
+}
+
+const execFileAsync = promisify(execFile);
+
+async function harnessExecutable(pid: number): Promise<string | undefined> {
+  try {
+    if (process.platform === "win32") {
+      const script = `(Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}').ExecutablePath`;
+      const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+        windowsHide: true,
+        timeout: 5_000,
+      });
+      return stdout.trim() || undefined;
+    }
+    if (process.platform === "linux") return await readlink(`/proc/${pid}/exe`).catch(() => undefined);
+  } catch { /* fall through to the standard home */ }
+  return undefined;
+}
+
+async function resolveDshHome(config: RuijieHarnessConfig): Promise<string> {
+  const configured = config.dshHome ?? process.env.RUIJIE_HARNESS_HOME ?? process.env.DSH_HOME;
+  if (configured) return configured;
+
+  const bridgePath = config.bridgePath ?? process.env.RUIJIE_HARNESS_BRIDGE ?? defaultRuijieBridgePath();
+  const record = await bridgeRecord(bridgePath);
+  if (record) {
+    const executable = await harnessExecutable(record.pid);
+    if (executable) {
+      let cursor = dirname(executable);
+      while (true) {
+        const developmentHome = join(cursor, ".local-data", "dsh-home");
+        if (existsSync(developmentHome)) return developmentHome;
+        const parent = dirname(cursor);
+        if (parent === cursor) break;
+        cursor = parent;
+      }
+    }
+  }
+  return join(homedir(), ".dsh");
+}
+
+type StdioIntegration = { command: string; args: string[]; env: Record<string, string> };
+
+function computerIntegration(turn: SendTurnInput): StdioIntegration | undefined {
+  if (turn.integrations?.localComputer) {
+    const { command, args, env } = turn.integrations.localComputer;
+    return { command, args, env };
+  }
+  if (turn.integrations?.computer) {
+    return {
+      command: process.execPath,
+      args: [SPAWNED_PROXIES.computer],
+      env: { ELECTRON_RUN_AS_NODE: "1", ...computerProxyEnv(turn.integrations.computer) } as Record<string, string>,
+    };
+  }
+  return undefined;
+}
+
+function stableIntegrationKey(integration: StdioIntegration | undefined): string {
+  if (!integration) return "none";
+  const env = Object.fromEntries(Object.entries(integration.env).sort(([a], [b]) => a.localeCompare(b)));
+  return createHash("sha256").update(JSON.stringify({ ...integration, env })).digest("hex").slice(0, 20);
+}
+
+function sessionIntegrationKey(integrationKey: string, threadId: string, mountAttempt: string): string {
+  return createHash("sha256")
+    .update(`${integrationKey}\0${threadId}\0${mountAttempt}`)
+    .digest("hex")
+    .slice(0, 20);
+}
+
+function mcpPresetContent(base: string, integration: StdioIntegration, key: string): string {
+  const suffix = base.endsWith("\n") ? "" : "\n";
+  return `${base}${suffix}\n# Managed by OpenMausBot. This is user configuration, not Harness source.\n` +
+    `- id: openmaus-computer-${key}\n` +
+    `  name: '@deepseek-ai/dsh-mcp-client'\n` +
+    `  config:\n` +
+    `    serverName: openmaus_${key}\n` +
+    `    transport: stdio\n` +
+    `    command: ${JSON.stringify(integration.command)}\n` +
+    `    args: ${JSON.stringify(integration.args)}\n` +
+    `    env: ${JSON.stringify(integration.env)}\n` +
+    `    failOnStartupError: true\n`;
+}
+
+async function ensureComputerPreset(
+  endpoint: string,
+  config: RuijieHarnessConfig,
+  integration: StdioIntegration,
+  key: string,
+): Promise<string> {
+  const presetId = `openmaus-computer-${key}`;
+  const home = await resolveDshHome(config);
+  const directory = join(home, ".agent-presets", presetId);
+  const target = join(directory, "agent.cordis.yml");
+  const base = await rpc<{ content: string }>(endpoint, "agentPreset.read", { agentPreset: "standard" });
+  if (typeof base.content !== "string" || !base.content.trim()) throw new Error("锐捷 Harness 的 standard 预设不可读取");
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temporary, mcpPresetContent(base.content, integration, key), { encoding: "utf8", mode: 0o600 });
+  await rename(temporary, target);
+  return presetId;
+}
+
+async function rpc<T>(endpoint: string, method: string, payload: unknown, signal?: AbortSignal): Promise<T> {
+  const rpcId = newId();
+  const response = await fetch(`${endpoint}/api/${method}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ type: "client-request", rpcId, method, payload }),
+    signal: signal === undefined ? AbortSignal.timeout(15_000) : AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+  });
+  if (!response.ok) throw new Error(`锐捷 Harness 连接失败（HTTP ${response.status}）`);
+  const envelope = await response.json() as {
+    rpcId?: unknown;
+    result?: { ok?: unknown; value?: unknown; error?: { message?: unknown } };
+  };
+  if (envelope.rpcId !== rpcId) throw new Error("锐捷 Harness 返回了不匹配的请求标识");
+  if (envelope.result?.ok !== true) {
+    const message = envelope.result?.error?.message;
+    throw new Error(typeof message === "string" ? message : `锐捷 Harness 调用 ${method} 失败`);
+  }
+  return envelope.result.value as T;
+}
+
+async function respond(endpoint: string, rpcId: string, value: unknown): Promise<boolean> {
+  const response = await fetch(`${endpoint}/api/respond`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ type: "client-response", rpcId, result: { ok: true, value } }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) return false;
+  const receipt = await response.json() as { accepted?: unknown };
+  return receipt.accepted === true;
+}
+
+async function ssoSummary(endpoint: string): Promise<NonNullable<import("../contracts.ts").ProviderSnapshot["sso"]>> {
+  const response = await fetch(`${endpoint}/__dsh_desktop/ruijie-account`, {
+    headers: { "x-ruijie-dsh-client": "account-card" },
+    cache: "no-store",
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) throw new Error(`锐捷 Harness SSO 状态读取失败（HTTP ${response.status}）`);
+  const value = await response.json() as any;
+  if (
+    value?.authentication !== "sso"
+    || typeof value?.account?.id !== "string"
+    || value?.billing?.currency !== "CNY"
+    || typeof value?.billing?.remaining !== "number"
+  ) {
+    throw new Error("锐捷 Harness 返回了无效的 SSO 账号状态");
+  }
+  return value;
+}
+
+async function matchingSsoSummary(endpoint: string, expectedAccountEmail: string | undefined) {
+  if (!expectedAccountEmail) throw new Error("请先登录 OpenMaus 企业账号");
+  const sso = await ssoSummary(endpoint);
+  const harnessEmail = sso.account.email?.trim().toLowerCase();
+  if (!harnessEmail || harnessEmail !== expectedAccountEmail.trim().toLowerCase()) {
+    throw new Error(`Harness 登录账号与 OpenMaus 不一致，请在 Harness 中切换为 ${expectedAccountEmail}`);
+  }
+  return sso;
+}
+
+function decodeModel(id: string | undefined): { provider: string; model: string } {
+  const [provider, ...model] = (id ?? DEFAULT_MODEL).split("::");
+  if (!provider || model.length === 0 || !model.join("::")) return { provider: "gpt", model: "gpt-5.6-luna" };
+  return { provider, model: model.join("::") };
+}
+
+function textOfAssistantMessage(data: unknown): string {
+  const content = (data as { message?: { content?: unknown } } | undefined)?.message?.content;
+  if (!Array.isArray(content)) return "";
+  return content.flatMap((part) => {
+    if (part && typeof part === "object" && (part as { type?: unknown }).type === "text") {
+      const text = (part as { text?: unknown }).text;
+      return typeof text === "string" ? [text] : [];
+    }
+    return [];
+  }).join("");
+}
+
+function reasonOfTurnEnd(data: unknown): { ok: boolean; stopReason: string; message?: string } {
+  const reason = (data as { reason?: { kind?: unknown; error?: { message?: unknown } } } | undefined)?.reason;
+  const kind = typeof reason?.kind === "string" ? reason.kind : "completed";
+  if (kind === "completed" || kind === "max-tokens") return { ok: true, stopReason: kind };
+  if (kind === "interrupted" || kind === "aborted") return { ok: false, stopReason: "interrupted" };
+  const message = typeof reason?.error?.message === "string" ? reason.error.message : `锐捷 Harness 任务结束：${kind}`;
+  return { ok: false, stopReason: kind, message };
+}
+
+function toModelCatalog(value: unknown, current: ModelCatalog): ModelCatalog {
+  const groups = (value as { groups?: unknown } | undefined)?.groups;
+  if (!Array.isArray(groups)) return current;
+  const options: ModelCatalog["options"] = [];
+  for (const group of groups) {
+    if (!group || typeof group !== "object") continue;
+    const provider = (group as { id?: unknown }).id;
+    const models = (group as { models?: unknown }).models;
+    if (typeof provider !== "string" || !Array.isArray(models)) continue;
+    for (const model of models) {
+      if (!model || typeof model !== "object") continue;
+      const id = (model as { id?: unknown }).id;
+      const name = (model as { name?: unknown }).name;
+      if (typeof id !== "string") continue;
+      options.push({ id: `${provider}::${id}`, label: typeof name === "string" ? name : id, provider });
+    }
+  }
+  if (options.length === 0) return current;
+  const preferred = options.find((option) => option.id === current.default)?.id
+    ?? options.find((option) => option.id === DEFAULT_MODEL)?.id
+    ?? options[0]!.id;
+  return { default: preferred, options };
+}
+
+async function pumpEvents(
+  endpoint: string,
+  signal: AbortSignal,
+  onEnvelope: (envelope: { rpcId?: unknown; payload?: unknown }) => void,
+  onOpen: () => void,
+): Promise<void> {
+  const url = new URL("/api/events.mux", endpoint);
+  url.protocol = "ws:";
+  await new Promise<void>((resolve, reject) => {
+    const socket = new WebSocket(url);
+    let opened = false;
+    const close = () => {
+      if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) socket.close();
+    };
+    const abort = () => close();
+    signal.addEventListener("abort", abort, { once: true });
+    socket.addEventListener("open", () => {
+      opened = true;
+      onOpen();
+    }, { once: true });
+    socket.addEventListener("message", (event) => {
+      if (typeof event.data !== "string") return;
+      try { onEnvelope(JSON.parse(event.data) as { rpcId?: unknown; payload?: unknown }); } catch { /* ignore malformed frame */ }
+    });
+    socket.addEventListener("error", () => {
+      if (!signal.aborted) reject(new Error("锐捷 Harness 事件连接失败"));
+    }, { once: true });
+    socket.addEventListener("close", () => {
+      signal.removeEventListener("abort", abort);
+      if (signal.aborted) resolve();
+      else if (opened) reject(new Error("锐捷 Harness 事件连接已断开"));
+      else reject(new Error("无法连接锐捷 Harness 事件流"));
+    }, { once: true });
+    if (signal.aborted) close();
+  });
+}
+
+export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
+  driverKind: DRIVER_KIND,
+  metadata: { displayName: "锐捷 Harness", supportsMultipleInstances: false, access: "subscription" },
+  models: DEFAULT_MODELS,
+  decodeConfig,
+  defaultConfig: () => decodeConfig({}),
+
+  async create(input: DriverCreateInput<RuijieHarnessConfig>): Promise<ProviderInstance> {
+    let catalog: ModelCatalog = { ...DEFAULT_MODELS, options: [...DEFAULT_MODELS.options] };
+    const listeners = new Set<RuntimeEventListener>();
+    const sessions = new Map<string, HarnessSession>();
+    const active = new Map<string, PendingTurn>();
+    const requests = new Map<string, PendingRequest>();
+    const emit = (event: DriverEvent) => {
+      const full = {
+        ...event,
+        eventId: newEventId(),
+        provider: DRIVER_KIND,
+        providerInstanceId: input.instanceId,
+        createdAt: new Date().toISOString(),
+      } as RuntimeEvent;
+      for (const listener of listeners) listener(full);
+    };
+
+    const refreshModels = async () => {
+      const endpoint = await resolveEndpoint(input.config);
+      await matchingSsoSummary(endpoint, input.config.expectedAccountEmail);
+      const result = await rpc<unknown>(endpoint, "llm.models", {});
+      const next = toModelCatalog(result, catalog);
+      catalog.default = next.default;
+      catalog.options.splice(0, catalog.options.length, ...next.options);
+    };
+
+    const settle = (threadId: string, pending: PendingTurn, ok: boolean, stopReason: string, message?: string) => {
+      if (pending.settled) return;
+      pending.settled = true;
+      pending.abort.abort();
+      active.delete(threadId);
+      for (const [id, request] of requests) if (request.sessionId === pending.sessionId) requests.delete(id);
+      if (message && !pending.interrupted) emit({ type: "runtime.error", threadId, turnId: pending.turnId, message });
+      emit({ type: "turn.completed", threadId, turnId: pending.turnId, ok, stopReason });
+    };
+
+    const handleFrame = (threadId: string, pending: PendingTurn, endpoint: string, envelope: { rpcId?: unknown; payload?: unknown }) => {
+      const frame = envelope.payload as Record<string, unknown> | undefined;
+      if (!frame || frame.sessionId !== pending.sessionId) return;
+      if (frame.type === "approval/requested" && typeof envelope.rpcId === "string") {
+        const requestId = envelope.rpcId;
+        requests.set(requestId, {
+          kind: "approval", endpoint, rpcId: requestId, sessionId: pending.sessionId,
+          approvalId: typeof frame.approvalId === "string" ? frame.approvalId : undefined,
+        });
+        emit({
+          type: "request.opened", threadId, turnId: pending.turnId, requestId,
+          requestType: "permission", tool: typeof frame.toolName === "string" ? frame.toolName : "Harness tool",
+          summary: typeof frame.reason === "string" ? frame.reason : "锐捷 Harness 请求执行此操作",
+        });
+        return;
+      }
+      if (frame.type === "question/requested" && typeof envelope.rpcId === "string") {
+        const requestId = envelope.rpcId;
+        const questions = Array.isArray(frame.questions) ? frame.questions as Array<Record<string, unknown>> : [];
+        requests.set(requestId, { kind: "question", endpoint, rpcId: requestId, sessionId: pending.sessionId, questions });
+        const first = questions[0];
+        emit({
+          type: "request.opened", threadId, turnId: pending.turnId, requestId,
+          requestType: "question", tool: "question",
+          summary: typeof first?.question === "string" ? first.question : "锐捷 Harness 需要你的回答",
+          choices: Array.isArray(first?.options)
+            ? first.options.flatMap((choice) => typeof choice === "string" ? [choice] : [])
+            : undefined,
+        });
+        return;
+      }
+      if (frame.type !== "session/event") return;
+      const event = frame.event as { type?: unknown; data?: unknown } | undefined;
+      if (!event || typeof event.type !== "string") return;
+      const data = event.data as Record<string, unknown> | undefined;
+      const providerTurn = typeof data?.turn === "number" ? data.turn : undefined;
+      if (event.type === "turn/start" && pending.providerTurn === undefined) pending.providerTurn = providerTurn;
+      if (pending.providerTurn !== undefined && providerTurn !== undefined && providerTurn !== pending.providerTurn) return;
+      if (event.type === "assistant/chunk") {
+        const chunk = data?.chunk as Record<string, unknown> | undefined;
+        if (chunk?.type === "text-delta" && typeof chunk.text === "string") {
+          emit({ type: "content.delta", threadId, turnId: pending.turnId, streamKind: "assistant_text", delta: chunk.text });
+        }
+      } else if (event.type === "assistant/message") {
+        const text = textOfAssistantMessage(data);
+        if (text) emit({ type: "item.completed", threadId, turnId: pending.turnId, itemType: "assistant_text", text });
+      } else if (event.type === "tool/call") {
+        const itemId = typeof data?.callId === "string" ? data.callId : newId();
+        const toolName = typeof data?.name === "string" ? data.name : "Harness tool";
+        pending.toolNames.set(itemId, toolName);
+        emit({ type: "item.started", threadId, turnId: pending.turnId, itemId, itemType: "tool", title: toolName });
+      } else if (event.type === "tool/result") {
+        const message = data?.message as { toolCallId?: unknown; source?: { callId?: unknown } } | undefined;
+        const itemId = typeof message?.toolCallId === "string"
+          ? message.toolCallId
+          : typeof message?.source?.callId === "string"
+            ? message.source.callId
+            : typeof data?.callId === "string"
+              ? data.callId
+              : undefined;
+        const toolName = itemId ? pending.toolNames.get(itemId) : undefined;
+        if (itemId) pending.toolNames.delete(itemId);
+        emit({ type: "item.completed", threadId, turnId: pending.turnId, itemId, itemType: "tool", ok: data?.error === undefined });
+        const image = /(?:^|__)get_(?:window|desktop)_state$/.test(toolName ?? "")
+          ? toolResultImageAttachment(data)
+          : null;
+        if (image) {
+          void rpc<{ attachment?: { mediaType?: unknown }; data?: unknown }>(endpoint, "session.attachment", {
+            sessionId: pending.sessionId,
+            attachmentId: image.attachmentId,
+          }).then((loaded) => {
+            if (typeof loaded.data !== "string" || !loaded.data) return;
+            const mime = loaded.attachment?.mediaType;
+            emit({
+              type: "screen.frame",
+              threadId,
+              turnId: pending.turnId,
+              png: loaded.data,
+              mime: mime === "image/jpeg" || mime === "image/webp" ? mime : "image/png",
+            });
+          }).catch(() => undefined);
+        }
+      } else if (event.type === "turn/end") {
+        const result = reasonOfTurnEnd(data);
+        settle(threadId, pending, pending.interrupted ? false : result.ok, pending.interrupted ? "interrupted" : result.stopReason, result.message);
+      }
+    };
+
+    const adapter: ProviderInstance["adapter"] = {
+      provider: DRIVER_KIND,
+      capabilities: {
+        sessionModelSwitch: "in-session",
+        images: true,
+        queueing: false,
+        computerMcp: true,
+        localComputerMcp: true,
+      },
+      async sendTurn(turn: SendTurnInput) {
+        if (active.has(turn.threadId)) throw new Error("锐捷 Harness 正在处理这个会话");
+        const endpoint = await resolveEndpoint(input.config);
+        await matchingSsoSummary(endpoint, input.config.expectedAccountEmail);
+        const integration = computerIntegration(turn);
+        const integrationKey = stableIntegrationKey(integration);
+        let session = sessions.get(turn.threadId);
+        if (session && session.integrationKey !== integrationKey) session = undefined;
+        let sessionId = session?.id;
+        if (!sessionId && integrationKey === "none" && typeof turn.resumeCursor === "string" && turn.resumeCursor.startsWith("session-")) {
+          sessionId = turn.resumeCursor;
+        }
+        if (!sessionId) {
+          const agentPreset = integration
+            ? await ensureComputerPreset(
+                endpoint,
+                input.config,
+                integration,
+                // Harness can keep a client mounted after either app restarts,
+                // or after session.create fails halfway through. A fresh mount
+                // attempt therefore needs a fresh preset id and serverName.
+                sessionIntegrationKey(integrationKey, turn.threadId, newId()),
+              )
+            : undefined;
+          const created = await rpc<{ sessionId: string }>(endpoint, "session.create", {
+            cwd: turn.cwd,
+            ...(agentPreset ? { agentPreset } : {}),
+          });
+          sessionId = created.sessionId;
+        }
+        sessions.set(turn.threadId, { id: sessionId, integrationKey });
+        const selected = decodeModel(turn.model);
+        await rpc(endpoint, "session.selectModel", {
+          sessionId, provider: selected.provider, model: selected.model,
+          ...(turn.effort ? { reasoningEffort: turn.effort } : {}),
+        });
+
+        const pending: PendingTurn = { turnId: newId(), sessionId, abort: new AbortController(), interrupted: false, settled: false, toolNames: new Map() };
+        active.set(turn.threadId, pending);
+        let opened!: () => void;
+        const ready = new Promise<void>((resolve) => { opened = resolve; });
+        void pumpEvents(endpoint, pending.abort.signal, (envelope) => handleFrame(turn.threadId, pending, endpoint, envelope), opened)
+          .catch((cause: unknown) => {
+            if (!pending.interrupted && !pending.abort.signal.aborted) {
+              settle(turn.threadId, pending, false, "connection_error", cause instanceof Error ? cause.message : String(cause));
+            }
+          });
+        await Promise.race([
+          ready,
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("连接锐捷 Harness 事件流超时")), 10_000)),
+        ]);
+        emit({ type: "session.started", threadId: turn.threadId, turnId: pending.turnId, sessionId, model: turn.model ?? catalog.default });
+        emit({ type: "turn.started", threadId: turn.threadId, turnId: pending.turnId });
+        const prompt = turn.system ? `${turn.system}\n\n${turn.text}` : turn.text;
+        await rpc(endpoint, "session.prompt", {
+          sessionId, mode: "queue", content: [{ type: "text", text: prompt }],
+          clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        }, pending.abort.signal).catch((cause: unknown) => {
+          if (!pending.interrupted) settle(turn.threadId, pending, false, "request_error", cause instanceof Error ? cause.message : String(cause));
+        });
+        return { turnId: pending.turnId };
+      },
+      async interruptTurn(threadId, turnId) {
+        const pending = active.get(threadId);
+        if (!pending || (turnId && pending.turnId !== turnId)) return;
+        pending.interrupted = true;
+        const endpoint = await resolveEndpoint(input.config).catch(() => undefined);
+        if (endpoint) void rpc(endpoint, "session.cancel", { sessionId: pending.sessionId }).catch(() => undefined);
+        settle(threadId, pending, false, "interrupted");
+      },
+      async respondToRequest(threadId, requestId, decision): Promise<RequestOutcome> {
+        const request = requests.get(requestId);
+        if (!request || sessions.get(threadId)?.id !== request.sessionId) return "unavailable";
+        let value: unknown;
+        if (request.kind === "approval") {
+          if (!request.approvalId) return "unavailable";
+          value = { sessionId: request.sessionId, approvalId: request.approvalId, outcome: decision.behavior === "allow" ? "allowed-once" : "rejected" };
+        } else {
+          const answer = decision.message ?? "";
+          value = {
+            sessionId: request.sessionId,
+            answer: { answers: (request.questions ?? []).map((question) => ({ id: String(question.id ?? ""), selected: [], custom: answer })) },
+          };
+        }
+        const accepted = await respond(request.endpoint, request.rpcId, value).catch(() => false);
+        if (!accepted) return "unavailable";
+        requests.delete(requestId);
+        emit({ type: "request.resolved", threadId, turnId: active.get(threadId)?.turnId, requestId, behavior: decision.behavior, source: "user" });
+        return request.kind === "question" ? "answered" : decision.behavior === "allow" ? "allowed-once" : "rejected";
+      },
+      hasSession: (threadId) => sessions.has(threadId),
+      async stopAll() {
+        await Promise.all([...active.keys()].map((threadId) => adapter.interruptTurn(threadId)));
+      },
+      onEvent(listener) {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+    };
+
+    return {
+      instanceId: input.instanceId,
+      driverKind: DRIVER_KIND,
+      displayName: input.displayName,
+      enabled: input.enabled,
+      get models() { return catalog; },
+      refreshModels,
+      adapter,
+      async snapshot() {
+        if (!input.enabled) return { state: "unavailable", reason: "disabled" };
+        try {
+          const endpoint = await resolveEndpoint(input.config);
+          await rpc(endpoint, "host.describe", {});
+          const sso = await matchingSsoSummary(endpoint, input.config.expectedAccountEmail);
+          return { state: "available", authenticated: true, version: "Ruijie Harness", billing: "subscription", sso };
+        } catch (cause) {
+          return { state: "unavailable", authenticated: false, reason: cause instanceof Error ? cause.message : String(cause) };
+        }
+      },
+      async dispose() { await adapter.stopAll(); listeners.clear(); },
+    };
+  },
+};

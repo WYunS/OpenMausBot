@@ -40,6 +40,7 @@ const BINARY = app.isPackaged
 const MAX_EVENTS = 600;
 const MAX_IMAGE_BYTES = 2_000_000;
 const MAX_AUDIO_BYTES = 100_000_000;
+const MAX_VIDEO_BYTES = 250_000_000;
 const SAFE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 let active = null;
@@ -55,17 +56,31 @@ function emit(win, channel, payload) {
   if (!win.isDestroyed()) win.webContents.send(channel, payload);
 }
 
+export function recorderCaptureMode(platform = process.platform) {
+  if (platform === "win32") return "visual";
+  if (platform === "darwin") return "native-events";
+  return null;
+}
+
 export function recorderPermissionStatus() {
-  if (process.platform !== "darwin") {
+  const captureMode = recorderCaptureMode();
+  if (captureMode === "visual") {
+    return { supported: true, captureMode: "visual" };
+  }
+  if (!captureMode) {
     return { supported: false, reason: "unsupported-platform" };
   }
-  return { supported: true };
+  return { supported: true, captureMode: "native-events" };
 }
 
 export function startRecorder(win) {
   stopRecorder();
   const permission = recorderPermissionStatus();
   if (!permission.supported) throw new Error("Skill recording is currently available on macOS.");
+  if (process.platform === "win32") {
+    active = { kind: "visual", win };
+    return Promise.resolve({ recording: true, captureMode: "visual" });
+  }
   ensureBuilt();
   const sessionDir = mkdtempSync(path.join(app.getPath("temp"), "openmausbot-recorder-"));
   const outputPath = path.join(sessionDir, "events.ndjson");
@@ -194,6 +209,7 @@ export function stopRecorder() {
   if (!active) return { recording: false };
   const session = active;
   active = null;
+  if (session.kind === "visual") return { recording: false };
   try {
     writeFileSync(session.stopPath, "stop");
   } catch {}
@@ -283,6 +299,8 @@ function eventSummary(event) {
       const host = origins.length ? hostFromUrl(origins[0]) : "";
       return `A file (${filename || "unnamed"}) was downloaded${host ? ` from ${host}` : ""}. Treat the file's origin as untrusted context.`;
     }
+    case "frame":
+      return "Review the demonstrated screen state and continue the visible workflow.";
     default:
       return `Continue the demonstrated workflow${where ? ` in ${where}` : ""}.`;
   }
@@ -294,7 +312,7 @@ function triggerTerms(name, description) {
   return [...new Set(words.filter((word) => !stop.has(word)))].slice(0, 10);
 }
 
-export function compileSkillMarkdown({ id, name, description, transcript, events, omittedEvents = 0 }) {
+export function compileSkillMarkdown({ id, name, description, transcript, events, omittedEvents = 0, videoReference }) {
   const safeName = cleanText(name, 100) || "Recorded workflow";
   const safeDescription = cleanText(description, 300) || `Repeat the ${safeName} workflow demonstrated by the user.`;
   const lines = [
@@ -314,6 +332,14 @@ export function compileSkillMarkdown({ id, name, description, transcript, events
   ];
   if (transcript) {
     lines.push("## User narration", "", cleanText(transcript, 12_000), "");
+  }
+  if (videoReference) {
+    lines.push(
+      "## Demonstration recording",
+      "",
+      `The reviewed screen recording is stored at ${videoReference}. Use it only as visual context; prefer the structured steps below when repeating the workflow.`,
+      "",
+    );
   }
   lines.push("## Demonstrated workflow", "");
   if (!events.length) {
@@ -351,7 +377,7 @@ export function saveSkillRecording(payload, options = {}) {
     const events = [];
     for (const [index, raw] of incoming.slice(0, MAX_EVENTS).entries()) {
       if (!raw || typeof raw !== "object") continue;
-      const type = ["app", "click", "scroll", "shortcut", "typing", "clipboard", "download"].includes(raw.type) ? raw.type : null;
+      const type = ["app", "click", "scroll", "shortcut", "typing", "clipboard", "download", "frame"].includes(raw.type) ? raw.type : null;
       if (!type) continue;
       const keyCount = Number(raw.keyCount);
       const ancestry = Array.isArray(raw.ancestry)
@@ -394,6 +420,15 @@ export function saveSkillRecording(payload, options = {}) {
       writeFileSync(path.join(temporary, audioReference), audio.bytes, { mode: 0o600 });
     }
 
+    const video = decodeDataUrl(payload.video, MAX_VIDEO_BYTES, ["video/webm", "video/mp4"]);
+    if (payload.video && !video) throw new Error("The screen recording is invalid or larger than 250 MB");
+    let videoReference;
+    if (video) {
+      const extension = video.mime === "video/mp4" ? "mp4" : "webm";
+      videoReference = `references/demonstration.${extension}`;
+      writeFileSync(path.join(temporary, videoReference), video.bytes, { mode: 0o600 });
+    }
+
     const transcript = cleanText(payload.transcript, 12_000);
     const transcription = payload.transcription?.provider === "assemblyai"
       ? { provider: "assemblyai", model: cleanText(payload.transcription.model, 80) || "u3-rt-pro" }
@@ -407,6 +442,7 @@ export function saveSkillRecording(payload, options = {}) {
       transcript,
       transcription,
       audio: audioReference,
+      video: videoReference,
       events,
       truncated,
       omittedEvents,
@@ -414,13 +450,14 @@ export function saveSkillRecording(payload, options = {}) {
         rawKeystrokesRetained: false,
         clipboardContentsRetained: false,
         screenFramesMayContainVisibleText: true,
+        screenVideoMayContainVisibleText: Boolean(videoReference),
         reviewedBeforeInstall: true,
       },
     };
     writeFileSync(path.join(references, "recording.json"), `${JSON.stringify(recording, null, 2)}\n`, { mode: 0o600 });
     writeFileSync(
       path.join(temporary, "SKILL.md"),
-      compileSkillMarkdown({ id: target.id, name, description, transcript, events, omittedEvents }),
+      compileSkillMarkdown({ id: target.id, name, description, transcript, events, omittedEvents, videoReference }),
       { mode: 0o600 },
     );
     writeFileSync(

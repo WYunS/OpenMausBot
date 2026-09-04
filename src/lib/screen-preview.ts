@@ -9,6 +9,38 @@ type ScreenPreviewRequest = {
   getDisplayMedia: (constraints: DisplayMediaStreamOptions) => Promise<MediaStream>;
 };
 
+export type SkillRecorderPermission = {
+  supported: boolean;
+  reason?: string;
+  captureMode?: "native-events" | "visual";
+};
+
+type SkillRecordingScreenRequest = ScreenPreviewRequest & {
+  permission: SkillRecorderPermission;
+};
+
+export function requestSkillRecordingScreen({
+  permission,
+  beginIntent,
+  getDisplayMedia,
+}: SkillRecordingScreenRequest): Promise<{
+  permission: SkillRecorderPermission;
+  preview: ScreenPreviewStartResult;
+}> {
+  if (!permission.supported) {
+    return Promise.resolve({
+      permission,
+      preview: {
+        ok: false as const,
+        phase: "unavailable" as const,
+        message: "Skill recording is currently available in the macOS and Windows desktop apps.",
+      },
+    });
+  }
+  const preview = requestScreenPreview({ beginIntent, getDisplayMedia });
+  return preview.then((result) => ({ permission, preview: result }));
+}
+
 export function stopScreenPreview(stream: Pick<MediaStream, "getTracks"> | null) {
   for (const track of stream?.getTracks() ?? []) track.stop();
 }
@@ -51,7 +83,12 @@ export async function requestScreenPreview({
         message: "Screen preview isn't available from this window.",
       };
     }
-    const stream = await getDisplayMedia({ video: true, audio: false });
+    const stream = await getDisplayMedia({
+      // The local viewer supplies the visible pointer itself. Capturing the
+      // Windows pointer as well creates a delayed duplicate over the video.
+      video: { cursor: "never" } as MediaTrackConstraints,
+      audio: false,
+    });
     if (stream.getVideoTracks().length === 0) {
       stopScreenPreview(stream);
       return {

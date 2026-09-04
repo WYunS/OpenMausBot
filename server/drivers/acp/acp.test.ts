@@ -692,7 +692,8 @@ describe("ACP turns (fake CLI)", () => {
     await recorder.until((e) => e.type === "session.started");
     await instance.adapter.interruptTurn("t-int");
     const done = await recorder.until((e) => e.type === "turn.completed");
-    expect(done).toMatchObject({ type: "turn.completed" });
+    expect(done).toMatchObject({ type: "turn.completed", ok: false, stopReason: "cancelled" });
+    expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(false);
   });
 
   it("an exit before result becomes runtime.error + failed turn", async () => {

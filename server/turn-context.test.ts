@@ -75,6 +75,17 @@ describe("engineIsFresh", () => {
     expect(engineIsFresh({ instanceId: "claude", lastInstanceId: "claude", resumeCursors: { claude: "s1" }, transcript: withUser })).toBe(false);
   });
 
+  it("is true when the model/provider selection changed within one driver instance", () => {
+    expect(engineIsFresh({
+      instanceId: "codex",
+      lastInstanceId: "codex",
+      model: "custom::gpt-5.6-sol",
+      lastModel: "gpt-5.6-sol",
+      resumeCursors: { codex: "official-thread" },
+      transcript: withUser,
+    })).toBe(true);
+  });
+
   it("is true when the same instance ran last but there is no cursor to resume", () => {
     expect(engineIsFresh({ instanceId: "pi", lastInstanceId: "pi", resumeCursors: {}, transcript: withUser })).toBe(true);
   });

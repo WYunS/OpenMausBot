@@ -9,6 +9,8 @@ allowBuilds:
   electron: true # postinstall downloads the Electron dist
   esbuild: true # postinstall validates the platform binary
   electron-winstaller: false # unused — Windows builds ship NSIS
+  core-js: false # no install-time behavior is required by the desktop build
+  workerd: false # worker runtime postinstall is not used by the Windows app
 onlyBuiltDependencies:
   - electron
   - esbuild

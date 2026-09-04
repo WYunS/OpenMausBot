@@ -6,6 +6,7 @@
 // existing Box's state: opening this panel never creates, wakes, bootstraps,
 // screenshots, or opens one, regardless of engine.
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { z } from "zod";
 import {
   CalendarClock,
@@ -15,6 +16,7 @@ import {
   Hand,
   Loader2,
   Maximize2,
+  Minimize2,
   Monitor,
   Moon,
   Plus,
@@ -22,6 +24,8 @@ import {
   Settings,
   Smartphone,
   X,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import { api, useStore, type Bot } from "@/state/store";
 import type { CloudBackend } from "../../server/contracts.ts";
@@ -29,6 +33,7 @@ import type { Routine } from "@/lib/routines";
 import { ApiKeyRow } from "./ApiKeys";
 import { cn } from "@/lib/cn";
 import { usePageVisible } from "@/lib/page-visible";
+import { requestScreenPreview, stopScreenPreview } from "@/lib/screen-preview";
 import { CloudBackendPicker } from "./CloudBackendPicker";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { RoutineEditor } from "./RoutinesPage";
@@ -55,6 +60,17 @@ import {
   writeComputerPanelView,
   type ComputerPanelView,
 } from "@/lib/computer-panel-view";
+import {
+  beginLocalComputerTakeover,
+  computerSurfaceSupportsTakeover,
+  localScreenFrameWithTimeout,
+  localScreenPollInterval,
+  localScreenPoint,
+  localViewerStream,
+  shouldPollLocalScreenFrames,
+  startNonOverlappingLocalScreenPoll,
+  stepLocalScreenZoom,
+} from "@/lib/local-screen-viewer";
 
 interface VpsComputerStatus {
   configured: boolean;
@@ -63,6 +79,187 @@ interface VpsComputerStatus {
   container: "running" | "stopped" | "missing";
   ready: boolean;
   problem: string | null;
+}
+
+type LocalDesktopViewerInput =
+  | { kind: "click"; xRatio: number; yRatio: number; button?: "left" | "right"; double?: boolean }
+  | { kind: "text"; text: string }
+  | { kind: "key"; key: string }
+  | { kind: "scroll"; deltaY: number };
+
+function LocalScreenViewer({
+  frame,
+  stream,
+  botName,
+  held,
+  controlPending,
+  onTakeControl,
+  onReleaseControl,
+  onShowDesktop,
+  onInputError,
+  onClose,
+}: {
+  frame: string;
+  stream: MediaStream | null;
+  botName: string;
+  held: boolean;
+  controlPending: boolean;
+  onTakeControl(): void;
+  onReleaseControl(): void;
+  onShowDesktop(): void;
+  onInputError(message: string): void;
+  onClose(): void;
+}) {
+  const [zoom, setZoom] = useState(100);
+  const [fullscreen, setFullscreen] = useState(Boolean(document.fullscreenElement));
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const inputQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const pendingClick = useRef<number | null>(null);
+
+  const sendInput = useCallback((input: LocalDesktopViewerInput) => {
+    if (!held || !window.ogb?.localDesktopInput) return;
+    inputQueue.current = inputQueue.current
+      .then(() => window.ogb!.localDesktopInput!(input))
+      .catch((cause) => onInputError(cause instanceof Error ? cause.message : String(cause)));
+  }, [held, onInputError]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !document.fullscreenElement) onClose();
+    };
+    const onFullscreen = () => setFullscreen(Boolean(document.fullscreenElement));
+    window.addEventListener("keydown", onKeyDown);
+    document.addEventListener("fullscreenchange", onFullscreen);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("fullscreenchange", onFullscreen);
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+    };
+  }, [onClose]);
+
+  useEffect(() => () => {
+    if (pendingClick.current !== null) window.clearTimeout(pendingClick.current);
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !stream) return;
+    video.srcObject = stream;
+    void video.play().catch(() => {});
+    return () => { video.srcObject = null; };
+  }, [stream]);
+
+  const onScreenClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!held) return;
+    event.preventDefault();
+    event.currentTarget.focus({ preventScroll: true });
+    const point = localScreenPoint(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect());
+    if (!point) return;
+    if (event.detail >= 2) {
+      if (pendingClick.current !== null) window.clearTimeout(pendingClick.current);
+      pendingClick.current = null;
+      sendInput({ kind: "click", ...point, button: "left", double: true });
+      return;
+    }
+    if (pendingClick.current !== null) window.clearTimeout(pendingClick.current);
+    pendingClick.current = window.setTimeout(() => {
+      pendingClick.current = null;
+      sendInput({ kind: "click", ...point, button: "left" });
+    }, 300);
+  };
+
+  const toggleFullscreen = async () => {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await document.documentElement.requestFullscreen();
+  };
+
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex flex-col bg-[#07090d]" role="dialog" aria-modal="true" aria-label={`${botName}'s local screen`}>
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-white/10 bg-[#0d1016] px-4 text-white shadow-lg">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/10"><Monitor size={16} /></span>
+          <div className="min-w-0">
+            <div className="truncate text-[13px] font-semibold">{botName}'s screen</div>
+            <div className="flex items-center gap-1.5 text-[10px] text-white/55"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />This computer · live view</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1 rounded-xl border border-white/10 bg-white/[0.04] p-1">
+          {held && (
+            <button type="button" onClick={onShowDesktop} className="mr-1 flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-2 text-[11px] font-medium text-white/75 hover:bg-white/15" title="Use only if an app cannot accept in-view input">
+              <Monitor size={13} /> Desktop fallback
+            </button>
+          )}
+          <button type="button" onClick={held ? onReleaseControl : onTakeControl} disabled={controlPending} className="mr-1 flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-2 text-[11px] font-medium text-white hover:bg-white/15 disabled:opacity-40">
+            {controlPending ? <Loader2 size={13} className="animate-spin" /> : <Hand size={13} />}
+            {held ? "Hand control back" : "Take control"}
+          </button>
+          <button type="button" onClick={() => setZoom((value) => stepLocalScreenZoom(value, -1))} disabled={zoom <= 50} className="rounded-lg p-2 text-white/70 hover:bg-white/10 hover:text-white disabled:opacity-30" aria-label="Zoom out"><ZoomOut size={15} /></button>
+          <button type="button" onClick={() => setZoom(100)} className="min-w-14 rounded-lg px-2 py-1.5 text-[11px] tabular-nums text-white/75 hover:bg-white/10 hover:text-white" title="Fit screen">{zoom}%</button>
+          <button type="button" onClick={() => setZoom((value) => stepLocalScreenZoom(value, 1))} disabled={zoom >= 125} className="rounded-lg p-2 text-white/70 hover:bg-white/10 hover:text-white disabled:opacity-30" aria-label="Zoom in"><ZoomIn size={15} /></button>
+          <span className="mx-1 h-5 w-px bg-white/10" />
+          <button type="button" onClick={() => void toggleFullscreen()} className="rounded-lg p-2 text-white/70 hover:bg-white/10 hover:text-white" aria-label={fullscreen ? "Exit full screen" : "Enter full screen"}>{fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>
+          <button type="button" onClick={onClose} className="rounded-lg p-2 text-white/70 hover:bg-white/10 hover:text-white" aria-label="Close live view"><X size={16} /></button>
+        </div>
+      </header>
+      <div className="relative min-h-0 flex-1 overflow-auto bg-[radial-gradient(circle_at_center,#171c26_0,#090b10_58%,#050609_100%)] p-5">
+        <div className="flex min-h-full min-w-full items-center justify-center">
+          <div
+            tabIndex={held ? 0 : -1}
+            onClick={onScreenClick}
+            onContextMenu={(event) => {
+              if (!held) return;
+              event.preventDefault();
+              event.currentTarget.focus({ preventScroll: true });
+              const point = localScreenPoint(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect());
+              if (point) sendInput({ kind: "click", ...point, button: "right" });
+            }}
+            onKeyDown={(event) => {
+              if (!held) return;
+              if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+                event.preventDefault();
+                sendInput({ kind: "text", text: event.key });
+                return;
+              }
+              if (["Enter", "Tab", "Escape", "Backspace", "Delete", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+                event.preventDefault();
+                sendInput({ kind: "key", key: event.key });
+              }
+            }}
+            onWheel={(event) => {
+              if (!held) return;
+              event.preventDefault();
+              sendInput({ kind: "scroll", deltaY: event.deltaY });
+            }}
+            className={cn("relative max-w-none select-none overflow-hidden rounded-md border border-white/10 bg-black shadow-2xl outline-none", held && "cursor-default")}
+            style={{ width: `${zoom}%`, minWidth: zoom > 100 ? `${zoom}%` : undefined, maxWidth: zoom <= 100 ? "100%" : undefined }}
+          >
+            {stream ? (
+              <video
+                ref={videoRef}
+                autoPlay
+                muted
+                playsInline
+                aria-label={`${botName}'s live local screen`}
+                className="pointer-events-none block h-auto w-full"
+              />
+            ) : (
+              <img
+                src={frame}
+                alt={`${botName}'s live local screen`}
+                draggable={false}
+                className="pointer-events-none block h-auto w-full"
+              />
+            )}
+          </div>
+        </div>
+      </div>
+      <footer className="flex h-9 shrink-0 items-center justify-between border-t border-white/10 bg-[#0d1016] px-4 text-[10px] text-white/45">
+        <span>{held ? "Click the screen, then type. Input is sent to the desktop underneath." : window.ogb?.platform === "win32" ? "OpenMausBot stays above and is hidden from this capture." : "Live view of this computer."}</span>
+        <span>Esc closes · 50–125% zoom</span>
+      </footer>
+    </div>,
+    document.body,
+  );
 }
 
 type Phase =
@@ -268,6 +465,10 @@ export function ComputerPanel({
   const [vmStatus, setVmStatus] = useState<LocalVmStatus | null>(null);
   const [vpsStatus, setVpsStatus] = useState<VpsComputerStatus | null>(null);
   const [localFrame, setLocalFrame] = useState<string | null>(null);
+  const [localViewerOpen, setLocalViewerOpen] = useState(false);
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const localStreamRequest = useRef(0);
   const [pending, setPending] = useState<
     "join" | "sleep" | "provision" | "vps-replace" | "vm-create" | "vm-recreate" | "vm-delete" | null
   >(null);
@@ -686,38 +887,59 @@ export function ComputerPanel({
   // the user denied — surface the Settings repair path instead of spinning.
   const [localMisses, setLocalMisses] = useState(0);
   useEffect(() => {
-    if (panelView !== "computer" || phase !== "local" || !window.ogb || isLinux || !pageVisible) return;
+    if (
+      panelView !== "computer" ||
+      phase !== "local" ||
+      !window.ogb ||
+      isLinux ||
+      !pageVisible ||
+      !shouldPollLocalScreenFrames(localViewerOpen, Boolean(localStream))
+    ) return;
     let alive = true;
     setLocalMisses(0);
     const shoot = async () => {
       try {
-        const url = await window.ogb!.screenFrame();
+        const url = await localScreenFrameWithTimeout(() => window.ogb!.screenFrame());
         if (alive && url) setLocalFrame(url);
         else if (alive) setLocalMisses((n) => n + 1);
       } catch {
         if (alive) setLocalMisses((n) => n + 1);
       }
     };
-    void shoot();
-    // A real ScreenCaptureKit capture + PNG encode per tick: idle bots get a
-    // slow heartbeat, working ones the live cadence.
-    const timer = setInterval(shoot, bot.busy ? 3000 : 30_000);
+    // Schedule from completion rather than from a fixed interval. This keeps
+    // exactly one desktopCapturer request active even when Windows capture is
+    // temporarily slow, instead of building a queue that freezes the preview.
+    const stop = startNonOverlappingLocalScreenPoll(
+      shoot,
+      localScreenPollInterval(localViewerOpen, Boolean(bot.busy)),
+    );
     return () => {
       alive = false;
-      clearInterval(timer);
+      stop();
     };
-  }, [panelView, phase, isLinux, pageVisible, bot.busy, bot.id]);
+  }, [panelView, phase, isLinux, pageVisible, bot.busy, bot.id, localViewerOpen, localStream]);
+
+  // Windows local-workspace mode behaves like an in-app remote desktop: the
+  // conversation stays above the real target windows and is omitted from the
+  // captured frame, so the preview shows the desktop underneath it.
+  useEffect(() => {
+    if (window.ogb?.platform !== "win32" || phase !== "local" || panelView !== "computer") return;
+    void window.ogb.setScreenCaptureShield?.(true);
+    return () => { void window.ogb?.setScreenCaptureShield?.(false); };
+  }, [panelView, phase]);
 
   const lastScreenMessage = [...bot.messages].reverse().find((m) => m.kind === "screen" && m.png);
   const cloudFrame =
     live ??
     polledFrame ??
     (lastScreenMessage ? { png: lastScreenMessage.png!, mime: lastScreenMessage.mime ?? "image/png" } : null);
+  const control = state.computerControl[bot.id] ?? { held: false, helpReason: null };
+  const localAgentFrame = live ? `data:${live.mime};base64,${live.png}` : null;
   const frameSrc =
     phase === "vm"
       ? vmFrame
       : phase === "local" && !isLinux
-      ? localFrame
+      ? (!control.held && localAgentFrame) || localFrame
       : cloudPreviewReady || (bot.computer === "cloud" && phase === "starting")
         ? cloudFrame && `data:${cloudFrame.mime};base64,${cloudFrame.png}`
         : null;
@@ -728,7 +950,6 @@ export function ComputerPanel({
 
   // who-is-driving: SSE keeps this fresh; the mount fetch covers a panel
   // opened after the last frame (e.g. an app reload mid-hold)
-  const control = state.computerControl[bot.id] ?? { held: false, helpReason: null };
   useEffect(() => {
     let alive = true;
     api(`/api/bots/${bot.id}/computer/control`)
@@ -795,6 +1016,56 @@ export function ComputerPanel({
       setControlPending(false);
     }
   }, [transitionControl]);
+
+  const closeLocalViewer = useCallback(() => {
+    localStreamRequest.current += 1;
+    stopScreenPreview(localStreamRef.current);
+    localStreamRef.current = null;
+    setLocalStream(null);
+    setLocalViewerOpen(false);
+  }, []);
+
+  const openLocalViewer = useCallback(() => {
+    setLocalViewerOpen(true);
+    if (localStreamRef.current?.active) return;
+    if (!window.ogb?.beginScreenPreviewIntent || !navigator.mediaDevices?.getDisplayMedia) return;
+
+    const requestId = ++localStreamRequest.current;
+    void requestScreenPreview({
+      beginIntent: () => window.ogb!.beginScreenPreviewIntent!(),
+      getDisplayMedia: (constraints) => navigator.mediaDevices.getDisplayMedia(constraints),
+    }).then((result) => {
+      if (requestId !== localStreamRequest.current) {
+        if (result.ok) stopScreenPreview(result.stream);
+        return;
+      }
+      if (!result.ok) {
+        setError(result.message);
+        return;
+      }
+      stopScreenPreview(localStreamRef.current);
+      localStreamRef.current = result.stream;
+      setLocalStream(result.stream);
+      result.stream.getVideoTracks()[0]?.addEventListener("ended", () => {
+        if (localStreamRef.current !== result.stream) return;
+        localStreamRef.current = null;
+        setLocalStream(null);
+      }, { once: true });
+    });
+  }, []);
+
+  useEffect(() => () => {
+    localStreamRequest.current += 1;
+    stopScreenPreview(localStreamRef.current);
+    localStreamRef.current = null;
+  }, [bot.id]);
+
+  const takeLocalControl = useCallback(async () => {
+    openLocalViewer();
+    const taken = await beginLocalComputerTakeover({ takeControl: () => controlAction("take") });
+    if (!taken) closeLocalViewer();
+    return taken;
+  }, [closeLocalViewer, controlAction, openLocalViewer]);
 
   const expandBrowser = useCallback(() => {
     onExpandBrowser?.(bot.id);
@@ -1082,14 +1353,14 @@ export function ComputerPanel({
             {computerStatusCurrent && bot.computer === "cloud" && cloudBackend === "vps" && (phase === "ready" || phase === "starting") && <span className="text-[11px]">self-hosted VPS</span>}
         </div>
         <div className="flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl bg-card">
-          {frameSrc && previewOpensDesktop ? (
+          {frameSrc && (previewOpensDesktop || phase === "local") ? (
             <button
               type="button"
-              onClick={() => void openDesktop()}
+              onClick={() => phase === "local" ? openLocalViewer() : void openDesktop()}
               disabled={controlPending || pending === "join"}
               className="group relative flex h-full w-full cursor-pointer items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-wait"
-              aria-label={`Open ${bot.name}'s live desktop`}
-              title="Open live desktop"
+              aria-label={phase === "local" ? `Enlarge ${bot.name}'s local screen` : `Open ${bot.name}'s live desktop`}
+              title={phase === "local" ? "Enlarge this computer" : "Open live desktop"}
             >
               <img
                 src={frameSrc}
@@ -1098,7 +1369,7 @@ export function ComputerPanel({
               />
               <span className="pointer-events-none absolute right-2 top-2 flex items-center gap-1 rounded-md bg-black/70 px-2 py-1 text-[11px] font-medium text-white opacity-80 shadow-sm transition group-hover:opacity-100 group-focus-visible:opacity-100">
                 {pending === "join" ? <Loader2 size={12} className="animate-spin" /> : <Maximize2 size={12} />}
-                Open
+                {phase === "local" ? "Enlarge" : "Open"}
               </span>
             </button>
           ) : frameSrc ? (
@@ -1221,6 +1492,20 @@ export function ComputerPanel({
             {error}
           </div>
         )}
+        {localViewerOpen && phase === "local" && localFrame && (
+          <LocalScreenViewer
+            frame={localFrame}
+            stream={localViewerStream(localStream)}
+            botName={bot.name}
+            held={control.held}
+            controlPending={controlPending}
+            onTakeControl={() => void takeLocalControl()}
+            onReleaseControl={() => void controlAction("release")}
+            onShowDesktop={() => void window.ogb?.minimizeApp?.()}
+            onInputError={(message) => setError(message)}
+            onClose={closeLocalViewer}
+          />
+        )}
         {phase === "unconfigured" && (
           <div className="mt-3 rounded-xl bg-card p-4">
             <div className="mb-3 text-[13px] text-ink-secondary">
@@ -1263,7 +1548,7 @@ export function ComputerPanel({
           )}
 
         {/* Who is driving — take the wheel / hand it back */}
-        {(cloudPreviewReady || phase === "vm") && control.helpReason && !control.held && (
+        {computerSurfaceSupportsTakeover(phase) && control.helpReason && !control.held && (
           <div className="mt-3 rounded-xl border border-warning/25 bg-warning/10 p-4">
             <div className="text-[13px] leading-relaxed text-warning">
               <b>{bot.name}</b> asked for your hands: {control.helpReason}
@@ -1271,7 +1556,7 @@ export function ComputerPanel({
             <div className="mt-2 flex gap-2">
               <button
                 onClick={() =>
-                  phase === "vm" || cloudPreviewReady ? void openDesktop() : controlAction("take")
+                  phase === "local" ? void takeLocalControl() : void openDesktop()
                 }
                 disabled={controlPending || pending === "join"}
                 className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-accent py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50"
@@ -1289,12 +1574,13 @@ export function ComputerPanel({
             </div>
           </div>
         )}
-        {(cloudPreviewReady || phase === "vm") && control.held && (
+        {computerSurfaceSupportsTakeover(phase) && control.held && (
           <div className="mt-3 rounded-xl border border-accent/25 bg-accent/10 p-4">
             <div className="text-[13px] leading-relaxed text-ink">
               You have the wheel — the bot's clicks and keystrokes are refused until you hand it back.
               {cloudPreviewReady && " Use Open desktop to drive."}
               {phase === "vm" && " Use Open desktop to drive — the preview here is watch-only."}
+              {phase === "local" && " Open the enlarged view to control the desktop without leaving OpenMausBot."}
             </div>
             <button
               onClick={() => {
@@ -1307,6 +1593,15 @@ export function ComputerPanel({
               <Hand size={14} />
               Hand control back
             </button>
+            {phase === "local" && (
+              <button
+                onClick={() => void window.ogb?.minimizeApp?.()}
+                className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-control py-2 text-[13px] text-ink hover:bg-raised-hover"
+              >
+                <Monitor size={14} />
+                Desktop fallback
+              </button>
+            )}
           </div>
         )}
         {phase === "vm" && vmViewerUrl && control.held && (
@@ -1329,6 +1624,17 @@ export function ComputerPanel({
           >
             {pending === "join" ? <Loader2 size={14} className="animate-spin" /> : <Hand size={14} />}
             Take control
+          </button>
+        )}
+        {phase === "local" && !control.held && !control.helpReason && (
+          <button
+            onClick={() => void takeLocalControl()}
+            disabled={controlPending}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-control py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
+            title="Pause the bot and use this Windows desktop directly"
+          >
+            {controlPending ? <Loader2 size={14} className="animate-spin" /> : <Hand size={14} />}
+            Take control on this computer
           </button>
         )}
         {phase === "vm" && vmStatus?.mode === "per-bot" && (

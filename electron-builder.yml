@@ -132,6 +132,8 @@ win:
       arch: x64
   icon: build/icon.ico
   extraResources:
+    - from: dist-native/cua-win32-x64/cua-driver.exe
+      to: cua-driver.exe
     - from: dist-native/cloudflared/win32-x64/cloudflared.exe
       to: cloudflared/cloudflared.exe
   # No signing config yet (would go under win.signtoolOptions or

@@ -5,9 +5,16 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
-const { createCuaConnectionStore } = require("./cua-connection.cjs");
+const { createCuaConnectionStore, shouldInvalidateCuaConnectionOnStop } = require("./cua-connection.cjs");
 
 describe("CUA connection persistence", () => {
+  it("keeps the Windows direct descriptor when an Electron host exits", () => {
+    expect(shouldInvalidateCuaConnectionOnStop("win32", { mode: "windows-direct" })).toBe(false);
+    expect(shouldInvalidateCuaConnectionOnStop("win32", null)).toBe(false);
+    expect(shouldInvalidateCuaConnectionOnStop("darwin", { mode: "embedded" })).toBe(true);
+    expect(shouldInvalidateCuaConnectionOnStop("linux", { mode: "linux-x11-supervised" })).toBe(true);
+  });
+
   it("keeps the previous in-memory and on-disk descriptor when replacement fails", () => {
     const userData = mkdtempSync(path.join(os.tmpdir(), "omb-cua-connection-"));
     try {

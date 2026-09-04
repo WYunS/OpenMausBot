@@ -11,6 +11,8 @@
 // and falls back to a fresh thread/start.
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { stripWorkspaceCredentialEnv } from "../config.ts";
 import { computerProxyEnv } from "../container-computer.ts";
@@ -27,7 +29,7 @@ import type {
   SendTurnInput,
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
-import { decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
+import { codexHome, decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 import { codexLocalProviderArgs } from "./local-inject.ts";
 import { augmentedPath, splitCliString } from "../env-path.ts";
 import { classifyError, computeBackoff, RETRY_MAX_ATTEMPTS } from "./retry.ts";
@@ -136,6 +138,39 @@ function codexNativeLogMessage(message: unknown): unknown {
   };
 }
 
+function tomlPathKey(value: string): string {
+  return /^[A-Za-z_][A-Za-z0-9_-]*$/.test(value) ? value : JSON.stringify(value);
+}
+
+/** Codex Desktop's global config can contain MCPs and curated connector
+ * plugins that have nothing to do with this OpenMausBot turn. App-server
+ * eagerly starts them before the model request, so one stale connector can
+ * add its whole startup timeout to every message. Disable those inherited
+ * tools per process; the harness mounts only this turn's integrations below.
+ * Local capability/skill plugins are deliberately left enabled. */
+export function codexInheritedMcpDisableArgs(env: Record<string, string | undefined>): string[] {
+  let text = "";
+  try {
+    text = readFileSync(join(codexHome(env), "config.toml"), "utf8");
+  } catch {
+    return [];
+  }
+  const direct = new Set<string>();
+  const connectors = new Set<string>();
+  for (const line of text.split(/\r?\n/)) {
+    const section = /^\s*\[\s*(mcp_servers|plugins)\.(?:"([^"]+)"|([^\].]+))(?:\.[^\]]+)?\s*\]\s*$/.exec(line);
+    if (!section) continue;
+    const name = section[2] ?? section[3];
+    if (!name) continue;
+    if (section[1] === "mcp_servers") direct.add(name);
+    else if (name.endsWith("@openai-curated")) connectors.add(name);
+  }
+  const args: string[] = [];
+  for (const name of connectors) args.push("-c", `plugins.${tomlPathKey(name)}.enabled=false`);
+  for (const name of direct) args.push("-c", `mcp_servers.${tomlPathKey(name)}.enabled=false`);
+  return args;
+}
+
 function mountMcpServer(
   appServerArgs: string[],
   env: Record<string, string | undefined>,
@@ -146,6 +181,7 @@ function mountMcpServer(
   Object.assign(env, server.env);
   const prefix = `mcp_servers.${name}`;
   appServerArgs.push(
+    "-c", `${prefix}.enabled=true`,
     "-c", `${prefix}.command=${JSON.stringify(server.command)}`,
     "-c", `${prefix}.args=${JSON.stringify(server.args)}`,
     // Values stay in the child environment; argv contains names only so
@@ -236,7 +272,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
 
       const launchAttempt = async (attempt: number): Promise<void> => {
         const env = childEnv();
-        const appServerArgs = ["app-server", ...codexLocalProviderArgs(env, turn.model)];
+        const appServerArgs = [
+          "app-server",
+          ...codexInheritedMcpDisableArgs(env),
+          ...codexLocalProviderArgs(env, turn.model),
+        ];
         if (turn.integrations?.composio) {
           mountMcpServer(appServerArgs, env, "openmausbot_connectors", turn.integrations.composio);
         }
@@ -274,6 +314,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           Object.assign(env, bridge.env);
           const prefix = "mcp_servers.openmausbot_phone";
           appServerArgs.push(
+            "-c", `${prefix}.enabled=true`,
             "-c", `${prefix}.command=${JSON.stringify(bridge.command)}`,
             "-c", `${prefix}.args=${JSON.stringify(bridge.args)}`,
             "-c", `${prefix}.env_vars=${JSON.stringify(Object.keys(bridge.env))}`,
@@ -615,6 +656,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       child.on("close", (code) => {
         if (abandoned) return;
         if (!state.settled) {
+          if (stopRequested) {
+            settle(false, "interrupted");
+            return;
+          }
           emit({
             ...base(threadId, turnId),
             type: "runtime.error",
@@ -636,18 +681,28 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         await request("initialize", { clientInfo: { name: "openmausbot", version: "1" } });
         send({ jsonrpc: "2.0", method: "initialized", params: {} });
         const cursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
+        const selection = decodeCodexSelection(turn.model);
         let codexThreadId: string | null = null;
         let startedModel: string | null = null;
         if (cursor) {
           try {
             const resumed = await request("thread/resume", { threadId: cursor });
-            codexThreadId = resumed?.thread?.id ?? cursor;
+            const resumedModel = typeof resumed?.model === "string"
+              ? resumed.model
+              : typeof resumed?.thread?.model === "string" ? resumed.thread.model : null;
+            const resumedProvider = typeof resumed?.modelProvider === "string"
+              ? resumed.modelProvider
+              : typeof resumed?.thread?.modelProvider === "string" ? resumed.thread.modelProvider : null;
+            const wrongModel = Boolean(selection.model && resumedModel && selection.model !== resumedModel);
+            const wrongProvider = Boolean(
+              selection.modelProvider && resumedProvider && selection.modelProvider !== resumedProvider,
+            );
+            if (!wrongModel && !wrongProvider) codexThreadId = resumed?.thread?.id ?? cursor;
           } catch {
             /* resume unsupported or thread gone — start fresh below */
           }
         }
         if (!codexThreadId) {
-          const selection = decodeCodexSelection(turn.model);
           const started = await request("thread/start", {
             cwd: turn.cwd ?? homedir(),
             model: selection.model,

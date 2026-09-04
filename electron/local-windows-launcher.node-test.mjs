@@ -1,0 +1,68 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const launcher = new URL("../scripts/start-local-windows.ps1", import.meta.url);
+const windowlessLauncher = new URL("../scripts/start-local-windows.vbs", import.meta.url);
+const nativeLauncher = new URL("../scripts/OpenMausBot.DevLauncher.cs", import.meta.url);
+const shortcutInstaller = new URL("../scripts/install-local-windows-shortcut.ps1", import.meta.url);
+const mainProcess = new URL("./main.mjs", import.meta.url);
+
+test("the desktop wrapper starts PowerShell without flashing a console", async () => {
+  const source = await readFile(windowlessLauncher, "utf8");
+  assert.match(source, /start-local-windows\.ps1/);
+  assert.match(source, /shell\.Run command, 0, False/);
+});
+
+test("development services start from absolute paths in this checkout", async () => {
+  const source = await readFile(launcher, "utf8");
+  assert.match(source, /Join-Path \$repoRoot 'server\\index\.ts'/);
+  assert.match(source, /Join-Path \$repoRoot 'node_modules\\vite\\bin\\vite\.js'/);
+  assert.match(source, /Stop-LocalDevelopmentService 8799/);
+  assert.match(source, /Stop-LocalDevelopmentService 5199/);
+});
+
+test("a second desktop launch reaches Electron so it can restore the existing window", async () => {
+  const source = await readFile(launcher, "utf8");
+  assert.doesNotMatch(source, /if \(\$alreadyRunning\) \{ exit 0 \}/);
+  assert.match(
+    source,
+    /if \(\$alreadyRunning\) \{[\s\S]*SetWindowVisualState[\s\S]*AppActivate[\s\S]*return[\s\S]*\}/,
+  );
+  assert.match(source, /Start-DesktopApp/);
+});
+
+test("a cold shortcut launch starts Electron directly and verifies that it stays alive", async () => {
+  const source = await readFile(launcher, "utf8");
+  assert.match(source, /node_modules\\electron\\dist\\electron\.exe/);
+  assert.match(source, /Start-Process[\s\S]*-PassThru/);
+  assert.match(source, /HasExited/);
+  assert.doesNotMatch(source, /Start-LocalService 'dev:desktop' 'desktop'/);
+});
+
+test("the shortcut is never rewritten while it is launching", async () => {
+  const source = await readFile(launcher, "utf8");
+  assert.doesNotMatch(source, /set-windows-shortcut-app-id\.ps1/);
+});
+
+test("the development shortcut uses a branded native launcher", async () => {
+  const [nativeSource, installerSource, mainSource] = await Promise.all([
+    readFile(nativeLauncher, "utf8"),
+    readFile(shortcutInstaller, "utf8"),
+    readFile(mainProcess, "utf8"),
+  ]);
+  assert.match(nativeSource, /start-local-windows\.ps1/);
+  assert.match(nativeSource, /CreateNoWindow\s*=\s*true/);
+  assert.match(installerSource, /target:winexe/);
+  assert.match(installerSource, /win32icon:/);
+  assert.match(installerSource, /OpenMausBot\.DevLauncher\.exe/);
+  assert.match(installerSource, /node_modules\\electron\\dist\\electron\.exe/);
+  assert.match(installerSource, /rcedit\.exe/);
+  assert.match(installerSource, /--set-icon/);
+  assert.match(installerSource, /StartMenu/);
+  const installerAppId = installerSource.match(/\$localDevelopmentAppId\s*=\s*'([^']+)'/)?.[1];
+  const mainAppId = mainSource.match(/app\.isPackaged\s*\?\s*"com\.openmausbot\.app"\s*:\s*"([^"]+)"/)?.[1];
+  assert.equal(installerAppId, "com.openmausbot.app.localdev.source");
+  assert.equal(mainAppId, installerAppId);
+  assert.match(installerSource, /set-windows-shortcut-app-id\.ps1/);
+});

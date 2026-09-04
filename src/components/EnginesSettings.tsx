@@ -9,6 +9,7 @@ import { Check, ChevronDown, Loader2, RefreshCw, TriangleAlert } from "lucide-re
 
 import { api, useStore, type InstanceInfo } from "@/state/store";
 import { EngineGroupLabel } from "./EngineGroupLabel";
+import { EngineToggle } from "./EngineToggle";
 import { ProviderMark } from "./ProviderIcons";
 import { splitEngineRail } from "@/lib/engine-rail";
 import { cn } from "@/lib/cn";
@@ -204,8 +205,15 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
   const [switching, setSwitching] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [updatedVersion, setUpdatedVersion] = useState<string | null>(null);
+  const [optimisticEnabled, setOptimisticEnabled] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const wasOpenFor = useRef<string | null>(null);
+  const persistedEnabled = instance.enabled ?? ["ruijieHarness", "codex"].includes(instance.driverKind);
+  const enabled = optimisticEnabled ?? persistedEnabled;
+
+  useEffect(() => {
+    if (optimisticEnabled === persistedEnabled) setOptimisticEnabled(null);
+  }, [optimisticEnabled, persistedEnabled]);
 
   // Close the picker when this instance's override changes to anything else
   // — a save from this row, another tab, or the 5-min refresh. The picker
@@ -250,19 +258,42 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
       .finally(() => setUpdating(false));
   };
 
+  const toggleEnabled = (next: boolean) => {
+    if (switching) return;
+    // Move the switch immediately. Provider reload can take a few seconds,
+    // but network latency should not make a physical control feel stuck.
+    setOptimisticEnabled(next);
+    setSwitching(true);
+    setError(null);
+    api(`/api/instances/${encodeURIComponent(instance.instanceId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled: next }),
+    })
+      .then(() => Promise.resolve(refreshInstances()).catch(() => {}))
+      .catch((e) => {
+        setOptimisticEnabled(null);
+        setError(e.message);
+      })
+      .finally(() => setSwitching(false));
+  };
+
   return (
-    <div>
+    <div className={cn("rounded-xl px-2 py-2 transition-colors", !enabled && "bg-inset/35")}>
       <div className="flex items-center gap-2 text-[13px]">
-        <span className={cn("size-1.5 shrink-0 rounded-full", instance.cli ? "bg-accent" : "bg-raised-hover")} />
-        <ProviderMark driverKind={instance.driverKind} size={14} />
-        <span className="shrink-0 text-ink">{instance.displayName}</span>
+        <span className={cn("size-1.5 shrink-0 rounded-full", enabled ? "bg-accent" : "bg-raised-hover")} />
+        <span className={cn("flex items-center gap-2", !enabled && "opacity-45 grayscale")}>
+          <ProviderMark driverKind={instance.driverKind} size={14} />
+          <span className="shrink-0 text-ink">{instance.displayName}</span>
+        </span>
         {instance.cli ? (
-          <span className="truncate font-mono text-[11.5px] text-accent" title={instance.cli}>
+          <span className={cn("truncate font-mono text-[11.5px]", enabled ? "text-accent" : "text-ink-secondary")} title={instance.cli}>
             {instance.cli}
           </span>
         ) : (
           instance.cliDefault && (
-            <span className="truncate text-[11px] text-ink-secondary">{instance.cliDefault} · default</span>
+            <span className="truncate text-[11px] text-ink-secondary">
+              {enabled ? `${instance.cliDefault} · 自动检测` : "已关闭"}
+            </span>
           )
         )}
         {instance.snapshot.version && (
@@ -281,6 +312,12 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
             {updating ? "Updating…" : "Update Claude"}
           </button>
         )}
+        <EngineToggle
+          checked={enabled}
+          busy={switching}
+          label={`${enabled ? "关闭" : "开启"}${instance.displayName}`}
+          onChange={toggleEnabled}
+        />
         {instance.cli && (
           <button
             onClick={reset}
@@ -292,12 +329,13 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
         )}
         <button
           onClick={() => setOpen((v) => !v)}
-          disabled={updating}
           aria-expanded={open}
+          disabled={updating || !enabled || switching}
           className={cn(
             "shrink-0 rounded-lg border border-hairline/40 px-3 py-1 text-[12px]",
             open ? "bg-accent/15 text-accent" : "text-ink-secondary hover:bg-raised/50 hover:text-ink",
             "disabled:opacity-50",
+            (!enabled || switching) && "cursor-not-allowed opacity-40",
           )}
         >
           Set CLI…
@@ -307,7 +345,7 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
         <div role="status" className="mt-1 text-[12px] text-success">Claude updated — {updatedVersion}</div>
       )}
       {error && <div role="alert" className="mt-1 text-[12px] text-danger">{error}</div>}
-      {open && (
+      {open && enabled && (
         <CustomPicker
           instance={instance}
           cliDefault={instance.cliDefault}
@@ -347,8 +385,8 @@ export function EnginesSettings() {
         );
       })()}
       <div className="text-[12px] leading-relaxed text-ink-secondary">
-        Set CLI points an engine at a specific binary — a versioned build, a wrapper script, or an
-        absolute path. Saving reloads providers and interrupts any running turns.
+        开启后会自动读取本机可用的 CLI 和模型；未自动发现时，可用 Set CLI 指向安装路径。
+        修改会重新加载引擎，并停止正在运行的对话。
       </div>
     </div>
   );

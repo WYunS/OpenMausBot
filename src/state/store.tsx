@@ -33,6 +33,7 @@ import { speaker } from "@/lib/tts";
 import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
 import { skillRecorderEnabled } from "@/lib/feature-flags";
 import { openLiveEvents } from "@/lib/live-events";
+import { mergeRuijieHarnessSnapshot } from "@/lib/engine-availability";
 
 const MAX_ROUTINE_RUNS = 2_000;
 const ACTIVE_ROUTINE_RUN_STATUSES = new Set<RoutineRun["status"]>(["queued", "running", "waiting"]);
@@ -397,6 +398,9 @@ export interface InstanceInfo {
   instanceId: string;
   driverKind: string;
   displayName: string;
+  /** User-controlled engine switch. Disabled engines remain installed but
+   * cannot be selected or run. */
+  enabled?: boolean;
   snapshot: {
     state: "available" | "unavailable";
     reason?: string;
@@ -408,6 +412,12 @@ export interface InstanceInfo {
       title: string;
       message: string;
       command: string;
+    };
+    sso?: {
+      authentication: "sso";
+      account: { id: string; name?: string; email?: string };
+      billing: { currency: "CNY"; total: number; used: number; remaining: number; usedPercent: number };
+      fetchedAt: string;
     };
     /** a reported cost on a subscription is notional; the UI says so */
     billing?: "metered" | "subscription";
@@ -598,6 +608,7 @@ export type Action =
   | { type: "deleteGroupTask"; groupId: string; threadId: string }
   | { type: "interruptGroup"; groupId: string; threadId?: string; onError?: () => void }
   | { type: "instances"; instances: InstanceInfo[] }
+  | { type: "ruijieSnapshot"; snapshot: InstanceInfo["snapshot"] }
   | { type: "configStatus"; config: ConfigStatus }
   | { type: "select"; id: string }
   | {
@@ -893,6 +904,8 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     case "instances":
       return { ...state, instances: action.instances };
+    case "ruijieSnapshot":
+      return { ...state, instances: mergeRuijieHarnessSnapshot(state.instances, action.snapshot) };
     case "configStatus":
       return {
         ...state,
@@ -1563,6 +1576,8 @@ const StoreContext = createContext<{
   refreshInstances: () => Promise<void>;
   /** Explicit provider/network model discovery. */
   refreshModels: (instanceId: string) => Promise<void>;
+  /** Refresh only the enterprise-account-gated Harness instance. */
+  refreshRuijieHarness: () => Promise<void>;
 } | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
@@ -2438,6 +2453,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     rawDispatch({ type: "instances", instances });
   }, []);
 
+  const refreshRuijieHarness = useCallback(async () => {
+    try {
+      const response = await fetch("/api/ruijie-sso", { headers: { "content-type": "application/json" } });
+      const body = await response.json().catch(() => null) as { snapshot?: InstanceInfo["snapshot"] } | null;
+      // A 503 still carries the useful unavailable snapshot (signed out,
+      // mismatched account, or Harness closed), so merge it as normal state.
+      if (body?.snapshot) rawDispatch({ type: "ruijieSnapshot", snapshot: body.snapshot });
+    } catch {
+      /* offline or server down — the existing Harness row stays */
+    }
+  }, []);
+
   // Installing a CLI or signing one in happens in a terminal, outside this
   // window — so the moment the user comes back is exactly when our engine
   // snapshot is most likely stale. Re-probe on focus, throttled so that
@@ -2459,8 +2486,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [botPatchQueue],
   );
   const value = useMemo(
-    () => ({ state, dispatch, flushBotPatches, refreshInstances, refreshModels }),
-    [state, dispatch, flushBotPatches, refreshInstances, refreshModels],
+    () => ({ state, dispatch, flushBotPatches, refreshInstances, refreshModels, refreshRuijieHarness }),
+    [state, dispatch, flushBotPatches, refreshInstances, refreshModels, refreshRuijieHarness],
   );
   return (
     <StoreContext.Provider value={value}>

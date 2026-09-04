@@ -39,8 +39,9 @@ type SkillRecordingPayload = {
   transcript: string;
   transcription?: { provider: "assemblyai"; model: string };
   audio?: string;
+  video?: string;
   events: Array<{
-    type: "app" | "click" | "scroll" | "shortcut" | "typing" | "clipboard" | "download";
+    type: "app" | "click" | "scroll" | "shortcut" | "typing" | "clipboard" | "download" | "frame";
     atMs: number;
     app?: string;
     windowTitle?: string;
@@ -127,6 +128,25 @@ type SkillRecordingPayload = {
     code?: "load-failed" | "renderer-gone";
   }
 
+  type RuijieAccountSummary = {
+    authentication: "sso";
+    account: { id: string; name?: string; email?: string };
+    billing: {
+      currency: "CNY";
+      total: number;
+      used: number;
+      remaining: number;
+      usedPercent: number;
+    };
+    fetchedAt: string;
+  };
+
+  type RuijieAccountState = {
+    status: "signed-out" | "authorizing" | "ready" | "error";
+    summary?: RuijieAccountSummary;
+    message?: string;
+  };
+
   interface Window {
     ogb?: {
       platform: NodeJS.Platform;
@@ -152,6 +172,11 @@ type SkillRecordingPayload = {
         retry(): Promise<CompanionAccountState>;
         signOut(): Promise<CompanionAccountState>;
       };
+      ruijieAccount?: {
+        state(): Promise<RuijieAccountState>;
+        signIn(): Promise<RuijieAccountState>;
+        signOut(): Promise<RuijieAccountState>;
+      };
       localControl: {
         status(): Promise<LinuxLocalControlStatus>;
         enable(): Promise<LinuxLocalControlStatus>;
@@ -161,6 +186,13 @@ type SkillRecordingPayload = {
       /** Arms one user-initiated display capture request from this frame. */
       beginScreenPreviewIntent(): boolean;
       screenFrame(): Promise<string | null>;
+      setScreenCaptureShield?(enabled: boolean): Promise<boolean>;
+      localDesktopInput?(input:
+        | { kind: "click"; xRatio: number; yRatio: number; button?: "left" | "right"; double?: boolean }
+        | { kind: "text"; text: string }
+        | { kind: "key"; key: string }
+        | { kind: "scroll"; deltaY: number }
+      ): Promise<boolean>;
       androidDevice?: {
         status(): Promise<AndroidDeviceStatus>;
         frame(serial: string): Promise<{ serial: string; dataUrl: string }>;
@@ -177,7 +209,7 @@ type SkillRecordingPayload = {
       ): () => void;
       onSpeechEnd(cb: (info: { code: number | null; reason?: string }) => void): () => void;
       skillRecorder?: {
-        permissions(): Promise<{ supported: boolean; reason?: string }>;
+        permissions(): Promise<{ supported: boolean; reason?: string; captureMode?: "native-events" | "visual" }>;
         start(): Promise<{ recording: boolean }>;
         stop(): Promise<{ recording: boolean }>;
         save(payload: SkillRecordingPayload): Promise<{ id: string; path: string; events: number }>;
@@ -205,6 +237,9 @@ type SkillRecordingPayload = {
       openInstallTerminal?(command: string): Promise<boolean>;
       /** Opens an http(s) link in the user's default browser. */
       openExternal?(url: string): Promise<boolean>;
+      /** Minimize the OpenMausBot window so the person can operate the
+       * physical desktop after taking the local-computer control lease. */
+      minimizeApp?(): Promise<boolean>;
       /** Recolor the native window chrome for a skin; absent on older builds. */
       applySkin?(skin: string): Promise<boolean>;
       /** Receives a GitHub package URL opened through openmausbot://install. */

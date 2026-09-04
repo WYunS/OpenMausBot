@@ -126,6 +126,16 @@ export function PiMark({ size = 16, className }: IconProps) {
 
 export function ProviderMark({ driverKind, size, className }: IconProps & { driverKind: string }) {
   switch (driverKind) {
+    case "ruijieHarness":
+      return (
+        <span
+          className={cn("flex items-center justify-center rounded-[22%] border border-current font-black italic tracking-[-0.12em] text-ink", className)}
+          style={{ width: size, height: size, fontSize: Math.max(8, (size ?? 16) * 0.43), paddingRight: Math.max(1, (size ?? 16) * 0.06) }}
+          aria-hidden
+        >
+          RJ
+        </span>
+      );
     case "grok":
     case "grokAgent":
       return <GrokMark size={size} className={className} />;

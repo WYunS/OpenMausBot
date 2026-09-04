@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { windowChromeOptions } from "./window-chrome.mjs";
+import { desktopWindowWebPreferences, windowChromeOptions } from "./window-chrome.mjs";
 
 describe("window chrome", () => {
   it("uses inset traffic lights on macOS", () => {
@@ -16,5 +16,13 @@ describe("window chrome", () => {
 
   it("keeps Linux window chrome native", () => {
     expect(windowChromeOptions("linux")).toEqual({});
+  });
+
+  it("keeps the desktop video renderer active when input foregrounds another window", () => {
+    expect(desktopWindowWebPreferences("C:/app/preload.cjs")).toEqual({
+      contextIsolation: true,
+      backgroundThrottling: false,
+      preload: "C:/app/preload.cjs",
+    });
   });
 });

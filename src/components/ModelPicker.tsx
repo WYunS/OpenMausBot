@@ -11,6 +11,7 @@ import { EngineSetup, EngineUpdateNotice, needsCli, needsSignIn } from "./Engine
 import { EngineGroupLabel } from "./EngineGroupLabel";
 import { cn } from "@/lib/cn";
 import { COMPACT_SQUARE } from "@/lib/compact-chip";
+import { engineSelectableNow, prioritizeEngines } from "@/lib/engine-availability";
 
 type ModelOption = InstanceInfo["models"]["options"][number];
 const COMPACT_MODEL_COUNT = 5;
@@ -324,17 +325,26 @@ export function ModelPicker({
               const railButton = (instance: InstanceInfo) => {
                 const selected = instance.instanceId === railInstance?.instanceId;
                 const attention = needsCli(instance) || needsSignIn(instance) || Boolean(instance.snapshot.update);
+                const selectable = engineSelectableNow(instance);
                 return (
                   <button
                     type="button"
                     key={instance.instanceId}
                     onClick={() => selectRail(instance)}
+                    disabled={!selectable}
                     aria-label={instance.displayName}
                     aria-pressed={selected}
-                    title={`${instance.displayName} · ${engineStatus(instance)}`}
+                    title={selectable
+                      ? `${instance.displayName} · ${engineStatus(instance)}`
+                      : instance.enabled === false
+                        ? `${instance.displayName} · 请先在设置中开启`
+                        : instance.driverKind === "ruijieHarness" && instance.snapshot.reason
+                        ? `${instance.displayName} · ${instance.snapshot.reason}`
+                        : `${instance.displayName} · 当前不可用`}
                     className={cn(
                       "relative flex size-9 items-center justify-center rounded-lg",
-                      selected ? "bg-control ring-1 ring-hairline/50" : "hover:bg-control/60",
+                      !selectable && "cursor-not-allowed opacity-30 grayscale",
+                      selectable && (selected ? "bg-control ring-1 ring-hairline/50" : "hover:bg-control/60"),
                     )}
                   >
                     <ProviderMark driverKind={instance.driverKind} size={18} />
@@ -349,11 +359,11 @@ export function ModelPicker({
                   {subscription.length > 0 && (
                     <EngineGroupLabel className="px-0 pb-0.5 pt-0.5 text-center text-[9px]">Cloud</EngineGroupLabel>
                   )}
-                  {subscription.map(railButton)}
+                  {prioritizeEngines(subscription).map(railButton)}
                   {local.length > 0 && (
                     <EngineGroupLabel className="px-0 pb-0.5 pt-2 text-center text-[9px]">Local</EngineGroupLabel>
                   )}
-                  {local.map(railButton)}
+                  {prioritizeEngines(local).map(railButton)}
                 </>
               );
             })()}

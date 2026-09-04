@@ -24,6 +24,8 @@ import {
   Plus,
   Search,
   Sparkles,
+  Settings,
+  LogOut,
   Puzzle,
   Trash2,
   Users,
@@ -78,6 +80,8 @@ import { phoneSettingsAction, SidebarPhoneButton } from "./SidebarPhoneButton";
 import { SidebarMoreMenu } from "./SidebarMoreMenu";
 import { profileInitials, SidebarProfileMenu } from "./SidebarProfileMenu";
 import { SidebarSectionHeader } from "./SidebarSectionHeader";
+import { AccountSignOutConfirm } from "./AccountSignOutConfirm";
+import { useRuijieAccount } from "@/state/ruijie-account";
 
 function preview(bot: Bot): string {
   if (bot.activity === "waiting-on-you") return "Waiting for you…";
@@ -978,6 +982,7 @@ function ArchivedBotsPanel({
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { state, dispatch } = useStore();
+  const account = useRuijieAccount();
   const { capabilities } = useDesktopCapabilities();
   const importReturnRef = useRef<HTMLButtonElement>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -1003,6 +1008,10 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
     return saved === "icons" ? "comfortable" : saved;
   });
   const [densityOpen, setDensityOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [accountBusy, setAccountBusy] = useState(false);
+  const [confirmingSignOut, setConfirmingSignOut] = useState(false);
+  const accountMenuRef = useRef<HTMLDivElement>(null);
   const [collapsedSections, setCollapsedSections] = useState<string[]>(() => loadCollapsedSections());
   const [sectionOrder, setSectionOrder] = useState<string[]>(() => loadSectionOrder());
   const [draggingSectionId, setDraggingSectionId] = useState<string | null>(null);
@@ -1052,6 +1061,19 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
     window.addEventListener("keydown", closeDensityMenu);
     return () => window.removeEventListener("keydown", closeDensityMenu);
   }, [densityOpen]);
+
+  useEffect(() => {
+    if (!accountOpen) return;
+    const close = (event: MouseEvent) => {
+      if (!accountMenuRef.current?.contains(event.target as Node)) setAccountOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    return () => window.removeEventListener("mousedown", close);
+  }, [accountOpen]);
+
+  useEffect(() => {
+    if (!accountOpen) setConfirmingSignOut(false);
+  }, [accountOpen]);
 
   useEffect(() => {
     return window.ogb?.onPackageInstall?.((url) => {
@@ -1608,7 +1630,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       </p>
 
       {/* Footer */}
-      <div className={cn("pb-3 pt-2", density === "icons" ? "px-2" : "px-3")}>
+      <div className={cn("relative pb-3 pt-2", density === "icons" ? "px-2" : "px-3")}>
         {density === "icons" && (
           <>
         <button
@@ -1672,6 +1694,80 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             onOpen={() => dispatch(phoneSettingsAction())}
           />
         )}
+        {account.desktopSso && (
+        <div ref={accountMenuRef} className={cn("relative flex items-center", density === "icons" && "justify-center")}>
+          {accountOpen && account.desktopSso && (
+            <div className={cn(
+              "absolute bottom-full z-50 mb-2 rounded-xl border border-hairline/50 bg-card p-2 shadow-2xl shadow-black/35",
+              density === "icons" ? "left-0 w-[270px]" : "left-0 right-0",
+            )}>
+              {confirmingSignOut ? (
+                <AccountSignOutConfirm
+                  email={account.state.summary?.account.email ?? state.config?.profile?.email}
+                  busy={accountBusy}
+                  onCancel={() => setConfirmingSignOut(false)}
+                  onConfirm={() => {
+                    setAccountBusy(true);
+                    void account.signOut()
+                      .then(() => {
+                        setConfirmingSignOut(false);
+                        setAccountOpen(false);
+                      })
+                      .finally(() => setAccountBusy(false));
+                  }}
+                />
+              ) : <>
+              <div className="px-2.5 py-2">
+                <div className="truncate text-[13.5px] font-semibold text-ink">
+                  {account.state.summary?.account.name ?? state.config?.profile?.name ?? "企业账号"}
+                </div>
+                <div className="mt-0.5 truncate text-[11.5px] text-ink-secondary">
+                  {account.state.summary?.account.email ?? state.config?.profile?.email}
+                </div>
+                {account.state.summary?.billing && (
+                  <div className="mt-3 rounded-lg bg-inset px-2.5 py-2">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="text-[11px] text-ink-secondary">余额</span>
+                      <span className="font-mono text-[13px] font-semibold text-ink">
+                        ¥{account.state.summary.billing.remaining.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                disabled={accountBusy}
+                onClick={() => setConfirmingSignOut(true)}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-ink-secondary hover:bg-control hover:text-ink disabled:opacity-50"
+              >
+                {accountBusy ? <Loader2 size={14} className="animate-spin" /> : <LogOut size={14} />}
+                退出登录
+              </button>
+              </>}
+            </div>
+          )}
+          <button
+            onClick={() => account.desktopSso ? setAccountOpen((value) => !value) : dispatch({ type: "toggleAppSettings" })}
+            className={cn("flex min-w-0 items-center rounded-xl py-2 text-left hover:bg-raised/50", density === "icons" ? "justify-center px-2" : "flex-1 gap-3 px-3")}
+            aria-label={density === "icons" ? "企业账号" : undefined}
+            title={density === "icons" ? `${state.config?.profile?.name?.trim() || "企业账号"}${account.state.summary?.billing ? ` · ¥${account.state.summary.billing.remaining.toFixed(2)} 可用` : ""}` : undefined}
+          >
+            <InitialsAvatar initials={profileInitials(state.config?.profile)} size={28} />
+            <span className={cn("min-w-0 flex-1", density === "icons" && "hidden")}>
+              <span className="block truncate text-[14px] text-ink">
+                {state.config?.profile?.name?.trim() || state.config?.profile?.email?.trim() || "You"}
+              </span>
+              {account.state.summary?.billing && (
+                <span className="block truncate text-[10.5px] text-ink-secondary">
+                  余额 ¥{account.state.summary.billing.remaining.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}
+                </span>
+              )}
+            </span>
+          </button>
+          <button onClick={() => dispatch({ type: "toggleAppSettings" })} aria-label="App settings" title="App settings" className="rounded-lg p-2 text-ink-secondary hover:bg-raised/50"><Settings size={18} /></button>
+        </div>
+        )}
           {density !== "icons" && (
           <SidebarMoreMenu
             items={[
@@ -1713,7 +1809,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             ]}
           />
         )}
-        {density === "icons" ? (
+        {!account.desktopSso && (density === "icons" ? (
           <div className="flex items-center justify-center">
             <button
               onClick={() => dispatch({ type: "toggleAppSettings" })}
@@ -1734,7 +1830,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           <div className="mt-3">
             <SidebarProfileMenu />
           </div>
-        )}
+        ))}
       </div>
 
       {menu && (

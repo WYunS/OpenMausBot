@@ -20,6 +20,7 @@ export interface ShadowInstance {
   displayName: string | undefined;
   /** Raw `config.cli` from disk — an override exists only if this is set. */
   cli: string | undefined;
+  enabled: boolean;
   shadow: true;
   reason: string;
 }
@@ -69,6 +70,7 @@ export class ProviderRegistry {
             driverKind: entry.driver,
             displayName: entry.displayName,
             cli: cliOfRaw(entry.config),
+            enabled: entry.enabled ?? true,
             shadow: true,
             reason: `unknown driver "${entry.driver}" — kept as configured, unavailable here`,
           },
@@ -98,6 +100,7 @@ export class ProviderRegistry {
             driverKind: entry.driver,
             displayName: entry.displayName ?? driver.metadata.displayName,
             cli: cliOfRaw(entry.config),
+            enabled: entry.enabled ?? true,
             shadow: true,
             reason: e instanceof Error ? e.message : String(e),
           },
@@ -107,7 +110,8 @@ export class ProviderRegistry {
   }
 
   get(instanceId: InstanceId): ProviderInstance | null {
-    return this.byId.get(instanceId)?.live ?? null;
+    const live = this.byId.get(instanceId)?.live;
+    return live?.enabled ? live : null;
   }
 
   /** The configured executable for instance-scoped maintenance actions.
@@ -186,6 +190,7 @@ export class ProviderRegistry {
             instanceId: entry.instanceId,
             driverKind: entry.shadow.driverKind,
             displayName: entry.shadow.displayName ?? entry.shadow.driverKind,
+            enabled: entry.shadow.enabled,
             snapshot: { state: "unavailable", reason: entry.shadow.reason } satisfies ProviderSnapshot,
             models: { default: "", options: [] },
             capabilities: { computerMcp: false, agentsMcp: false, localComputerMcp: false },
@@ -200,6 +205,33 @@ export class ProviderRegistry {
           };
         }
         const inst = entry.live;
+        if (!inst.enabled) {
+          return {
+            instanceId: inst.instanceId,
+            driverKind: inst.driverKind,
+            displayName: inst.displayName ?? inst.driverKind,
+            enabled: false,
+            snapshot: { state: "unavailable", reason: "已在设置中关闭" } satisfies ProviderSnapshot,
+            models: inst.models,
+            capabilities: {
+              computerMcp: inst.adapter.capabilities.computerMcp === true,
+              agentsMcp: inst.adapter.capabilities.agentsMcp === true,
+              composioMcp: inst.adapter.capabilities.composioMcp === true,
+              phoneMcp: inst.adapter.capabilities.phoneMcp === true,
+              browserMcp: inst.adapter.capabilities.browserMcp === true,
+              images: inst.adapter.capabilities.images === true,
+              effortLevels: inst.adapter.capabilities.effortLevels,
+              queueing: inst.adapter.capabilities.queueing === true,
+              localComputerMcp: inst.adapter.capabilities.localComputerMcp === true,
+              approvalReview: inst.reviewPermission !== undefined,
+            },
+            access: driver?.metadata.access ?? "subscription",
+            install: driver?.install,
+            cli: this.cliByInstance.get(inst.instanceId),
+            cliDefault: cliDefaultOf(driver),
+            cliCandidates: [],
+          };
+        }
         let snapshot: ProviderSnapshot;
         try {
           snapshot = await inst.snapshot();
@@ -210,6 +242,7 @@ export class ProviderRegistry {
           instanceId: inst.instanceId,
           driverKind: inst.driverKind,
           displayName: inst.displayName ?? inst.driverKind,
+          enabled: true,
           snapshot,
           models: inst.models,
           capabilities: {

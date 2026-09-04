@@ -26,6 +26,7 @@ import { customMcpServers,
   syncCredentialEnv,
   vpsSshAlias,
   withInstanceCli,
+  withInstanceEnabled,
   WORKSPACE_CREDENTIAL_ENV,
   type AppConfig,
 } from "./config.ts";
@@ -353,15 +354,20 @@ describe("configuration boundaries", () => {
 });
 
 describe("default fleet", () => {
+  it("passes the OpenMaus account identity to Harness without a machine-specific path", () => {
+    const map = instanceConfigs({ profile: { name: "王允尚", email: "WangYunshang@Ruijie.com.cn" } });
+    expect(map.ruijieHarness.config).toEqual({ expectedAccountEmail: "wangyunshang@ruijie.com.cn" });
+  });
+
   it("ships Qwen and Hermes as custom-only engines", () => {
     const map = instanceConfigs({});
-    expect(map.qwen).toEqual({ driver: "qwenAgent", environment: {} });
-    expect(map.hermes).toEqual({ driver: "hermesAgent", environment: {} });
+    expect(map.qwen).toEqual({ driver: "qwenAgent", enabled: false, environment: {} });
+    expect(map.hermes).toEqual({ driver: "hermesAgent", enabled: false, environment: {} });
   });
 
   it("ships Cursor as a default-fleet subscription engine", () => {
     const map = instanceConfigs({});
-    expect(map.cursor).toEqual({ driver: "cursorAgent", environment: {} });
+    expect(map.cursor).toEqual({ driver: "cursorAgent", enabled: false, environment: {} });
   });
 
   it("carries the saved OpenAI-compatible URL into the live default instance", () => {
@@ -480,6 +486,27 @@ describe("Instance CLI override", () => {
     const custom = { instances: { claude: { driver: "claudeAgent", environment: { MY_FLAG: "1" } } } };
     const kept = withInstanceCli(custom, "claude", "/x");
     expect(kept.config.instances!.claude.environment).toEqual({ MY_FLAG: "1" });
+  });
+});
+
+describe("Instance enabled switch", () => {
+  it("defaults the product fleet off except for Harness and Codex", () => {
+    const map = instanceConfigs({});
+    expect(map.ruijieHarness.enabled).toBe(true);
+    expect(map.codex.enabled).toBe(true);
+    expect(map.claude.enabled).toBe(false);
+    expect(map.grok.enabled).toBe(false);
+  });
+
+  it("persists an explicit user choice without deleting CLI configuration", () => {
+    const cfg: AppConfig = {
+      instances: { claude: { driver: "claudeAgent", enabled: false, config: { cli: "/opt/claude" } } },
+    };
+    const enabled = withInstanceEnabled(cfg, "claude", true);
+    expect(enabled.ok).toBe(true);
+    expect(enabled.config.instances!.claude.enabled).toBe(true);
+    expect(enabled.config.instances!.claude.config).toEqual({ cli: "/opt/claude" });
+    expect(cfg.instances!.claude.enabled).toBe(false);
   });
 });
 

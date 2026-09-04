@@ -28,11 +28,16 @@ import {
 } from "@/lib/assemblyai-transcription";
 import {
   appendNativeEvent,
+  appendVisualFrame,
   eventLabel,
   formatRecordingTime,
   type RecordedSkillEvent,
 } from "@/lib/skill-recorder";
-import { requestScreenPreview, stopScreenPreview } from "@/lib/screen-preview";
+import {
+  requestSkillRecordingScreen,
+  stopScreenPreview,
+  type SkillRecorderPermission,
+} from "@/lib/screen-preview";
 import { TRANSCRIPTION_STATUS_EVENT } from "@/lib/transcription-status";
 import { useStore } from "@/state/store";
 
@@ -77,6 +82,7 @@ export function SkillRecorderPage() {
   const transcriptRef = useRef("");
   const [partialTranscript, setPartialTranscript] = useState("");
   const [transcriptionConfigured, setTranscriptionConfigured] = useState<boolean | null>(null);
+  const [recorderPermission, setRecorderPermission] = useState<SkillRecorderPermission | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [error, setError] = useState("");
@@ -85,10 +91,14 @@ export function SkillRecorderPage() {
   const screenRef = useRef<MediaStream | null>(null);
   const micRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const videoRecorderRef = useRef<MediaRecorder | null>(null);
   const transcriptionSessionRef = useRef<AssemblyAITranscriptionSession | null>(null);
   const cloudTranscriptRef = useRef<AssemblyAITranscript>({ turns: new Map(), finalText: "", partialText: "" });
   const audioChunksRef = useRef<Blob[]>([]);
   const audioDataRef = useRef("");
+  const videoChunksRef = useRef<Blob[]>([]);
+  const videoDataRef = useRef("");
+  const captureModeRef = useRef<"native-events" | "visual">("native-events");
   const startedRef = useRef(0);
   const stoppingRef = useRef(false);
 
@@ -156,12 +166,53 @@ export function SkillRecorderPage() {
   }, []);
 
   useEffect(() => {
+    let alive = true;
+    if (!bridge) {
+      setRecorderPermission({ supported: false, reason: "Desktop bridge unavailable" });
+      return () => { alive = false; };
+    }
+    bridge.permissions()
+      .then((permission) => { if (alive) setRecorderPermission(permission); })
+      .catch((caught: unknown) => {
+        if (alive) setRecorderPermission({
+          supported: false,
+          reason: caught instanceof Error ? caught.message : String(caught),
+        });
+      });
+    return () => { alive = false; };
+  }, [bridge]);
+
+  useEffect(() => {
     if (phase !== "recording") return;
     const tick = () => setElapsed(Date.now() - startedRef.current);
     tick();
     const timer = setInterval(tick, 250);
     return () => clearInterval(timer);
   }, [phase]);
+
+  // Windows cannot yet provide the privacy-filtered native event stream used
+  // by the macOS helper. Keep the demonstration useful by recording a visual
+  // checkpoint every few seconds; narration supplies intent and the complete
+  // video remains available for later review.
+  useEffect(() => {
+    if (phase !== "recording" || captureModeRef.current !== "visual") return;
+    const capture = () => {
+      const screenshot = takeScreenshot();
+      if (!screenshot) return;
+      const result = appendVisualFrame(eventsRef.current, {
+        atMs: Date.now() - startedRef.current,
+        screenshot,
+      });
+      eventsRef.current = result.events;
+      setEvents(result.events);
+    };
+    const first = window.setTimeout(capture, 500);
+    const timer = window.setInterval(capture, 3_000);
+    return () => {
+      window.clearTimeout(first);
+      window.clearInterval(timer);
+    };
+  }, [phase, takeScreenshot]);
 
   const releaseStreams = useCallback(() => {
     stopScreenPreview(screenRef.current);
@@ -174,30 +225,30 @@ export function SkillRecorderPage() {
   useEffect(() => () => {
     void bridge?.stop();
     void transcriptionSessionRef.current?.stop();
+    if (mediaRecorderRef.current?.state !== "inactive") mediaRecorderRef.current?.stop();
+    if (videoRecorderRef.current?.state !== "inactive") videoRecorderRef.current?.stop();
     releaseStreams();
   }, [bridge, releaseStreams]);
 
   const start = async () => {
     setError("");
     if (!bridge || !window.ogb?.beginScreenPreviewIntent || !navigator.mediaDevices?.getDisplayMedia) {
-      setError("Skill recording requires the OpenMausBot desktop app on macOS.");
+      setError("Skill recording requires the OpenMausBot desktop app.");
       return;
     }
-    if (!transcriptionConfigured || !window.ogb.transcription) {
-      setError("Add your AssemblyAI key under Cloud transcription before recording.");
-      return;
-    }
-    const nextPermission = await bridge.permissions();
-    if (!nextPermission.supported) {
-      setError("Skill recording is currently available in the macOS desktop app.");
+    if (!recorderPermission) {
+      setError("Screen recording permissions are still being checked. Please try again.");
       return;
     }
     updatePhase("starting");
     try {
-      const selected = await requestScreenPreview({
+      const requested = await requestSkillRecordingScreen({
+        permission: recorderPermission,
         beginIntent: () => window.ogb!.beginScreenPreviewIntent(),
         getDisplayMedia: (constraints) => navigator.mediaDevices.getDisplayMedia(constraints),
       });
+      captureModeRef.current = requested.permission.captureMode === "visual" ? "visual" : "native-events";
+      const selected = requested.preview;
       if (!selected.ok) throw new Error(selected.message);
       screenRef.current = selected.stream;
       const video = videoRef.current;
@@ -205,19 +256,45 @@ export function SkillRecorderPage() {
       video.srcObject = selected.stream;
       await video.play();
 
-      const mic = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      micRef.current = mic;
+      let mic: MediaStream | null = null;
+      try {
+        mic = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        micRef.current = mic;
+      } catch {
+        // A screen-only demonstration is still useful. Narration remains an
+        // optional enhancement and must never block local visual teaching.
+      }
       audioChunksRef.current = [];
-      const preferredAudio = "audio/webm;codecs=opus";
-      const recorder = new MediaRecorder(
-        mic,
-        MediaRecorder.isTypeSupported(preferredAudio) ? { mimeType: preferredAudio } : undefined,
+      if (mic) {
+        const preferredAudio = "audio/webm;codecs=opus";
+        const recorder = new MediaRecorder(
+          mic,
+          MediaRecorder.isTypeSupported(preferredAudio) ? { mimeType: preferredAudio } : undefined,
+        );
+        recorder.ondataavailable = (event) => {
+          if (event.data.size) audioChunksRef.current.push(event.data);
+        };
+        recorder.start(1_000);
+        mediaRecorderRef.current = recorder;
+      }
+
+      const preferredVideo = "video/webm;codecs=vp9,opus";
+      const combined = new MediaStream([
+        ...selected.stream.getVideoTracks(),
+        ...(mic?.getAudioTracks() ?? []),
+      ]);
+      videoChunksRef.current = [];
+      const videoRecorder = new MediaRecorder(
+        combined,
+        MediaRecorder.isTypeSupported(preferredVideo)
+          ? { mimeType: preferredVideo, videoBitsPerSecond: 1_200_000 }
+          : { videoBitsPerSecond: 1_200_000 },
       );
-      recorder.ondataavailable = (event) => {
-        if (event.data.size) audioChunksRef.current.push(event.data);
+      videoRecorder.ondataavailable = (event) => {
+        if (event.data.size) videoChunksRef.current.push(event.data);
       };
-      recorder.start(1_000);
-      mediaRecorderRef.current = recorder;
+      videoRecorder.start(1_000);
+      videoRecorderRef.current = videoRecorder;
 
       await bridge.start();
       eventsRef.current = [];
@@ -226,19 +303,22 @@ export function SkillRecorderPage() {
       setTranscript("");
       setPartialTranscript("");
       cloudTranscriptRef.current = { turns: new Map(), finalText: "", partialText: "" };
-      transcriptionSessionRef.current = await startAssemblyAITranscription({
-        stream: mic,
-        getToken: () => window.ogb!.transcription!.streamingToken(),
-        onTurn: (turn) => {
-          const next = mergeAssemblyAITurn(cloudTranscriptRef.current, turn);
-          cloudTranscriptRef.current = next;
-          transcriptRef.current = next.finalText;
-          setTranscript(next.finalText);
-          setPartialTranscript(next.partialText);
-        },
-        onError: (message) => setError(message),
-      });
+      if (mic && transcriptionConfigured && window.ogb.transcription) {
+        transcriptionSessionRef.current = await startAssemblyAITranscription({
+          stream: mic,
+          getToken: () => window.ogb!.transcription!.streamingToken(),
+          onTurn: (turn) => {
+            const next = mergeAssemblyAITurn(cloudTranscriptRef.current, turn);
+            cloudTranscriptRef.current = next;
+            transcriptRef.current = next.finalText;
+            setTranscript(next.finalText);
+            setPartialTranscript(next.partialText);
+          },
+          onError: (message) => setError(message),
+        });
+      }
       audioDataRef.current = "";
+      videoDataRef.current = "";
       startedRef.current = Date.now();
       setElapsed(0);
       updatePhase("recording");
@@ -248,6 +328,8 @@ export function SkillRecorderPage() {
       transcriptionSessionRef.current = null;
       if (mediaRecorderRef.current?.state !== "inactive") mediaRecorderRef.current?.stop();
       mediaRecorderRef.current = null;
+      if (videoRecorderRef.current?.state !== "inactive") videoRecorderRef.current?.stop();
+      videoRecorderRef.current = null;
       releaseStreams();
       updatePhase("idle");
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -282,6 +364,17 @@ export function SkillRecorderPage() {
         const mime = recorder?.mimeType.split(";")[0] || "audio/webm";
         audioDataRef.current = await blobDataUrl(new Blob(audioChunksRef.current, { type: mime }));
       }
+      const videoRecorder = videoRecorderRef.current;
+      if (videoRecorder && videoRecorder.state !== "inactive") {
+        const stopped = new Promise<void>((resolve) => videoRecorder.addEventListener("stop", () => resolve(), { once: true }));
+        videoRecorder.stop();
+        await stopped;
+      }
+      videoRecorderRef.current = null;
+      if (videoChunksRef.current.length) {
+        const mime = videoRecorder?.mimeType.split(";")[0] || "video/webm";
+        videoDataRef.current = await blobDataUrl(new Blob(videoChunksRef.current, { type: mime }));
+      }
       releaseStreams();
       updatePhase("review");
     } catch (caught) {
@@ -289,6 +382,8 @@ export function SkillRecorderPage() {
       transcriptionSessionRef.current = null;
       if (mediaRecorderRef.current?.state !== "inactive") mediaRecorderRef.current?.stop();
       mediaRecorderRef.current = null;
+      if (videoRecorderRef.current?.state !== "inactive") videoRecorderRef.current?.stop();
+      videoRecorderRef.current = null;
       releaseStreams();
       updatePhase("review");
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -303,6 +398,8 @@ export function SkillRecorderPage() {
     transcriptionSessionRef.current = null;
     if (mediaRecorderRef.current?.state !== "inactive") mediaRecorderRef.current?.stop();
     mediaRecorderRef.current = null;
+    if (videoRecorderRef.current?.state !== "inactive") videoRecorderRef.current?.stop();
+    videoRecorderRef.current = null;
     releaseStreams();
     eventsRef.current = [];
     setEvents([]);
@@ -312,6 +409,10 @@ export function SkillRecorderPage() {
     setDescription("");
     setSaved(null);
     setError("");
+    audioChunksRef.current = [];
+    audioDataRef.current = "";
+    videoChunksRef.current = [];
+    videoDataRef.current = "";
     updatePhase("idle");
   };
 
@@ -331,8 +432,9 @@ export function SkillRecorderPage() {
         description,
         durationMs: elapsed,
         transcript: transcriptRef.current,
-        transcription: { provider: "assemblyai", model: "u3-rt-pro" },
+        transcription: transcriptionConfigured ? { provider: "assemblyai", model: "u3-rt-pro" } : undefined,
         audio: audioDataRef.current || undefined,
+        video: videoDataRef.current || undefined,
         events: eventsRef.current,
       });
       setSaved(result);
@@ -371,14 +473,14 @@ export function SkillRecorderPage() {
                 </div>
                 <h2 className="mt-5 text-[25px] font-semibold tracking-[-0.02em]">Record yourself doing the task</h2>
                 <p className="mt-2 max-w-xl text-[14px] leading-6 text-ink-secondary">
-                  Speak naturally while you work. OpenMausBot lines up your clicks, app changes, screenshots, and narration, then turns the reviewed demonstration into a reusable local skill.
+                  Speak naturally while you work. OpenMausBot lines up your actions, screen recording, visual checkpoints, and narration, then turns the reviewed demonstration into a reusable local skill.
                 </p>
 
                 <div className="mt-7 grid gap-3 sm:grid-cols-3">
                   {[
                     { Icon: MousePointer2, label: "Actions", copy: "Clicks, scrolling, app changes" },
-                    { Icon: MonitorUp, label: "Visuals", copy: "A frame at each useful moment" },
-                    { Icon: Mic, label: "Narration", copy: "Live transcript plus original audio" },
+                    { Icon: MonitorUp, label: "Screen", copy: "Video plus useful visual moments" },
+                    { Icon: Mic, label: "Narration", copy: "Optional audio and live transcript" },
                   ].map(({ Icon, label, copy }) => (
                     <div key={label} className="rounded-2xl bg-card p-4">
                       <Icon size={18} className="text-ink-secondary" />
@@ -391,7 +493,7 @@ export function SkillRecorderPage() {
                 <div className="mt-6 flex items-start gap-3 rounded-2xl bg-inset px-4 py-3">
                   <EyeOff size={17} className="mt-0.5 shrink-0 text-success" />
                   <p className="text-[12px] leading-5 text-ink-secondary">
-                    Raw keystrokes and clipboard contents are never stored. Screen frames can contain visible text and stay on this computer; microphone audio is streamed to AssemblyAI for transcription. You review everything before creating the skill.
+                    Raw keystrokes and clipboard contents are never stored. Screen video and frames can contain visible text and stay on this computer. When configured, microphone audio is streamed to AssemblyAI for transcription. You review everything before creating the skill.
                   </p>
                 </div>
 
@@ -399,11 +501,11 @@ export function SkillRecorderPage() {
                   <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent/12 text-accent-text"><Cloud size={17} /></span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 text-[13px] font-medium">
-                      Cloud transcription
+                      Optional cloud transcription
                       {transcriptionConfigured && <span className="text-[10px] font-medium text-success">Saved</span>}
                     </div>
                     <p className="mt-0.5 text-[11px] leading-4 text-ink-secondary">
-                      {transcriptionConfigured ? "AssemblyAI is ready for live narration." : "Add an AssemblyAI key in Settings before recording."}
+                      {transcriptionConfigured ? "AssemblyAI is ready for live narration." : "Record without it, or add an AssemblyAI key for a live transcript."}
                     </p>
                   </div>
                   <button
@@ -415,10 +517,10 @@ export function SkillRecorderPage() {
                   </button>
                 </div>
 
-                <button type="button" disabled={phase === "starting" || !transcriptionConfigured} onClick={() => void start()} className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-accent px-5 py-3.5 text-[14px] font-semibold text-white hover:brightness-110 disabled:opacity-40">
-                  {phase === "starting" ? <><Circle size={15} className="animate-pulse" /> Getting ready…</> : <><Circle size={14} fill="currentColor" /> Start recording</>}
+                <button type="button" disabled={phase === "starting" || !recorderPermission?.supported} onClick={() => void start()} className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-accent px-5 py-3.5 text-[14px] font-semibold text-white hover:brightness-110 disabled:opacity-40">
+                  {phase === "starting" ? <><Circle size={15} className="animate-pulse" /> Getting ready…</> : recorderPermission === null ? <><Circle size={15} className="animate-pulse" /> Checking screen access…</> : <><Circle size={14} fill="currentColor" /> Start recording</>}
                 </button>
-                <p className="mt-3 text-center text-[11px] text-ink-secondary">macOS will ask for screen, microphone, and action-recording access the first time.</p>
+                <p className="mt-3 text-center text-[11px] text-ink-secondary">Your desktop app will ask for screen and microphone access when needed. macOS also asks for action-recording access.</p>
               </div>
             </div>
           ) : recording ? (
@@ -431,11 +533,13 @@ export function SkillRecorderPage() {
                 <p className="mt-2 text-[14px] text-ink-secondary">Move through the task and explain the why as you go.</p>
                 <div className="mx-auto mt-6 max-w-lg rounded-2xl bg-inset p-4 text-left">
                   <div className="flex items-center justify-between text-[11px] font-medium uppercase tracking-[0.12em] text-ink-secondary">
-                    <span className="flex items-center gap-2"><Volume2 size={14} /> Live narration · AssemblyAI</span>
+                    <span className="flex items-center gap-2"><Volume2 size={14} /> {transcriptionConfigured ? "Live narration · AssemblyAI" : "Screen recording"}</span>
                     <span>{events.length} moments</span>
                   </div>
                   <p className="mt-3 min-h-12 text-[13px] leading-5 text-ink">
-                    {[transcript, partialTranscript].filter(Boolean).join(" ") || "Start speaking — your transcript will appear here."}
+                    {[transcript, partialTranscript].filter(Boolean).join(" ") || (transcriptionConfigured
+                      ? "Start speaking — your transcript will appear here."
+                      : "Screen video and visual checkpoints are being recorded locally.")}
                   </p>
                 </div>
                 <button type="button" onClick={() => void stop()} className="mx-auto mt-7 flex items-center gap-2 rounded-2xl bg-danger px-6 py-3 text-[14px] font-semibold text-white">
@@ -453,6 +557,12 @@ export function SkillRecorderPage() {
                 </div>
                 <button type="button" onClick={() => void discard()} className="flex items-center gap-2 rounded-xl px-3 py-2 text-[12px] text-ink-secondary hover:bg-raised"><Trash2 size={15} /> Discard recording</button>
               </div>
+
+              {videoDataRef.current && (
+                <div className="mt-6 overflow-hidden rounded-2xl border border-hairline bg-black">
+                  <video controls preload="metadata" src={videoDataRef.current} className="max-h-[420px] w-full" aria-label="Recorded skill demonstration" />
+                </div>
+              )}
 
               <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
                 <section className="min-w-0 space-y-3">
@@ -488,7 +598,8 @@ export function SkillRecorderPage() {
                   <textarea id="skill-description" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Use when I ask to submit a company expense…" maxLength={300} rows={4} className="mt-2 w-full resize-none rounded-xl border border-hairline bg-inset px-3 py-2.5 text-[12px] leading-5 outline-none placeholder:text-ink-secondary/60 focus:border-accent" />
                   <div className="mt-4 space-y-2 rounded-xl bg-inset p-3 text-[11px] text-ink-secondary">
                     <div className="flex items-center justify-between"><span className="flex items-center gap-2"><FileText size={13} /> Steps</span><span>{events.length}</span></div>
-                    <div className="flex items-center justify-between"><span className="flex items-center gap-2"><Mic size={13} /> Narration</span><span>{transcript ? "Included" : "Audio only"}</span></div>
+                    <div className="flex items-center justify-between"><span className="flex items-center gap-2"><MonitorUp size={13} /> Screen video</span><span>{videoDataRef.current ? "Included" : "Unavailable"}</span></div>
+                    <div className="flex items-center justify-between"><span className="flex items-center gap-2"><Mic size={13} /> Narration</span><span>{transcript ? "Transcript included" : audioDataRef.current ? "Audio only" : "None"}</span></div>
                     <div className="flex items-center justify-between"><span className="flex items-center gap-2"><ShieldCheck size={13} /> Storage</span><span>Local</span></div>
                   </div>
                   <button type="button" disabled={!name.trim() || phase === "saving"} onClick={() => void save()} className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-[13px] font-semibold text-white disabled:opacity-40">

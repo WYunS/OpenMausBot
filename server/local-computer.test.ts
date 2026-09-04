@@ -276,6 +276,29 @@ describe("local computer descriptor", () => {
     });
   });
 
+  it("discovers Electron's default Windows userData when the dev server has no OMB_USER_DATA", () => {
+    const appData = privateUserData("windows-app-data");
+    const userData = join(appData, "openmausbot");
+    mkdirSync(userData, { recursive: true });
+    writeFileSync(
+      join(userData, "cua-connection.json"),
+      JSON.stringify({
+        mode: "windows-direct",
+        mcpCommand: "C:\\cua-driver.exe",
+        mcpArgs: ["mcp", "--direct"],
+        mcpEnv: { CUA_DRIVER_RS_TELEMETRY_ENABLED: "0" },
+      }),
+    );
+
+    expect(readCuaConnection({ platform: "win32", userData: undefined, appData })).toEqual({
+      command: "C:\\cua-driver.exe",
+      args: ["mcp", "--direct"],
+      env: { CUA_DRIVER_RS_TELEMETRY_ENABLED: "0" },
+      platform: "win32",
+      scope: "local-computer",
+    });
+  });
+
   it("rejects malformed legacy argv and environment values", () => {
     const userData = privateUserData("invalid-user-data");
     writeFileSync(

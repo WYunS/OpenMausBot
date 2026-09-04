@@ -55,6 +55,13 @@ const bridge = {
     retry: () => ipcRenderer.invoke("companion-account:retry"),
     signOut: () => ipcRenderer.invoke("companion-account:sign-out"),
   },
+  /** OpenMaus owns this SSO session. Harness has a separate session and is
+   * enabled only when both authenticated corporate identities match. */
+  ruijieAccount: {
+    state: () => ipcRenderer.invoke("ruijie-account:state"),
+    signIn: () => ipcRenderer.invoke("ruijie-account:sign-in"),
+    signOut: () => ipcRenderer.invoke("ruijie-account:sign-out"),
+  },
   localControl: {
     status: () => ipcRenderer.invoke("cua:linux-status"),
     enable: () => ipcRenderer.invoke("cua:linux-enable"),
@@ -65,6 +72,11 @@ const bridge = {
   beginScreenPreviewIntent: () => ipcRenderer.sendSync("screen:preview-intent"),
   /** One frame of this computer's screen as a data: URL when supported. */
   screenFrame: () => ipcRenderer.invoke("screen:frame"),
+  /** Hide the OpenMausBot window from host-screen capture while its local
+   * viewer is open, preventing the recursive hall-of-mirrors preview. */
+  setScreenCaptureShield: (enabled) => ipcRenderer.invoke("screen:capture-shield", enabled),
+  /** Route takeover input through the background-safe Windows desktop driver. */
+  localDesktopInput: (input) => ipcRenderer.invoke("screen:desktop-input", input),
   /** Physical USB Android devices. Network ADB is deliberately excluded. */
   androidDevice: {
     status: () => ipcRenderer.invoke("android-device:status"),
@@ -132,6 +144,7 @@ const bridge = {
   /** Open a web link in the default browser. Unlike renderer window.open,
    * this remains reliable after an asynchronous API request. */
   openExternal: (url) => ipcRenderer.invoke("desktop:open-external", url),
+  minimizeApp: () => ipcRenderer.invoke("desktop:minimize"),
   /** Tell the window which skin the page wears, so the native chrome the
    * renderer cannot paint (the Windows caption-button overlay) matches. */
   applySkin: (skin) => ipcRenderer.invoke("desktop:skin", skin),

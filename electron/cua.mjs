@@ -23,7 +23,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const require = createRequire(import.meta.url);
-const { createCuaConnectionStore } = require("./cua-connection.cjs");
+const { createCuaConnectionStore, shouldInvalidateCuaConnectionOnStop } = require("./cua-connection.cjs");
 const {
   createLinuxCuaPreferenceStore,
   createLinuxCuaRuntime,
@@ -113,7 +113,10 @@ function persistAndNotify(next) {
 export function resolveDriverBinary() {
   if (process.env.CUA_DRIVER_PATH) return process.env.CUA_DRIVER_PATH;
   if (app.isPackaged) {
-    const bundled = path.join(process.resourcesPath, "cua-driver");
+    const bundled = path.join(
+      process.resourcesPath,
+      process.platform === "win32" ? "cua-driver.exe" : "cua-driver",
+    );
     if (fs.existsSync(bundled)) return bundled;
   }
   if (fs.existsSync(INSTALLED_DRIVER)) return INSTALLED_DRIVER;
@@ -221,6 +224,20 @@ export async function startCua() {
     });
   }
 
+  // Cua Driver 0.22+ ships a native Windows runtime. In development, keep the
+  // integration deliberately small and let each approved agent MCP process own
+  // its runtime directly. A packaged release should replace this with the
+  // embedded private-daemon lifecycle once the Windows binary and SDK are
+  // pinned, checksummed, staged outside ASAR, and signed with the application.
+  if (process.platform === "win32") {
+    return persistAndNotify({
+      mode: "windows-direct",
+      mcpCommand: binary,
+      mcpArgs: ["mcp", "--direct"],
+      mcpEnv: { ...CUA_ENV },
+    });
+  }
+
   const wantEmbedded =
     app.isPackaged || process.env.OPENMAUSBOT_CUA_EMBEDDED === "1";
   let nextConnection;
@@ -290,7 +307,7 @@ export async function stopCua() {
     }
     embeddedHost = null;
   }
-  if (connectionStore.get()) {
+  if (shouldInvalidateCuaConnectionOnStop(process.platform, connectionStore.get())) {
     persistAndNotify({ mode: "unavailable", reason: "desktop-host-stopped" });
   }
 }

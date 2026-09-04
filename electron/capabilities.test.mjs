@@ -41,9 +41,32 @@ describe("desktop capabilities", () => {
     });
   });
 
-  it.each(["win32", "freebsd"])("fails closed on %s", (platform) => {
+  it("enables Windows local control only with a ready direct CUA connection", () => {
+    const unavailable = desktopCapabilities({
+      platform: "win32",
+      localConnection: { mode: "unavailable" },
+    });
+    expect(unavailable.screenPreview).toEqual({ available: true, interaction: "direct" });
+    expect(unavailable.localComputer).toMatchObject({
+      available: false,
+      support: "unsupported",
+    });
+
+    const ready = desktopCapabilities({
+      platform: "win32",
+      localConnection: { mode: "windows-direct" },
+    });
+    expect(ready.localComputer).toMatchObject({
+      available: true,
+      support: "supported",
+      enabled: true,
+      status: "ready",
+    });
+  });
+
+  it("fails closed on unsupported desktop platforms", () => {
     const capabilities = desktopCapabilities({
-      platform,
+      platform: "freebsd",
       env: { DISPLAY: ":0" },
       localConnection: { mode: "embedded" },
     });

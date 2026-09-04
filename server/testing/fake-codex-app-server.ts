@@ -129,7 +129,15 @@ process.stdin.on("data", (chunk) => {
         break;
       case "thread/resume":
         if (mode === "resume") {
-          out({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: msg.params?.threadId } } });
+          out({
+            jsonrpc: "2.0",
+            id: msg.id,
+            result: {
+              thread: { id: msg.params?.threadId },
+              ...(process.env.FAKE_CODEX_RESUME_MODEL ? { model: process.env.FAKE_CODEX_RESUME_MODEL } : {}),
+              ...(process.env.FAKE_CODEX_RESUME_PROVIDER ? { modelProvider: process.env.FAKE_CODEX_RESUME_PROVIDER } : {}),
+            },
+          });
         } else {
           out({ jsonrpc: "2.0", id: msg.id, error: { code: -1, message: "no such thread" } });
         }

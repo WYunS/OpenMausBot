@@ -62,4 +62,11 @@ function createCuaConnectionStore({
   });
 }
 
-module.exports = { createCuaConnectionStore };
+function shouldInvalidateCuaConnectionOnStop(platform, connection) {
+  // Windows direct mode has no Electron-owned daemon to stop. Its descriptor
+  // is a durable recipe for launching a fresh MCP process, so an old/duplicate
+  // desktop process must not revoke it when that desktop exits.
+  return Boolean(connection) && !(platform === "win32" && connection.mode === "windows-direct");
+}
+
+module.exports = { createCuaConnectionStore, shouldInvalidateCuaConnectionOnStop };

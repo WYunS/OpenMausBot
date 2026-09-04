@@ -29,6 +29,23 @@ describe("local computer routing", () => {
     ).toBe(false);
   });
 
+  it("mounts the local computer on Windows when explicitly selected and supported by the provider", () => {
+    expect(
+      shouldMountLocalComputer({
+        requested: "local",
+        hostPlatform: "win32",
+        providerSupportsLocal: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldMountLocalComputer({
+        requested: "local",
+        hostPlatform: "win32",
+        providerSupportsLocal: false,
+      }),
+    ).toBe(false);
+  });
+
   it("preserves the established macOS Auto fallback", () => {
     expect(
       shouldMountLocalComputer({
@@ -52,7 +69,7 @@ describe("local computer routing", () => {
     expect(
       shouldMountLocalComputer({
         requested: "local",
-        hostPlatform: "win32",
+        hostPlatform: "freebsd",
         providerSupportsLocal: true,
       }),
     ).toBe(false);

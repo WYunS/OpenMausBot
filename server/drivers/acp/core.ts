@@ -457,7 +457,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           stdio: ["pipe", "pipe", "pipe"],
         });
 
-        const state = { settled: false, promptSent: false, text: "" };
+        const state = { settled: false, promptSent: false, interruptRequested: false, text: "" };
         const asks = new Map<string, (behavior: string, source?: "user" | "timeout" | "system", message?: string) => void>();
         let nextId = 1;
         let sessionId: string | null = null;
@@ -784,6 +784,10 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         });
         child.on("close", (code) => {
           if (!state.settled) {
+            if (state.interruptRequested) {
+              settle(false, "cancelled");
+              return;
+            }
             emit({
               ...base(threadId, turnId),
               type: "runtime.error",
@@ -794,10 +798,11 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         });
 
         const interrupt = () => {
+          state.interruptRequested = true;
           if (sessionId) send({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
           else stop();
           if (interruptTimer) clearTimeout(interruptTimer);
-          interruptTimer = setTimeout(() => settle(true, "cancelled"), 5_000);
+          interruptTimer = setTimeout(() => settle(false, "cancelled"), 5_000);
           interruptTimer.unref?.();
         };
         active.set(threadId, { stop, interrupt, turnId, asks });
@@ -949,7 +954,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             }
             const reason = result?.stopReason;
             if (reason === "end_turn") settle(true, null);
-            else if (reason === "cancelled") settle(true, "cancelled");
+            else if (reason === "cancelled") settle(false, "cancelled");
             else {
               const errorMessage = typeof result?.error === "string" && result.error
                 ? result.error

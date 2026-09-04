@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ProviderInstance } from "../contracts.ts";
 import { NATIVE_DIR } from "../config.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
-import { CodexDriver, codexPredatesAstra, codexUpdateCommand } from "./codex.ts";
+import { CodexDriver, codexInheritedMcpDisableArgs, codexPredatesAstra, codexUpdateCommand } from "./codex.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-codex-app-server.ts");
@@ -62,6 +62,8 @@ describe("CodexDriver turns (fake app-server)", () => {
     delete process.env.FAKE_CODEX_RETRY_SCALE;
     delete process.env.FAKE_CODEX_VERSION;
     delete process.env.FAKE_CODEX_ASTRA;
+    delete process.env.FAKE_CODEX_RESUME_MODEL;
+    delete process.env.FAKE_CODEX_RESUME_PROVIDER;
     delete process.env.OPENAI_API_KEY;
     delete process.env.BOX_TOKEN;
     delete process.env.OMB_TTS_KEY;
@@ -214,6 +216,26 @@ describe("CodexDriver turns (fake app-server)", () => {
     await recorder.until((event) => event.type === "turn.completed");
 
     expect(JSON.parse(readFileSync(dump, "utf8")).env.CODEX_HOME).toBe(codexHome);
+  });
+
+  it("disables inherited user MCP servers and connector plugins before mounting its own tools", () => {
+    const codexHome = join(scratch, "isolated-codex-home");
+    mkdirSync(codexHome, { recursive: true });
+    writeFileSync(join(codexHome, "config.toml"), `
+[plugins."google-calendar@openai-curated"]
+enabled = true
+[plugins."documents@openai-primary-runtime"]
+enabled = true
+[mcp_servers.node_repl]
+command = "missing-node-repl"
+[mcp_servers.node_repl.env]
+TOKEN = "must-not-appear-in-argv"
+`);
+
+    expect(codexInheritedMcpDisableArgs({ CODEX_HOME: codexHome })).toEqual([
+      "-c", 'plugins."google-calendar@openai-curated".enabled=false',
+      "-c", "mcp_servers.node_repl.enabled=false",
+    ]);
   });
 
   it("mounts connected apps without placing credential values in argv", async () => {
@@ -414,6 +436,29 @@ describe("CodexDriver turns (fake app-server)", () => {
     const methods = JSON.parse(readFileSync(dump, "utf8")).calls.map((c: { method: string }) => c.method);
     expect(methods).toContain("thread/resume");
     expect(methods).not.toContain("thread/start");
+  });
+
+  it("starts a new provider thread when the selected model no longer matches the resumed thread", async () => {
+    process.env.FAKE_CODEX_RESUME_MODEL = "gpt-5.6-sol";
+    process.env.FAKE_CODEX_RESUME_PROVIDER = "openai";
+    await create({ mode: "resume" });
+    const dump = join(scratch, "provider-switch.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-provider-switch",
+      text: "again",
+      model: "custom::gpt-5.6-sol",
+      resumeCursor: "official-thread",
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const calls = JSON.parse(readFileSync(dump, "utf8")).calls;
+    expect(calls.map((call: { method: string }) => call.method)).toContain("thread/resume");
+    expect(calls.find((call: { method: string }) => call.method === "thread/start")?.params).toMatchObject({
+      model: "gpt-5.6-sol",
+      modelProvider: "custom",
+    });
   });
 
   it("falls back to a fresh thread when resume fails", async () => {
@@ -648,6 +693,21 @@ describe("CodexDriver turns (fake app-server)", () => {
     const retries = recorder.events.filter((e) => e.type === "turn.retrying");
     expect(retries.map((e) => e.attempt)).toEqual([1, 2]);
   }, 20_000);
+
+  it("treats a user interrupt as a clean cancellation instead of a runtime error", async () => {
+    await create({ mode: "approval" });
+    await instance.adapter.sendTurn({ threadId: "t-user-stop", text: "keep working" });
+    await recorder.until((e) => e.type === "request.opened" && e.threadId === "t-user-stop");
+
+    await instance.adapter.interruptTurn("t-user-stop");
+
+    await expect(
+      recorder.until((e) => e.type === "turn.completed" && e.threadId === "t-user-stop"),
+    ).resolves.toMatchObject({ ok: false, stopReason: "interrupted" });
+    expect(
+      recorder.events.some((e) => e.type === "runtime.error" && e.threadId === "t-user-stop"),
+    ).toBe(false);
+  });
 
   it("interrupting one thread does not cancel another thread's retry", async () => {
     process.env.FAKE_CODEX_TRANSIENTS = "2";

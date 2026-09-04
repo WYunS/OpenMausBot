@@ -196,6 +196,7 @@ interface CodexProvider {
   name?: string;
   baseUrl?: string;
   envKey?: string;
+  requiresOpenAiAuth?: boolean;
 }
 
 interface CodexToml {
@@ -248,6 +249,7 @@ function parseCodexToml(text: string): CodexToml {
     if (key === "name") section.name = value;
     if (key === "base_url") section.baseUrl = value;
     if (key === "env_key") section.envKey = value;
+    if (key === "requires_openai_auth") section.requiresOpenAiAuth = value === "true";
   }
   return result;
 }
@@ -321,23 +323,55 @@ function idsFromModelsPayload(payload: unknown): string[] {
         ? (payload as { models: unknown[] }).models
         : [];
   return records.flatMap((record) => {
-    if (typeof record === "string") return MODEL_ID.test(record) ? [record] : [];
+    const normalize = (raw: string): string | null => {
+      const value = raw.trim();
+      if (MODEL_ID.test(value)) return value;
+      // Some OpenAI-compatible gateways append a human label to `id`
+      // (for example "gpt-5.6-luna 经济模型") while requests still use the
+      // first token. Model identifiers themselves cannot contain whitespace.
+      const slug = value.split(/\s+/, 1)[0] ?? "";
+      return MODEL_ID.test(slug) ? slug : null;
+    };
+    if (typeof record === "string") {
+      const id = normalize(record);
+      return id ? [id] : [];
+    }
     if (!record || typeof record !== "object") return [];
-    const id = (record as { id?: unknown; slug?: unknown }).id ?? (record as { slug?: unknown }).slug;
-    return typeof id === "string" && MODEL_ID.test(id) ? [id] : [];
+    const raw = (record as { id?: unknown; slug?: unknown }).id ?? (record as { slug?: unknown }).slug;
+    if (typeof raw !== "string") return [];
+    const id = normalize(raw);
+    return id ? [id] : [];
   });
+}
+
+function codexAuthToken(home: string): string | null {
+  const raw = readText(join(home, "auth.json"));
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { OPENAI_API_KEY?: unknown };
+    return typeof parsed.OPENAI_API_KEY === "string" && parsed.OPENAI_API_KEY
+      ? parsed.OPENAI_API_KEY
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 async function probeProviderModels(
   provider: CodexProvider,
   env: Record<string, string | undefined>,
   fetchImpl: typeof fetch,
+  openAiAuthToken: string | null,
 ): Promise<string[]> {
   if (!provider.baseUrl) return [];
   const url = `${provider.baseUrl.replace(/\/$/, "")}/models`;
   const headers: Record<string, string> = {};
   if (provider.envKey && env[provider.envKey]) {
     headers.Authorization = `Bearer ${env[provider.envKey]}`;
+  } else if (provider.requiresOpenAiAuth && openAiAuthToken) {
+    // This provider explicitly asks Codex to forward its own login. Reuse
+    // that same credential only for this provider's configured base URL.
+    headers.Authorization = `Bearer ${openAiAuthToken}`;
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 1000);
@@ -365,6 +399,7 @@ export async function readCodexModelCatalog(
   if (!mainText) return mergeLocalInject(official, env, fetchImpl);
 
   const main = parseCodexToml(mainText);
+  const openAiAuthToken = codexAuthToken(home);
   const known = new Map(main.providers.map((provider) => [provider.id, provider]));
   const named = collectCatalogNames(home);
   const extras: Array<{ provider: string; model: string }> = [];
@@ -400,7 +435,7 @@ export async function readCodexModelCatalog(
 
   const live = await Promise.all(
     [...known.values()].map(async (provider) => {
-      const ids = await probeProviderModels(provider, env, fetchImpl);
+      const ids = await probeProviderModels(provider, env, fetchImpl, openAiAuthToken);
       return ids.map((model) => ({ provider: provider.id, model }));
     }),
   );

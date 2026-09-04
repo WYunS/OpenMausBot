@@ -14,9 +14,17 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { MAUS_COLORS, type MausColor, type MausMotion, type MausState } from "@/lib/mascot";
-import { CursorAvatar, type CursorAvatarHandle } from "./CursorAvatar";
+import { CursorAvatar, type CursorAvatarHandle, type CursorSilhouette } from "./CursorAvatar";
 import { botAvatarProfile, type BotAvatarCrop } from "../../shared/bot-avatar";
 import { MASCOT_BODIES, botMascotBody, type MascotBodyId } from "../../shared/mascot-bodies";
+
+const BLOUB_SILHOUETTE: CursorSilhouette = {
+  name: "bloub",
+  fit: "",
+  body: '<circle cx="114.2705" cy="114.2705" r="119" fill="{{GRADIENT}}"/>',
+  clip: '<circle cx="114.2705" cy="114.2705" r="119"/>',
+  anchor: { x: 114.2705, y: 114.2705, scale: 1 },
+};
 
 export const EYE_SCALE = 1.12;
 export const MOUTH_WEIGHT = 11;
@@ -54,34 +62,18 @@ const MOTION_FACE: MotionFaces = {
 /** How long a one-shot motion holds its state before the bot's own returns. */
 const MOTION_FACE_MS = 1400;
 
-/** Channel-wise mix of a hex color toward another, t in 0..1. */
-function mix(hex: string, toward: string, t: number): string {
-  const a = Number.parseInt(hex.slice(1), 16);
-  const b = Number.parseInt(toward.slice(1), 16);
-  const channel = (shift: number) => {
-    const va = (a >> shift) & 0xff;
-    const vb = (b >> shift) & 0xff;
-    return Math.round(va + (vb - va) * t);
-  };
-  return `#${[channel(16), channel(8), channel(0)]
-    .map((part) => part.toString(16).padStart(2, "0"))
-    .join("")}`;
-}
-
-/**
- * Bot color -> the mascot's three-stop body gradient (highlight, base,
- * shadow), with the same light/dark spread as the pack's default green
- * ["#9FE6B5", "#3FAE6E", "#1C7A4C"].
- */
-const gradientFor = (color: MausColor): [string, string, string] => {
-  const fill = MAUS_COLORS[color] ?? MAUS_COLORS.green;
-  return [mix(fill, "#ffffff", 0.55), fill, mix(fill, "#000000", 0.42)];
+/** Preserve the local desktop's flat ink and each bot's saved color. */
+const gradientFor = (color: MausColor, override?: string): [string, string, string] => {
+  const fill = override ?? MAUS_COLORS[color] ?? MAUS_COLORS.green;
+  return [fill, fill, fill];
 };
 
 export type MausAvatarHandle = CursorAvatarHandle;
 
 export type MausAvatarProps = {
   color: MausColor;
+  /** Optional exact brand ink; ordinary bots continue to use their saved color. */
+  ink?: string;
   /** Named behaviour — drives the expression pool, its cadence and blinking. */
   state?: MausState;
   /** Pin one of the 25 faces and stop the state's own drift. */
@@ -115,6 +107,7 @@ export type MausAvatarProps = {
 function MausAvatarComponent(
   {
     color,
+    ink,
     state = "idle",
     expression,
     size = 44,
@@ -125,7 +118,7 @@ function MausAvatarComponent(
     gaze,
     spring,
     eyeScale,
-    showMouth,
+    showMouth: _showMouth,
     mouthStroke,
     forward = true,
     lookAround,
@@ -135,7 +128,7 @@ function MausAvatarComponent(
   }: MausAvatarProps,
   ref: React.Ref<MausAvatarHandle>,
 ) {
-  const silhouette = MASCOT_BODIES[botMascotBody(bodyId)];
+  const silhouette = bodyId && bodyId !== "cursor" ? MASCOT_BODIES[botMascotBody(bodyId)] : BLOUB_SILHOUETTE;
   const inner = useRef<CursorAvatarHandle>(null);
   useImperativeHandle(ref, () => ({
     blink: () => inner.current?.blink(),
@@ -182,14 +175,15 @@ function MausAvatarComponent(
         expression={expression}
         size={size}
         silhouette={silhouette}
-        gradient={gradientFor(color)}
+        gradient={gradientFor(color, ink)}
         title={label ?? null}
         lookAround={lookAround ?? (forward ? 0 : 1)}
         gaze={{ x: (gaze?.x ?? 0) + pointer.x, y: (gaze?.y ?? 0) + pointer.y }}
         turn={turn}
         spring={spring}
         eyeScale={eyeScale}
-        showMouth={showMouth}
+        eyeColor="#FFF9F7"
+        showMouth={false}
         mouthStroke={mouthStroke}
         paused={!animated}
       />

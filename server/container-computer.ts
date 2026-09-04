@@ -30,13 +30,14 @@ export const BASE_IMAGE_REPOSITORY = "docker.io/trycua/xfce-cua";
 // Official multi-architecture Cua XFCE 0.1.0 manifest (amd64 + arm64).
 export const BASE_IMAGE_DIGEST = "sha256:274eb636f5cf3fc58f705916ee72b7a701270b3877369d08533a385c5325be9b";
 export const BASE_IMAGE = `${BASE_IMAGE_REPOSITORY}@${BASE_IMAGE_DIGEST}`;
+export const BASE_IMAGE_MIRRORS = [`dockerproxy.net/trycua/xfce-cua@${BASE_IMAGE_DIGEST}`] as const;
 // This tag is built locally from the pinned Cua base. The explicit localhost
 // registry is required by Podman: it prepends localhost to unqualified build
 // tags, then may otherwise resolve the same name to Docker Hub when running it.
 // Image and container labels below remain the authoritative compatibility
 // check, not the mutable tag.
 export const IMAGE_REPOSITORY = "localhost/openmausbot/cua-local-vm";
-export const IMAGE_LAYER_VERSION = "4";
+export const IMAGE_LAYER_VERSION = "5";
 export const IMAGE_LAYER_LABEL = "com.openmausbot.image-layer";
 export const IMAGE = `${IMAGE_REPOSITORY}:driver-${CUA_DRIVER_VERSION}-v${IMAGE_LAYER_VERSION}`;
 export const CONTAINER = "openmausbot-computer";
@@ -115,9 +116,15 @@ const LINUX_WHEELS = {
  * OpenSSL libraries, which surfaces later as a baffling "curl: error while
  * loading shared libraries … file too short" that reads as a network fault.
  * The gate names the actual problem at the step that can act on it. */
-export function managedImageDockerfile(): string {
-  return `FROM ${BASE_IMAGE}
+export function managedImageDockerfile(baseImage = BASE_IMAGE): string {
+  return `FROM ${baseImage}
 USER root
+RUN set -eux; \\
+    apt-get update; \\
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends fontconfig fonts-noto-cjk; \\
+    rm -rf /var/lib/apt/lists/*; \\
+    fc-cache -f; \\
+    test "$(fc-list :lang=zh | wc -l)" -gt 0
 RUN set -eux; \\
     arch="$(uname -m)"; \\
     case "$arch" in \\
@@ -928,12 +935,35 @@ async function ensureVmWorkspace(platform: NodeJS.Platform, target: LocalVmTarge
   if (platform !== "win32") await chmod(target.workspaceDir, 0o700);
 }
 
-async function prepareManagedImage(runtime: Runtime, runner: CommandRunner): Promise<void> {
+/** Prefer an already-verified local copy of the pinned content. Registry
+ * mirrors often preserve the image ID while changing the repository name;
+ * requiring another Docker Hub request makes an offline rebuild fail despite
+ * having the exact immutable base locally. */
+export async function resolveManagedBaseImage(runtime: Runtime, runner: CommandRunner): Promise<string> {
+  try {
+    await runner(runtime, ["image", "inspect", BASE_IMAGE], 30_000);
+    return BASE_IMAGE;
+  } catch {
+    // A registry mirror may have stored the exact image under another name.
+  }
+  for (const mirror of BASE_IMAGE_MIRRORS) {
+    try {
+      await runner(runtime, ["image", "inspect", mirror], 30_000);
+      return mirror;
+    } catch {
+      // The digest pins identical content regardless of registry hostname.
+    }
+  }
   await runner(runtime, ["pull", BASE_IMAGE], 10 * 60_000);
+  return BASE_IMAGE;
+}
+
+async function prepareManagedImage(runtime: Runtime, runner: CommandRunner): Promise<void> {
+  const baseImage = await resolveManagedBaseImage(runtime, runner);
   const context = await mkdtemp(join(tmpdir(), "openmausbot-cua-image-"));
   try {
-    await writeFile(join(context, "Dockerfile"), managedImageDockerfile(), { mode: 0o600 });
-    await runner(runtime, ["build", "-t", IMAGE, context], 10 * 60_000);
+    await writeFile(join(context, "Dockerfile"), managedImageDockerfile(baseImage), { mode: 0o600 });
+    await runner(runtime, ["build", "-t", IMAGE, context], 20 * 60_000);
   } finally {
     await rm(context, { recursive: true, force: true });
   }

@@ -18,8 +18,10 @@ import { HermesAgentDriver } from "./acp/hermes.ts";
 import { OpenAICompatDriver } from "./openai-compat.ts";
 import { PiDriver } from "./pi.ts";
 import { MinimaxDriver } from "./minimax.ts";
+import { RuijieHarnessDriver } from "./ruijie-harness.ts";
 
 export const BUILT_IN_DRIVERS: readonly AnyProviderDriver[] = [
+  RuijieHarnessDriver,
   GrokDriver,
   GrokAgentDriver,
   GeminiAgentDriver,

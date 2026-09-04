@@ -312,15 +312,27 @@ export function validateLinuxDescriptorRuntime(
 export function readCuaConnection({
   platform = process.platform,
   userData = process.env.OMB_USER_DATA,
+  appData = process.env.APPDATA,
   home = homedir(),
   validateLinuxRuntime = validateLinuxDescriptorRuntime,
 }: {
   platform?: NodeJS.Platform;
   userData?: string;
+  appData?: string;
   home?: string;
   validateLinuxRuntime?: (file: string, raw: LinuxConnectionDescriptor) => boolean;
 } = {}): LocalComputerConnection | null {
   const candidates = userData ? [join(userData, "cua-connection.json")] : [];
+  if (!userData && platform === "win32" && appData) {
+    // The Windows development launcher runs Vite, the harness server, and
+    // Electron as separate processes. Electron knows app.getPath("userData"),
+    // while the already-running server does not receive OMB_USER_DATA. Use
+    // Electron's deterministic default under roaming AppData instead of
+    // falsely reporting that an already-ready CUA driver is unavailable.
+    for (const directory of ["openmausbot", "OpenMausBot"]) {
+      candidates.push(join(appData, directory, "cua-connection.json"));
+    }
+  }
   if (platform === "darwin") {
     // Legacy/dev fallback. Packaged Electron passes its exact userData path.
     for (const directory of ["OpenMausBot", "openmausbot", "OpenGrokBot", "opengrokbot"]) {

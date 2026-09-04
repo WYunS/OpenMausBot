@@ -8,9 +8,14 @@ vi.mock("electron", () => ({
   systemPreferences: { isTrustedAccessibilityClient: () => true },
 }));
 
-const { compileSkillMarkdown, saveSkillRecording, skillSlug } = await import("./skill-recorder.mjs");
+const { compileSkillMarkdown, recorderCaptureMode, saveSkillRecording, skillSlug } = await import("./skill-recorder.mjs");
 
 describe("skill recorder compiler", () => {
+  it("uses visual teaching on Windows without weakening the macOS event recorder", () => {
+    expect(recorderCaptureMode("win32")).toBe("visual");
+    expect(recorderCaptureMode("darwin")).toBe("native-events");
+    expect(recorderCaptureMode("linux")).toBeNull();
+  });
   it("creates a valid safe slug", () => {
     expect(skillSlug("  File an Expense / EU  ")).toBe("file-an-expense-eu");
     expect(skillSlug("💫")).toBe("recorded-workflow");
@@ -40,6 +45,29 @@ describe("skill recorder compiler", () => {
     expect(recording).not.toContain("base64");
     expect(recording).toContain('"provider": "assemblyai"');
     expect(existsSync(path.join(result.path, "references", "step-001.webp"))).toBe(true);
+  });
+
+  it("stores a reviewed screen recording beside visual checkpoints", () => {
+    const dataRoot = mkdtempSync(path.join(tmpdir(), "openmausbot-recording-"));
+    const result = saveSkillRecording({
+      name: "Teach from Windows",
+      description: "Repeat the recorded desktop workflow",
+      durationMs: 3_000,
+      video: "data:video/webm;base64,AQIDBA==",
+      events: [{
+        type: "frame",
+        atMs: 500,
+        screenshot: "data:image/webp;base64,AQIDBA==",
+      }],
+    }, { dataRoot });
+
+    const skill = readFileSync(path.join(result.path, "SKILL.md"), "utf8");
+    const recording = JSON.parse(readFileSync(path.join(result.path, "references", "recording.json"), "utf8"));
+    expect(existsSync(path.join(result.path, "references", "demonstration.webm"))).toBe(true);
+    expect(recording.video).toBe("references/demonstration.webm");
+    expect(recording.events[0].type).toBe("frame");
+    expect(skill).toContain("references/demonstration.webm");
+    expect(skill).toContain("Review the demonstrated screen state");
   });
 
   it("tells agents to adapt to current UI instead of replaying coordinates", () => {

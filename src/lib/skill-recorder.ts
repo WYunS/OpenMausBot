@@ -1,6 +1,6 @@
 export type RecordedSkillEvent = {
   id: string;
-  type: "app" | "click" | "scroll" | "shortcut" | "typing" | "clipboard" | "download";
+  type: "app" | "click" | "scroll" | "shortcut" | "typing" | "clipboard" | "download" | "frame";
   atMs: number;
   app?: string;
   windowTitle?: string;
@@ -132,6 +132,19 @@ export function appendNativeEvent(
   });
 }
 
+export function appendVisualFrame(
+  current: readonly RecordedSkillEvent[],
+  input: { atMs: number; screenshot: string },
+): AppendNativeEventResult {
+  if (!input.screenshot) return { events: [...current], addedId: null };
+  return commit([...current], {
+    id: `frame-${Math.max(0, Math.round(input.atMs))}-${++eventSequence}`,
+    type: "frame",
+    atMs: Math.max(0, Math.round(input.atMs)),
+    screenshot: input.screenshot,
+  });
+}
+
 export function eventLabel(event: RecordedSkillEvent): string {
   switch (event.type) {
     case "app": return `Opened ${event.app || "an app"}`;
@@ -141,6 +154,7 @@ export function eventLabel(event: RecordedSkillEvent): string {
     case "typing": return `Typed ${event.keyCount ?? 1} character${event.keyCount === 1 ? "" : "s"}`;
     case "clipboard": return event.op === "cut" ? "Cut" : event.op === "paste" ? "Pasted" : "Copied";
     case "download": return `Downloaded ${event.filename ?? "a file"}`;
+    case "frame": return "Captured a visual step";
   }
 }
 

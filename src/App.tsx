@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Menu } from "lucide-react";
 import { StoreProvider, useStore } from "@/state/store";
 import { Onboarding } from "@/components/Onboarding";
-import { emailGateDone, initAnalytics } from "@/lib/analytics";
+import { initAnalytics } from "@/lib/analytics";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatView } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
@@ -23,6 +23,7 @@ import { TeamMapPage } from "@/components/TeamMapPage";
 import { heldComputerControlBotIds } from "@/lib/computer-control";
 import { skillRecorderEnabled } from "@/lib/feature-flags";
 import { setLocale } from "@/lib/i18n";
+import { RuijieAccountProvider, useRuijieAccount } from "@/state/ruijie-account";
 
 function Shell() {
   const { state, dispatch } = useStore();
@@ -299,16 +300,25 @@ function Shell() {
   );
 }
 
+const accountGateDone = () => {};
+
+function AccountGate() {
+  const { state, desktopSso } = useRuijieAccount();
+  if (!desktopSso || state.status === "ready" || (state.status === "error" && state.summary)) return null;
+  return <Onboarding onDone={accountGateDone} />;
+}
+
 export default function App() {
-  const [gated, setGated] = useState(() => !emailGateDone());
   useEffect(() => {
     initAnalytics();
   }, []);
   return (
     <DesktopCapabilitiesProvider>
       <StoreProvider>
-        <Shell />
-        {gated && <Onboarding onDone={() => setGated(false)} />}
+        <RuijieAccountProvider>
+          <Shell />
+          <AccountGate />
+        </RuijieAccountProvider>
       </StoreProvider>
     </DesktopCapabilitiesProvider>
   );

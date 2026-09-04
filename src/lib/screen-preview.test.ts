@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   requestScreenPreview,
+  requestSkillRecordingScreen,
   screenPreviewFailure,
   stopScreenPreview,
 } from "./screen-preview";
@@ -18,6 +19,22 @@ function fakeStream(videoTracks = 1, totalTracks = videoTracks) {
 }
 
 describe("screen preview request", () => {
+  it("requests the screen synchronously in the original click gesture", async () => {
+    const beginIntent = vi.fn(() => true);
+    const { stream } = fakeStream();
+    const getDisplayMedia = vi.fn(async () => stream);
+
+    const requested = requestSkillRecordingScreen({
+      permission: { supported: true, captureMode: "visual" },
+      beginIntent,
+      getDisplayMedia,
+    });
+
+    expect(beginIntent).toHaveBeenCalledOnce();
+    expect(getDisplayMedia).toHaveBeenCalledOnce();
+    await expect(requested).resolves.toMatchObject({ preview: { ok: true, stream } });
+  });
+
   it("does nothing until start is called, then arms intent before requesting video-only media", async () => {
     const beginIntent = vi.fn(() => true);
     const { stream } = fakeStream();
@@ -34,7 +51,10 @@ describe("screen preview request", () => {
     expect(beginIntent.mock.invocationCallOrder[0]).toBeLessThan(
       getDisplayMedia.mock.invocationCallOrder[0],
     );
-    expect(getDisplayMedia).toHaveBeenCalledWith({ video: true, audio: false });
+    expect(getDisplayMedia).toHaveBeenCalledWith({
+      video: { cursor: "never" },
+      audio: false,
+    });
   });
 
   it("stops a stream that contains no video track", async () => {

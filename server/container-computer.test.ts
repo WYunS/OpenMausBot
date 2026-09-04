@@ -4,6 +4,7 @@ import {
   BASE_IMAGE,
   BASE_IMAGE_DIGEST,
   BASE_IMAGE_LABEL,
+  BASE_IMAGE_MIRRORS,
   CONTAINER,
   CUA_DRIVER_VERSION,
   CUA_EXECUTABLE,
@@ -26,6 +27,7 @@ import {
   containerRunArgs,
   localVmRecreatableOnDemand,
   managedImageDockerfile,
+  resolveManagedBaseImage,
   perBotLocalVmTarget,
   podmanSecurityIsHardened,
   SHARED_LOCAL_VM_TARGET,
@@ -609,6 +611,22 @@ describe("Cua integration", () => {
     expect(dockerfile).toContain(`${IMAGE_LAYER_LABEL}="${IMAGE_LAYER_VERSION}"`);
     expect(dockerfile).toContain("did not become ready within 45 seconds");
     expect(dockerfile).not.toContain("while ! DISPLAY=:1 xset q");
+  });
+
+  it("installs a Chinese-capable font and refreshes the font cache", () => {
+    const dockerfile = managedImageDockerfile();
+    expect(dockerfile).toContain("fonts-noto-cjk");
+    expect(dockerfile).toContain("fc-cache -f");
+  });
+
+  it("reuses the pinned base by content digest when Docker Hub is unreachable", async () => {
+    const fake = runner({
+      [`docker image inspect ${BASE_IMAGE}`]: new Error("registry alias is absent"),
+      [`docker image inspect ${BASE_IMAGE_MIRRORS[0]}`]: "[]",
+    });
+
+    expect(await resolveManagedBaseImage("docker", fake.run)).toBe(BASE_IMAGE_MIRRORS[0]);
+    expect(fake.calls).not.toContain(`docker pull ${BASE_IMAGE}`);
   });
 
   it("rejects a zero-byte OpenSSL base image before the wheel download needs curl", () => {

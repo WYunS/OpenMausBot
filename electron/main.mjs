@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { startCua, stopCua, registerCuaIpc, setCuaStateListener } from "./cua.mjs";
+import { resolveDriverBinary, startCua, stopCua, registerCuaIpc, setCuaStateListener } from "./cua.mjs";
 import { createAndroidDeviceController } from "./android-device.mjs";
 import { assemblyAICredential, mintAssemblyAIStreamingToken } from "./assemblyai.mjs";
 import { finishSpeech, startSpeech, stopSpeech } from "./speech.mjs";
@@ -28,7 +28,7 @@ import { migrateWorkspaceCredentials, workspaceCredentialEnv } from "./workspace
 import { activateExistingWindow } from "./single-instance.mjs";
 import { pollServerIdentity } from "./server-boot-probe.mjs";
 import { packageUrlFromCommandLine, packageUrlFromDeepLink } from "./package-link.mjs";
-import { windowChromeOptions } from "./window-chrome.mjs";
+import { desktopWindowWebPreferences, windowChromeOptions } from "./window-chrome.mjs";
 import { defaultSaveName, withSavableFile } from "./save-file.mjs";
 import { desktopViewerPermissionAllowed } from "./desktop-viewer-permissions.mjs";
 import {
@@ -54,6 +54,13 @@ import {
   readPhoneSecretIdentity,
   withPhoneSecretIdentity,
 } from "./phone-secret-identity.mjs";
+import { createRuijieSsoAccountService } from "./ruijie-sso-account.mjs";
+import {
+  RuijieAuthorizationRecovery,
+  authorizationWindowOptions,
+  authorizationWindowSize,
+  loadAuthorizationWithDirectFallback,
+} from "./ruijie-sso-window-policy.mjs";
 import { isKnownSkin } from "./skin-overlay.cjs";
 import { readSecureCredentials } from "./secure-credentials.mjs";
 import { createControlPlaneClient } from "./control-plane-client.mjs";
@@ -70,9 +77,10 @@ import { acquireDataDirLease } from "./data-dir-lease.mjs";
 const { desktopCapabilities, nativeDesktopActions } = capabilitiesModule;
 const nativeActions = nativeDesktopActions(process.platform);
 const require = createRequire(import.meta.url);
-const { createDisplayMediaGuard, invokeDisplayMediaCallback, selectCaptureSource } = require(
+const { createDisplayMediaGuard, encodeScreenThumbnail, invokeDisplayMediaCallback, selectCaptureSource } = require(
   "./screen-preview.cjs",
 );
+const { createLocalDesktopInputController } = require("./local-desktop-input.cjs");
 const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.cjs");
 const { desktopViewerUrl, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
 const { createDesktopWorkspaceManager } = require("./desktop-workspace.cjs");
@@ -94,12 +102,19 @@ const { createCuaConnectionStore: createDescriptorStore } = require("./cua-conne
 const { MIN_BOUNDS, normalizeUnreadCount, parseWindowState, resolveWindowState } = require("./window-state.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const APP_ID = app.isPackaged ? "com.openmausbot.app" : "com.openmausbot.app.localdev.source";
+// A development build runs from electron.exe, whose default Windows taskbar
+// identity/icon is the Electron atom. Give it the same identity as the
+// installed app before ready, and use the ICO that the desktop shortcut uses.
+if (process.platform === "win32") app.setAppUserModelId(APP_ID);
 // 127.0.0.1 explicitly — vite binds IPv4; a bare "localhost" here can
 // resolve to ::1 and paint a black window
 const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 const DEFAULT_COMPOSIO_BROKER_URL = "https://openmausbot-composio.milindsoni201.workers.dev";
 let SERVER_PORT = 8799;
-const APP_ICON = path.join(__dirname, "resources/app-icon.png");
+const APP_ICON = process.platform === "win32" && !app.isPackaged
+  ? path.join(__dirname, "..", "build", "icon.ico")
+  : path.join(__dirname, "resources", "app-icon.png");
 let desktopViewerWindow = null;
 let desktopViewerOwner = null;
 let desktopViewerContextId = null;
@@ -122,6 +137,18 @@ let pendingPackageInstallUrl = packageUrlFromCommandLine(process.argv);
 let mainWindow = null;
 let unreadCount = 0;
 let unreadOverlayIcon = null;
+let localDesktopInputController = null;
+let localWorkspacePresentation = false;
+
+function applyLocalWorkspacePresentation(win = mainWindow) {
+  if (process.platform !== "win32" || !win || win.isDestroyed()) return;
+  win.setContentProtection(localWorkspacePresentation);
+  // `screen-saver` maps to the durable topmost band on Windows. Reapplying it
+  // after foreground changes prevents a newly launched browser from covering
+  // the in-app desktop console.
+  win.setAlwaysOnTop(localWorkspacePresentation, localWorkspacePresentation ? "screen-saver" : "normal");
+  if (localWorkspacePresentation) win.moveTop();
+}
 
 function windowStateFile() {
   return path.join(app.getPath("userData"), "window-state.json");
@@ -517,6 +544,8 @@ installDesktopCrashListeners({
 // module — never through IPC, argv, the environment, or logs.
 let managedCompanionConnector = null;
 let companionAccountService = null;
+let ruijieSsoAccountService = null;
+let ruijieSsoWindow = null;
 let companionDesiredThisLaunch = false;
 let companionLaunchGeneration = 0;
 let advertisementTransition = Promise.resolve();
@@ -792,6 +821,102 @@ function ensureCompanionAccountService() {
     companionIsOn: () => companionDesiredThisLaunch,
   });
   return companionAccountService;
+}
+
+function openRuijieSsoWindow(authorizeUrl) {
+  if (ruijieSsoWindow && !ruijieSsoWindow.isDestroyed()) ruijieSsoWindow.destroy();
+  let resolveClosed;
+  const closed = new Promise((resolve) => { resolveClosed = resolve; });
+  const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workAreaSize;
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+  const windowOptions = parent
+    ? authorizationWindowOptions(parent, workArea)
+    : { ...authorizationWindowSize(workArea), modal: false };
+  const authWindow = new BrowserWindow({
+    title: "OpenMaus 企业账号登录",
+    ...windowOptions,
+    minWidth: Math.min(640, windowOptions.width),
+    minHeight: Math.min(520, windowOptions.height),
+    show: false,
+    closable: true,
+    resizable: true,
+    maximizable: true,
+    minimizable: true,
+    fullscreenable: false,
+    frame: true,
+    icon: APP_ICON,
+    autoHideMenuBar: true,
+    backgroundColor: "#ffffff",
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      webviewTag: false,
+      spellcheck: false,
+      // A fresh in-memory partition lets logout/relogin choose an account
+      // independently of Harness and of the user's default browser.
+      partition: `openmaus-ruijie-sso-${randomUUID()}`,
+    },
+  });
+  const authorizationRecovery = new RuijieAuthorizationRecovery(authorizeUrl);
+  ruijieSsoWindow = authWindow;
+  authWindow.center();
+  authWindow.removeMenu();
+  authWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  const recoverDroppedAuthorization = (_event, navigationUrl) => {
+    const recoveryUrl = authorizationRecovery.observe(navigationUrl);
+    if (!recoveryUrl || authWindow.isDestroyed()) return;
+    slog("OpenMaus SSO recovered the authorization target after a GPTAuth dashboard landing");
+    void authWindow.loadURL(recoveryUrl).catch((error) => {
+      slog(`OpenMaus SSO authorization recovery failed: ${error?.message ?? error}`);
+    });
+  };
+  authWindow.webContents.on("did-navigate", recoverDroppedAuthorization);
+  authWindow.webContents.on("did-navigate-in-page", recoverDroppedAuthorization);
+  const show = () => {
+    if (authWindow.isDestroyed()) return;
+    if (authWindow.isMinimized()) authWindow.restore();
+    authWindow.show();
+    authWindow.focus();
+  };
+  const showMaximized = () => {
+    if (!authWindow.isMaximized()) authWindow.maximize();
+    show();
+  };
+  app.on("activate", show);
+  authWindow.once("ready-to-show", showMaximized);
+  authWindow.once("closed", () => {
+    app.off("activate", show);
+    if (ruijieSsoWindow === authWindow) ruijieSsoWindow = null;
+    resolveClosed();
+  });
+  return loadAuthorizationWithDirectFallback({
+    loadURL: async (url) => { await authWindow.loadURL(url); },
+    useDirectProxy: async () => {
+      await authWindow.webContents.session.setProxy({ mode: "direct" });
+      await authWindow.webContents.session.closeAllConnections();
+    },
+  }, authorizeUrl).then(() => ({
+    closed,
+    close: () => {
+      if (!authWindow.isDestroyed()) authWindow.destroy();
+    },
+  })).catch((error) => {
+    if (!authWindow.isDestroyed()) authWindow.destroy();
+    throw error;
+  });
+}
+
+function ensureRuijieSsoAccountService() {
+  if (ruijieSsoAccountService) return ruijieSsoAccountService;
+  ruijieSsoAccountService = createRuijieSsoAccountService({
+    readCredentials: () => secureCredentialState?.read() ?? secureCredentials,
+    updateCredentials: updateSecureCredentialDocument,
+    openAuthorization: openRuijieSsoWindow,
+    environment: process.env,
+  });
+  return ruijieSsoAccountService;
 }
 
 // Everything the bug-report bundle needs. The config summary comes from the
@@ -1649,14 +1774,18 @@ function createWindow() {
     autoHideMenuBar: process.platform !== "darwin",
     ...windowChromeOptions(process.platform),
     webPreferences: {
-      contextIsolation: true,
-      preload: path.join(__dirname, "preload.cjs"),
+      ...desktopWindowWebPreferences(path.join(__dirname, "preload.cjs")),
       // The preload exposes the full bridge only to this origin (see preload.cjs).
       additionalArguments: [`--omb-local-origin=${rendererOrigin()}`],
     },
   });
   mainWindow = win;
   attachUpdaterWindow(win);
+  for (const eventName of ["show", "restore", "maximize", "focus", "blur"]) {
+    win.on(eventName, () => {
+      if (localWorkspacePresentation) setImmediate(() => applyLocalWorkspacePresentation(win));
+    });
+  }
   void startBrowserSurface(win);
   if (waitsForSkinSync) {
     // A broken renderer or preload must not strand the app as an invisible
@@ -1866,12 +1995,45 @@ function createWindow() {
 // Local-control screen preview — served from the main process so the Screen
 // Recording permission prompt attributes to the app, never the server
 ipcMain.handle("screen:frame", localOnly("screen:frame", async () => {
-  if (process.platform !== "darwin") return null;
+  if (process.platform !== "darwin" && process.platform !== "win32") return null;
   const sources = await desktopCapturer.getSources({
     types: ["screen"],
     thumbnailSize: { width: 1280, height: 800 },
   });
-  return sources[0]?.thumbnail.toDataURL() ?? null;
+  const source = selectCaptureSource({
+    sources,
+    host: process.platform,
+    primaryDisplayId: process.platform === "win32" ? screen.getPrimaryDisplay().id : null,
+  });
+  return source ? encodeScreenThumbnail(source.thumbnail) : null;
+}));
+
+ipcMain.handle("screen:capture-shield", localOnly("screen:capture-shield", (event, enabled) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (process.platform !== "win32" || !win || win !== mainWindow || win.isDestroyed()) return false;
+  // Windows maps this to WDA_EXCLUDEFROMCAPTURE. The user still sees the
+  // viewer, while desktopCapturer and the local agent see the desktop below
+  // it instead of an endlessly nested copy of OpenMausBot.
+  localWorkspacePresentation = enabled === true;
+  applyLocalWorkspacePresentation(win);
+  return localWorkspacePresentation;
+}));
+
+ipcMain.handle("screen:desktop-input", localOnly("screen:desktop-input", async (event, input) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (process.platform !== "win32" || !win || win !== mainWindow || win.isDestroyed()) {
+    throw new Error("Interactive local desktop viewing is available only in the Windows app");
+  }
+  if (!localDesktopInputController) {
+    const binary = resolveDriverBinary();
+    if (!binary) throw new Error("CUA Driver is unavailable");
+    localDesktopInputController = createLocalDesktopInputController({
+      binary,
+      hostPid: process.pid,
+      socketPath: `\\\\.\\pipe\\openmausbot-human-${process.pid}`,
+    });
+  }
+  return localDesktopInputController.input(input);
 }));
 
 // Onboarding permission checks. Status reads are free; the mic request
@@ -1988,6 +2150,13 @@ ipcMain.handle("desktop:open-external", async (_event, rawUrl) => {
     throw new Error("Only web links can be opened");
   }
   await shell.openExternal(url.toString());
+  return true;
+});
+
+ipcMain.handle("desktop:minimize", (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win !== mainWindow || win.isDestroyed()) return false;
+  win.minimize();
   return true;
 });
 
@@ -2127,6 +2296,9 @@ ipcMain.handle("companion-account:verify-code", localOnly("companion-account:ver
 ));
 ipcMain.handle("companion-account:retry", localOnly("companion-account:retry", () => ensureCompanionAccountService().retry()));
 ipcMain.handle("companion-account:sign-out", localOnly("companion-account:sign-out", () => ensureCompanionAccountService().signOut()));
+ipcMain.handle("ruijie-account:state", localOnly("ruijie-account:state", () => ensureRuijieSsoAccountService().state()));
+ipcMain.handle("ruijie-account:sign-in", localOnly("ruijie-account:sign-in", () => ensureRuijieSsoAccountService().signIn()));
+ipcMain.handle("ruijie-account:sign-out", localOnly("ruijie-account:sign-out", () => ensureRuijieSsoAccountService().signOut()));
 
 ipcMain.handle("environments:state", (event) => ({
   localOrigin: rendererOrigin(),
@@ -2283,7 +2455,7 @@ app.whenReady().then(async () => {
   // short-lived one-shot intent, then calls getDisplayMedia in the same click.
   // The handler binds that request to the same frame/origin, rejects audio,
   // and requires Electron's active user-gesture signal.
-  if (process.platform === "darwin" || process.platform === "linux") {
+  if (process.platform === "darwin" || process.platform === "linux" || process.platform === "win32") {
     session.defaultSession.setDisplayMediaRequestHandler(
       (request, callback) => {
         displayMediaRequestCount += 1;
@@ -2297,8 +2469,11 @@ app.whenReady().then(async () => {
           env: process.env,
           packaged: app.isPackaged,
         });
-        const captureHost =
-          process.platform === "darwin" ? "darwin" : capabilities.host.session;
+        const captureHost = process.platform === "darwin"
+          ? "darwin"
+          : process.platform === "win32"
+            ? "win32"
+            : capabilities.host.session;
         if (!capabilities.screenPreview.available) {
           respondToDisplayMediaRequest(callback, {});
           return;
@@ -2311,7 +2486,7 @@ app.whenReady().then(async () => {
               sources,
               host: captureHost,
               primaryDisplayId:
-                process.platform === "linux" && captureHost === "x11"
+                (process.platform === "linux" && captureHost === "x11") || process.platform === "win32"
                   ? screen.getPrimaryDisplay().id
                   : null,
             });
@@ -2337,7 +2512,7 @@ app.whenReady().then(async () => {
   // connection descriptor on first render. Never blocks window creation on
   // failure — computer use degrades to "unavailable", the rest still works.
   cuaReady =
-    process.platform === "darwin" || process.platform === "linux"
+    process.platform === "darwin" || process.platform === "linux" || process.platform === "win32"
       ? startCua().catch((e) => {
           console.error("[cua] start failed:", e);
           return { mode: "unavailable", reason: String(e) };
@@ -2441,6 +2616,7 @@ app.on("before-quit", (e) => {
   const ownedHelperCleanup = Promise.race([
     Promise.all([
       stopCua().catch(() => {}),
+      localDesktopInputController?.stop().catch(() => {}) ?? Promise.resolve(),
       browserHost?.stop().catch(() => {}) ?? Promise.resolve(),
       // Both listeners reachable from outside the app are owned children.
       // Shut the connector down first, then the sidecar, without changing the

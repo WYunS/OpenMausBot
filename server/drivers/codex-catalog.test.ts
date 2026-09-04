@@ -175,6 +175,43 @@ env_key = "UNSLOTH_STUDIO_AUTH_TOKEN"
     expect(catalog.options.map((option) => option.id)).not.toContain(encodeCodexSelection("omlx", "ignored"));
   });
 
+  it("uses Codex auth for requires_openai_auth providers and normalizes labelled model ids", async () => {
+    const parent = mkdtempSync(join(tmpdir(), "omb-codex-auth-catalog-"));
+    scratchDirs.push(parent);
+    const codexHome = join(parent, "codex");
+    mkdirSync(codexHome, { recursive: true });
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ OPENAI_API_KEY: "stored-codex-token" }));
+    writeFileSync(join(codexHome, "config.toml"), `
+model_provider = "custom"
+model = "gpt-5.6-sol"
+
+[model_providers.custom]
+base_url = "https://gptauth.example/v1"
+requires_openai_auth = true
+`);
+
+    const catalog = await readCodexModelCatalog(
+      { CODEX_HOME: codexHome },
+      async (url, init) => {
+        expect(String(url)).toBe("https://gptauth.example/v1/models");
+        expect((init as RequestInit).headers).toMatchObject({ Authorization: "Bearer stored-codex-token" });
+        return new Response(JSON.stringify({ data: [
+          { id: "gpt-5.5" },
+          { id: "gpt-5.6-luna 经济模型" },
+          { id: "gpt-5.6-sol 旗舰模型" },
+          { id: "gpt-5.6-terra 均衡模型" },
+        ] }), { status: 200 });
+      },
+    );
+
+    expect(catalog.options.filter((option) => option.custom).map((option) => option.id)).toEqual([
+      "custom::gpt-5.6-sol",
+      "custom::gpt-5.5",
+      "custom::gpt-5.6-luna",
+      "custom::gpt-5.6-terra",
+    ]);
+  });
+
   it("ignores invalid slugs and a default that is not in the catalog", async () => {
     const home = scratchHome({
       "config.toml": `
@@ -206,7 +243,7 @@ name = "oMLX"
     const instance = await CodexDriver.create({
       instanceId: "codex-catalog",
       displayName: "Codex",
-      environment: { HOME: home },
+      environment: { HOME: home, CODEX_HOME: join(home, ".codex") },
       enabled: true,
       config: { ...CodexDriver.defaultConfig(), cli: FAKE_CLI },
     });

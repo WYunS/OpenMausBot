@@ -40,6 +40,12 @@ export class EventBus {
   }
 
   publish(event: RuntimeEvent) {
+    // Tool-result screenshots are a live preview transport, not conversation
+    // history. Persisting base64 frames would rapidly inflate the event log.
+    if (event.type === "screen.frame") {
+      this.deliver(event);
+      return;
+    }
     const pendingWarning = this.pendingLogWarnings.get(event.threadId);
     const persistedEvents = pendingWarning ? [pendingWarning, redactSecrets(event)] : [redactSecrets(event)];
     try {

@@ -1,13 +1,13 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Check, AlertTriangle, Loader2, Mic } from "lucide-react";
 import { MausAvatar } from "./Avatar";
-import { identifyEmail, setEmailGateDone, track } from "@/lib/analytics";
+import { setEmailGateDone, track } from "@/lib/analytics";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { EngineSetup } from "./EngineSetup";
 import { ProviderMark } from "./ProviderIcons";
 import { PhoneSetupFlow } from "./PhoneSetupFlow";
 import type { InstanceInfo } from "@/state/store";
-import { brand } from "../lib/brand";
+import { useRuijieAccount } from "@/state/ruijie-account";
 
 // First-run onboarding: who you are (email), what's installed (live engine
 // checks from the harness), what the app may use (TCC), then an optional
@@ -111,27 +111,22 @@ function SetupRow(entry: EngineEntry) {
 export function Onboarding({ onDone }: { onDone: () => void }) {
   const { capabilities } = useDesktopCapabilities();
   const [step, setStep] = useState(0);
-  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [instances, setInstances] = useState<InstanceRow[] | null>(null);
   const [perms, setPerms] = useState<{ mic: string } | null>(null);
-  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
-
-  const saveProfile = () => {
-    identifyEmail(email.trim().toLowerCase());
-    // persisted server-side (~/.openmausbot/config.json) — the sidebar
-    // footer reads it back through /api/config
-    void fetch("/api/config", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ profile: { name: name.trim(), email: email.trim().toLowerCase() } }),
-    }).catch(() => {});
-    setStep(1);
-  };
-
+  const account = useRuijieAccount();
   useEffect(() => {
     track("onboarding_step", { step });
   }, [step]);
+
+  useEffect(() => {
+    if (step !== 0) return;
+    if (account.state.status !== "ready" || !account.state.summary) return;
+    setEmail(account.state.summary.account.email ?? "");
+    track("ruijie_sso_connected");
+    setEmailGateDone("submitted");
+    onDone();
+  }, [step, account.state, onDone]);
 
   useEffect(() => {
     if (step !== 1) return;
@@ -195,48 +190,22 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       >
         {step === 0 && (
           <div className="flex flex-col items-center">
-            {brand().logo ? (
-              <img src={brand().logo} alt="" width={72} height={72} className="h-[72px] w-[72px] object-contain" />
-            ) : (
-              <MausAvatar color="green" state="happy" size={72} />
-            )}
-            <h1 className="mt-4 text-[20px] font-semibold text-ink">Welcome to {brand().name}</h1>
+            <MausAvatar color="red" ink="#BF3B31" state="happy" size={72} />
+            <h1 className="mt-4 text-[20px] font-semibold text-ink">登录 OpenMausBot</h1>
             <p className="mt-1.5 text-center text-[14px] leading-relaxed text-ink-secondary">
-              Bots that do real work on their own computer. Tell us who you are
-              and we&rsquo;ll let you know when big things ship.
+              {account.state.status === "checking"
+                ? "正在检查企业账号…"
+                : account.state.status === "authorizing"
+                  ? "请在企业 SSO 窗口完成登录。"
+                  : account.state.status === "error" || account.state.status === "signed-out"
+                    ? account.state.message ?? "使用锐捷企业账号登录；Harness 将单独检查安装和账号匹配。"
+                    : "正在完成登录…"}
             </p>
-            <input
-              autoFocus
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Your name"
-              className="mt-5 w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[15px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
-            />
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && valid && saveProfile()}
-              placeholder="you@example.com"
-              className="mt-3 w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[15px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
-            />
-            <button
-              onClick={saveProfile}
-              disabled={!valid}
-              className="mt-3 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white disabled:opacity-40"
-            >
-              Continue
-            </button>
-            <button
-              onClick={() => {
-                track("email_skipped");
-                setStep(1);
-              }}
-              className="mt-3 text-[12px] text-ink-secondary hover:text-ink"
-            >
-              Maybe later
-            </button>
+            {account.state.status === "signed-out" || account.state.status === "error" ? (
+              <button onClick={() => void account.signIn()} className="mt-5 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white">
+                使用企业 SSO 登录
+              </button>
+            ) : <Loader2 size={20} className="mt-5 animate-spin text-accent" />}
           </div>
         )}
 

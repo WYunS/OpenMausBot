@@ -103,6 +103,7 @@ import {
   browserProfilePartitionTarget,
   syncCredentialEnv,
   withInstanceCli,
+  withInstanceEnabled,
   vpsSshAlias,
   DATA_DIR,
   EVENTS_DIR,
@@ -225,7 +226,7 @@ import {
 import { fetchSkillFromSource } from "./skill-fetch.ts";
 import { expandLearnTurnText, learnSource } from "./skill-learn.ts";
 import type { SkillRequestCardData } from "../shared/skill-request.ts";
-import { readCuaConnection } from "./local-computer.ts";
+import { readCuaConnection, type LocalComputerConnection } from "./local-computer.ts";
 import {
   discoverExistingPerBotLocalVms,
   localVmInventoryEntry,
@@ -297,6 +298,7 @@ import {
   phoneSecretOperationId,
   type PhoneSecretContext,
 } from "./phone-secret.ts";
+import { providerReloadRequired } from "./config-reload-policy.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const WEBHOOK_PORT = Number(process.env.OMB_WEBHOOK_PORT || PORT + 1);
@@ -814,7 +816,8 @@ function askBotAndWait(targetBotId: string, message: string, depth: number, from
   });
 }
 
-// default selection for new bots: first available instance, claude preferred
+// New bots prefer the account-matched Harness and its V4 Flash catalog entry.
+// Existing bots keep their own explicit selection.
 async function defaultSelection() {
   const described = await registry.describe();
   const available = described.filter((d) => d.snapshot.state === "available");
@@ -823,8 +826,36 @@ async function defaultSelection() {
   // spawn ENOENT — the single worst first-run experience, and the one every
   // user with no CLIs used to get. An empty selection is honest: the UI shows
   // the setup path instead of a bot that cannot answer.
-  const pick = available.find((d) => d.driverKind === "claudeAgent") ?? available[0];
-  return { instanceId: pick?.instanceId ?? "", model: pick?.models.default ?? "" };
+  // The product default is stable even while Harness is closed: the picker
+  // shows that engine disabled with its actionable reason instead of silently
+  // assigning a different provider to a newly created bot.
+  const pick = described.find((d) => d.driverKind === "ruijieHarness") ?? available[0];
+  const v4Flash = pick?.driverKind === "ruijieHarness"
+    ? pick.models.options.find((model) => model.id === "deepseek-official::deepseek-v4-flash")
+      ?? pick.models.options.find((model) => model.id.endsWith("::deepseek-v4-flash"))
+    : undefined;
+  return { instanceId: pick?.instanceId ?? "", model: v4Flash?.id ?? pick?.models.default ?? "" };
+}
+
+/** Put the Windows CUA stdio stream through our local observer. This is the
+ * only point that still has the raw screenshot bytes before Harness adapts a
+ * tool result to the selected model's modalities. */
+function observedLocalComputer(cua: LocalComputerConnection, botId: string): LocalComputerConnection {
+  if (cua.platform !== "win32") return cua;
+  const control = controlIntegration(botId);
+  return {
+    ...cua,
+    command: process.execPath,
+    args: [SPAWNED_PROXIES.localComputer],
+    env: {
+      ...cua.env,
+      ...AGENTS_NODE_FLAG,
+      OMB_CUA_COMMAND: cua.command,
+      OMB_CUA_ARGS: JSON.stringify(cua.args),
+      OMB_CONTROL_URL: control.url,
+      OMB_CONTROL_TOKEN: control.token,
+    },
+  };
 }
 
 function checkedModelSelection(
@@ -959,7 +990,7 @@ if (browserCleanupReferencesReconciled) browserCleanup.startPending();
  * paired phone has even less business holding provider session identifiers
  * than the desktop window did. Stripped here rather than at each call site
  * so a new broadcast cannot forget. */
-const wireTask = ({ resumeCursors: _resumeCursors, lastInstanceId: _lastInstanceId, ...task }: TaskRecord) => task;
+const wireTask = ({ resumeCursors: _resumeCursors, lastInstanceId: _lastInstanceId, lastModel: _lastModel, ...task }: TaskRecord) => task;
 
 const wireBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
   const { resumeCursors: _resumeCursors, tasks, ...rest } = bot;
@@ -2152,6 +2183,11 @@ async function localVmInventoryPayload() {
 
 bus.subscribe((event: RuntimeEvent) => {
   if (shouldIgnoreProviderEvent(event)) return;
+  if (event.type === "screen.frame") {
+    const frameBot = store.botByThread(event.threadId);
+    if (frameBot) broadcast({ kind: "screen", botId: frameBot.id, png: event.png, mime: event.mime });
+    return;
+  }
   const localVmTarget = localVmThreadTargets.get(event.threadId);
   if (localVmTarget) {
     localVmLeaseFor(localVmTarget).touch(event.threadId);
@@ -3335,7 +3371,14 @@ async function startTurn(
   const fresh =
     !rewound &&
     !externalContextMarker &&
-    engineIsFresh({ instanceId, lastInstanceId: task.lastInstanceId, resumeCursors: task.resumeCursors, transcript });
+    engineIsFresh({
+      instanceId,
+      lastInstanceId: task.lastInstanceId,
+      model,
+      lastModel: task.lastModel,
+      resumeCursors: task.resumeCursors,
+      transcript,
+    });
   const skillAuthoring =
     skillRecorderEnabled(cfg) &&
     commsDepth < MAX_COMMS_DEPTH &&
@@ -3504,7 +3547,7 @@ async function startTurn(
         }
         const cua = readCuaConnection();
         if (!cua) throw new Error("CUA Driver is not ready for this computer — check permissions and restart OpenMausBot");
-        integrations.localComputer = cua;
+        integrations.localComputer = observedLocalComputer(cua, bot.id);
         computerKind = "local";
       }
 
@@ -3609,7 +3652,7 @@ async function startTurn(
       ) {
         const cua = readCuaConnection();
         if (cua) {
-          integrations.localComputer = cua;
+          integrations.localComputer = observedLocalComputer(cua, bot.id);
           computerKind = "local";
         }
       }
@@ -3739,7 +3782,7 @@ async function startTurn(
             : computerKind === "vps"
               ? " You have your own self-hosted remote Linux computer through the official Cua tools. Its filesystem is disposable: everything on it is wiped whenever its container is recreated, so keep long-lived work somewhere durable — push it to a remote, or hand the results back in chat — instead of leaving it only on that computer. Inspect the desktop state before acting, prefer accessibility targets over raw coordinates, and act carefully."
               : computerKind === "local"
-              ? " You can act on the user's computer through the computer tools — take a screenshot or read the desktop state first, prefer accessibility actions over raw coordinates, and act carefully."
+              ? " You can act on the user's computer through the computer tools — take a screenshot or read the desktop state first, prefer accessibility actions over raw coordinates, and act carefully. Keep applications in the background so the user can watch inside OpenMausBot; bring_to_front is intentionally unavailable and input must use background delivery. For a web search, do not focus the address bar and type: build the URL-encoded search URL and call launch_app once with urls, then inspect the target window. Fresh get_window_state screenshots and automatic post-action observations are shown in the app."
               : "") +
           (computerKind
             ? " At a sign-in, password, MFA, CAPTCHA, or other protected-input step, stop and ask the user to complete it on the visible computer. Never type their password or ask them to paste a password or one-time code into chat."
@@ -3784,7 +3827,7 @@ async function startTurn(
       // If a newer delegated result landed during setup, its unique marker
       // differs and must survive so the next turn also receives that update.
       if (!isExternalContextMarker(task.lastInstanceId) || task.lastInstanceId === externalContextMarker) {
-        store.markTaskDispatched(bot.id, threadId, instanceId);
+        store.markTaskDispatched(bot.id, threadId, instanceId, model);
       }
       // a turn can settle before dispatch returns, and a poller started
       // after its own turn.completed would never be torn down — it would
@@ -7376,7 +7419,16 @@ const server = createServer(async (req, res) => {
           return json(res, 200, { held: snapshot.held, helpOpen: snapshot.helpReason !== null });
         }
         if (method === "POST") {
-          const body = await readBody(req);
+          const body = await readBody(req, 12_000_000);
+          if (body.action === "frame") {
+            const png = typeof body.png === "string" ? body.png : "";
+            const mime = body.mime;
+            if (!png || !["image/png", "image/jpeg", "image/webp"].includes(mime)) {
+              return json(res, 400, { error: "invalid screen frame" });
+            }
+            broadcast({ kind: "screen", botId, png, mime });
+            return json(res, 200, { accepted: true });
+          }
           const { snapshot, requestId } = computerControl.requestHelpLease(botId, body.reason);
           // worth a buzz: the bot is blocked on the person's hands, which
           // is exactly the "blocked on you" rule notify.ts encodes.
@@ -10282,6 +10334,17 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { decisions: readDecisions(DATA_DIR, parsedLimit ?? 200) });
     }
 
+    // ── enterprise SSO gate ──
+    // Keep first paint independent from every optional CLI probe. The normal
+    // fleet endpoint can take seconds while unavailable engines time out;
+    // login needs only the already-running local Harness.
+    if (method === "GET" && path === "/api/ruijie-sso") {
+      const instance = registry.get("ruijieHarness");
+      if (!instance) return json(res, 503, { error: "锐捷 Harness 适配器未启用" });
+      const snapshot = await instance.snapshot();
+      return json(res, snapshot.state === "available" && snapshot.sso ? 200 : 503, { snapshot });
+    }
+
     // ── provider instances (model picker) ──
     if (method === "GET" && path === "/api/instances") {
       // Rescan PATH first: this endpoint is how the app answers "what can I
@@ -10408,8 +10471,8 @@ const server = createServer(async (req, res) => {
     }
 
     // ── per-instance CLI path override (custom builds / versioned bins) ──
-    // PATCH /api/instances/:id {cli: "/path/to/cli" | ""} — "" reverts to the
-    // driver default. Kills in-flight turns like any provider reload.
+    // PATCH /api/instances/:id accepts a CLI override and/or the user-facing
+    // enabled switch. Both reload providers, so turns are interrupted once.
     const instancePatch = /^\/api\/instances\/([\w.-]+)$/.exec(path);
     if (method === "PATCH" && instancePatch) {
       // same non-simple-request gate as the local-VM lifecycle routes
@@ -10417,12 +10480,17 @@ const server = createServer(async (req, res) => {
         return json(res, 415, { error: "content-type must be application/json" });
       }
       const body = await readBody(req);
-      if (typeof body?.cli !== "string") return json(res, 400, { error: "cli must be a string" });
-      if (/[\n\r]/.test(body.cli)) return json(res, 400, { error: "cli must not contain newlines" });
+      const hasCli = typeof body?.cli === "string";
+      const hasEnabled = typeof body?.enabled === "boolean";
+      if (!hasCli && !hasEnabled) return json(res, 400, { error: "cli or enabled is required" });
+      if (hasCli && /[\n\r]/.test(body.cli)) return json(res, 400, { error: "cli must not contain newlines" });
       if (providerConfigBusy) return json(res, 409, { error: "provider settings are already being updated" });
       providerConfigBusy = true;
       try {
-        const result = withInstanceCli(cfg, instancePatch[1], body.cli);
+        let result = hasCli
+          ? withInstanceCli(cfg, instancePatch[1], body.cli)
+          : { ok: true as const, config: cfg };
+        if (result.ok && hasEnabled) result = withInstanceEnabled(result.config, instancePatch[1], body.enabled);
         if (!result.ok) return json(res, 404, { error: `unknown instance "${instancePatch[1]}"` });
         // persist the whole instances map this rebuild produced — a fresh
         // saveConfig({instances}) merge would re-derive defaults identically,
@@ -10864,21 +10932,10 @@ const server = createServer(async (req, res) => {
           browserReferenceCleanupError = error;
         }
       }
-      // Provider keys change the fleet. Profile, language, voice, VPS, and
-      // room timeout changes do not rebuild it: no driver reads them, and they
-      // should not interrupt in-flight turns.
-      const reloadKeys = Object.keys(patch).filter(
-        (key) =>
-          key !== "profile" &&
-          key !== "language" &&
-          key !== "tts" &&
-          key !== "imageGen" &&
-          key !== "vps" &&
-          key !== "rooms" &&
-          key !== "localVm" &&
-          key !== "features" &&
-          key !== "browserProfiles",
-      );
+      // Harness captures profile.email as expectedAccountEmail when its live
+      // instance is created. Rebuild after login/logout so Retry cannot keep
+      // using the stale pre-login identity.
+      const shouldReloadProviders = providerReloadRequired(patch);
       // The cleanup marker becomes committed only after both pieces of durable
       // application state agree. Commit/ACK failures are deferred until every
       // mandatory consequence of the config write has run: no journal I/O
@@ -10897,7 +10954,7 @@ const server = createServer(async (req, res) => {
               mandatoryError = error;
             }
           }
-          if (reloadKeys.length > 0) {
+          if (shouldReloadProviders) {
             try {
               await reloadProviders();
             } catch (error) {

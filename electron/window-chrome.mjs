@@ -10,3 +10,13 @@ export function windowChromeOptions(platform) {
   }
   return {};
 }
+
+export function desktopWindowWebPreferences(preload) {
+  return {
+    contextIsolation: true,
+    // Human takeover foregrounds the controlled window. Keep the capture
+    // renderer painting while OpenMausBot remains visible above that window.
+    backgroundThrottling: false,
+    preload,
+  };
+}

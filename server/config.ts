@@ -678,6 +678,29 @@ export function withInstanceCli(
   return { ok: true, config: next };
 }
 
+/** Persist the settings-page engine switch without removing its adapter or
+ * CLI configuration. Reloading providers applies the switch immediately. */
+export function withInstanceEnabled(
+  cfg: AppConfig,
+  instanceId: string,
+  enabled: boolean,
+): InstanceCliUpdate {
+  const next: AppConfig = structuredClone(cfg);
+  const map = instanceConfigs(next);
+  if (!Object.hasOwn(map, instanceId)) return { ok: false, config: cfg };
+  map[instanceId].enabled = enabled;
+  for (const entry of Object.values(map)) {
+    if (!entry.environment) continue;
+    const injected = injectedEnvironment(next, entry.driver);
+    for (const [key, value] of Object.entries(entry.environment)) {
+      if (injected.get(key) === value) delete entry.environment[key];
+    }
+    if (!Object.keys(entry.environment).length) delete entry.environment;
+  }
+  next.instances = map;
+  return { ok: true, config: next };
+}
+
 interface InstanceCliUpdate {
   ok: boolean;
   config: AppConfig;
@@ -723,6 +746,7 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   // The driver stays registered for enterprise licences, which keep Gemini
   // CLI — `{"instances": {"gemini": {"driver": "geminiAgent"}}}` restores it.
   const DEFAULT_FLEET: InstanceConfigMap = {
+    ruijieHarness: { driver: "ruijieHarness", displayName: "锐捷 Harness" },
     grok: { driver: "grokAgent" },
     kimi: { driver: "kimiAgent" },
     droid: { driver: "droidAgent" },
@@ -737,6 +761,8 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     hermes: { driver: "hermesAgent" },
     pi: { driver: "piAgent" },
   };
+  const DEFAULT_ENABLED_INSTANCE_IDS = new Set(["ruijieHarness", "codex"]);
+  const PRODUCT_FLEET_INSTANCE_IDS = new Set(Object.keys(DEFAULT_FLEET));
   const CUSTOM_ONLY = {
     qwen: { driver: "qwenAgent" },
     hermes: { driver: "hermesAgent" },
@@ -746,6 +772,7 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   // never see. Custom-only engines stay in CUSTOM_ONLY so a one-off test map
   // is not expanded, matching the claude/grok/codex product-fleet probe.
   const PRODUCT_FLEET_ADDITIONS = {
+    ruijieHarness: { driver: "ruijieHarness", displayName: "锐捷 Harness" },
     cursor: { driver: "cursorAgent" },
     openaiCompat: { driver: "openai-compat" },
     ...CUSTOM_ONLY,
@@ -768,6 +795,9 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     // would turn the first workspace URL into a stale per-instance override.
     const entry = { ...sourceEntry };
     map[id] = entry;
+    if (entry.enabled === undefined && PRODUCT_FLEET_INSTANCE_IDS.has(id)) {
+      entry.enabled = DEFAULT_ENABLED_INSTANCE_IDS.has(id);
+    }
     const environment = { ...entry.environment };
     for (const [key, value] of injectedEnvironment(cfg, entry.driver)) environment[key] = value;
     entry.environment = environment;
@@ -791,6 +821,17 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
         }
         entry.config = merged;
       }
+    }
+    if (entry.driver === "ruijieHarness") {
+      const raw = entry.config;
+      const current =
+        typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+      entry.config = {
+        ...current,
+        // Non-secret identity only. The Harness adapter refuses use unless
+        // its own SSO session reports this exact corporate account.
+        expectedAccountEmail: cfg.profile?.email?.trim().toLowerCase() || "",
+      };
     }
   }
   return map;

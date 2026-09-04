@@ -55,7 +55,7 @@ function createDisplayMediaGuard({ now = Date.now, ttlMs = 5_000 } = {}) {
 function selectCaptureSource({ sources, host, primaryDisplayId }) {
   if (!Array.isArray(sources) || sources.length === 0) return null;
   if (host === "wayland") return sources.length === 1 ? sources[0] : null;
-  if (host === "x11") {
+  if (host === "x11" || host === "win32") {
     const exact = sources.find(
       (source) =>
         source.display_id !== undefined &&
@@ -68,6 +68,14 @@ function selectCaptureSource({ sources, host, primaryDisplayId }) {
   }
   if (host === "darwin") return sources[0];
   return null;
+}
+
+function encodeScreenThumbnail(thumbnail, quality = 78) {
+  const jpeg = thumbnail?.toJPEG?.(quality);
+  if (Buffer.isBuffer(jpeg) && jpeg.length > 0) {
+    return `data:image/jpeg;base64,${jpeg.toString("base64")}`;
+  }
+  return thumbnail?.toDataURL?.() ?? null;
 }
 
 // Electron may throw synchronously from the display-media callback when an
@@ -87,6 +95,7 @@ function invokeDisplayMediaCallback(callback, response) {
 
 module.exports = {
   createDisplayMediaGuard,
+  encodeScreenThumbnail,
   frameKey,
   invokeDisplayMediaCallback,
   originOf,

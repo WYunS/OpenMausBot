@@ -124,6 +124,7 @@ export type RuntimeEvent = RuntimeEventBase &
      * multi-megabyte base64 result belongs in one durable message URL, not
      * duplicated through every connected window. */
     | { type: "item.completed"; itemType: "assistant_image"; data: string; alt?: string }
+    | { type: "screen.frame"; png: string; mime: "image/png" | "image/jpeg" | "image/webp" }
     | { type: "content.delta"; streamKind: "assistant_text" | "reasoning_text"; delta: string }
     | {
         type: "request.opened";
@@ -310,6 +311,20 @@ export interface ProviderSnapshot {
     title: string;
     message: string;
     command: string;
+  };
+  /** Non-secret identity and wallet projection from an enterprise SSO host.
+   * Tokens stay in that host; the app receives only what it may display. */
+  sso?: {
+    authentication: "sso";
+    account: { id: string; name?: string; email?: string };
+    billing: {
+      currency: "CNY";
+      total: number;
+      used: number;
+      remaining: number;
+      usedPercent: number;
+    };
+    fetchedAt: string;
   };
   /** How this instance is paid for, when the driver can tell: a reported
    * cost on a subscription is notional and the UI labels it as such. */
