@@ -45,6 +45,23 @@ if (values["check-only"]) {
 }
 assert.equal(target, `${process.platform}-${process.arch}`, "A live smoke test must run on the target architecture; use --check-only for a structural cross-target check");
 assert(process.platform !== "linux" || process.getuid?.() !== 0, "Run this sandboxed browser test as an unprivileged user, never root");
+if (process.platform === "linux") {
+  // agent-browser v0.36.0 chrome.rs:1512 automatically adds --no-sandbox for
+  // root, CI, or container markers. We strip CI below; reject containers too
+  // so a passing test actually exercises the Ubuntu browser sandbox.
+  for (const marker of ["/.dockerenv", "/run/.containerenv"]) {
+    const present = await stat(marker).then(() => true, (error) => {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    });
+    assert(!present, `Sandbox verification requires an unprivileged, non-container Linux host; ${marker} makes upstream agent-browser disable Chromium's sandbox`);
+  }
+  const cgroup = await readFile("/proc/1/cgroup", "utf8").catch((error) => {
+    if (error.code === "ENOENT") return "";
+    throw error;
+  });
+  assert(!/docker|kubepods|lxc/.test(cgroup), "Sandbox verification requires a non-container Linux host; upstream agent-browser disables Chromium's sandbox for this cgroup");
+}
 
 const fixture = await mkdtemp(join(tmpdir(), "omb-browser-smoke-"));
 const fixtureHome = join(fixture, "home");
