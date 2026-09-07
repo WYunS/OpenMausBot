@@ -152,18 +152,30 @@ app.whenReady().then(async () => {
   assert.equal(capability.status, 201);
   const peerRequest = api("/api/internal/ask-bot", "POST", { toBotId: peerTarget.id, message: "Peer-initiated permission fixture" }, { authorization: `Bearer ${capability.body.token}` });
   void peerRequest.catch(() => {});
-  const peerCard = await until(async () => pendingCard((await api("/api/bots")).body.bots.find((bot) => bot.id === peerTarget.id)));
-  assert.equal(peerCard.held, "The provider requires your approval for this action.");
-  const peerCalls = JSON.parse(readFileSync(`${agyDump}.config.json`, "utf8"));
-  assert.equal(peerCalls.find((call) => call.params.configId === "mode")?.params.value, "default");
-  assert.equal((await api(`/api/bots/${peerTarget.id}/respond`, "POST", { requestId: peerCard.requestId, behavior: "allow" })).status, 200);
-  assert.equal((await peerRequest).status, 200);
   const peerDecisions = await until(async () => {
     const rows = (await api("/api/decisions")).body.decisions.filter((row) => row.botId === peerTarget.id);
-    return rows.some((row) => row.source === "native-approval" && row.decision === "card-shown") && rows;
+    return rows.some((row) => row.source === "full-access") && rows;
   });
-  assert.ok(!peerDecisions.some((row) => row.source === "full-access"));
-  console.log(JSON.stringify({ provider: "antigravity", mode: "full", peerInitiated: true, native: "default", nativeApprovalShown: true, humanApproved: true }));
+  assert.equal((await peerRequest).status, 200);
+  const completedPeer = (await api("/api/bots")).body.bots.find((bot) => bot.id === peerTarget.id);
+  assert.ok(!pendingCard(completedPeer));
+  assert.ok(!peerDecisions.some((row) => row.decision === "card-shown"));
+  const peerCalls = JSON.parse(readFileSync(`${agyDump}.config.json`, "utf8"));
+  assert.equal(peerCalls.find((call) => call.params.configId === "mode")?.params.value, "yolo");
+  console.log(JSON.stringify({ provider: "antigravity", mode: "full", peerInitiated: true, native: "yolo", autoApproved: true, humanApproved: false }));
+
+  // Revoking the receiving bot's grant must restore prompts on the resumed
+  // delegated session, even when the sender itself has Full access.
+  await coordinator.request(child, id, "full");
+  await coordinator.request(child, peerTarget.id, "ask");
+  const askPeerRequest = api("/api/internal/ask-bot", "POST", { toBotId: peerTarget.id, message: "Ask target must not inherit sender Full" }, { authorization: `Bearer ${capability.body.token}` });
+  void askPeerRequest.catch(() => {});
+  const peerCard = await until(async () => pendingCard((await api("/api/bots")).body.bots.find((bot) => bot.id === peerTarget.id)));
+  const askPeerCalls = JSON.parse(readFileSync(`${agyDump}.config.json`, "utf8"));
+  assert.equal(askPeerCalls.find((call) => call.params.configId === "mode")?.params.value, "default");
+  assert.equal((await api(`/api/bots/${peerTarget.id}/respond`, "POST", { requestId: peerCard.requestId, behavior: "allow" })).status, 200);
+  assert.equal((await askPeerRequest).status, 200);
+  console.log(JSON.stringify({ provider: "antigravity", mode: "ask", senderMode: "full", peerInitiated: true, native: "default", humanApproved: true }));
   console.log("Approval smoke passed; HTTP elevation rejected, private grant and resumed mode transitions verified.");
 }).catch((error) => {
   console.error(error);
