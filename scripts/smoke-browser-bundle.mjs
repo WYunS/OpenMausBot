@@ -92,6 +92,8 @@ const clients = [];
 let server;
 let report;
 let failure;
+let fixtureRequests = 0;
+let phase = "runtime discovery";
 
 function child(command, args, childEnv) {
   const proc = spawn(command, args, { cwd: fixture, env: childEnv, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
@@ -140,19 +142,57 @@ function mcp(integration) {
   });
   const request = (method, params = {}, timeout = 45_000) => new Promise((resolveRequest, reject) => {
     const id = ++sequence;
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`${method} timed out: ${errors}`)); }, timeout);
+    const label = method === "tools/call" ? params.name : method;
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error(`${label} timed out after ${timeout}ms (session ${integration.env.AGENT_BROWSER_SESSION}; fixture HTTP requests ${fixtureRequests}): ${errors}`));
+    }, timeout);
     pending.set(id, { resolve: resolveRequest, reject, timer });
     proc.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
   });
   return { proc, integration, request,
     async tool(name, args = {}) {
+      const started = Date.now();
+      phase = `${name} (${integration.env.AGENT_BROWSER_SESSION})`;
+      console.error(`[browser-smoke] ${phase} started`);
       const result = await request("tools/call", { name, arguments: { ...args, timeoutMs: 30_000 } });
       const response = result?.structuredContent?.response;
       assert(!result?.isError && response?.success === true,
         `${name} failed: ${JSON.stringify(result).slice(0, 8_000)}`);
+      console.error(`[browser-smoke] ${phase} passed in ${Date.now() - started}ms`);
       return { data: response.data, content: result.content };
     },
   };
+}
+
+async function failureDiagnostics() {
+  console.error(`[browser-smoke] failure during ${phase}; owned fixture received ${fixtureRequests} HTTP requests`);
+  for (const { integration, proc } of clients) {
+    const session = integration.env.AGENT_BROWSER_SESSION;
+    const sidecars = {};
+    // Only fixed metadata names in our own temporary socket directory. Never
+    // dump daemon config, encryption keys, browser profiles, or parent env.
+    for (const extension of ["pid", "port", "version", "engine"]) {
+      sidecars[extension] = await readFile(join(env.AGENT_BROWSER_SOCKET_DIR, `${session}.${extension}`), "utf8")
+        .then((value) => value.trim().slice(0, 128), (error) => error.code === "ENOENT" ? null : error.code);
+    }
+    let daemonAlive = false;
+    if (/^[1-9][0-9]*$/.test(sidecars.pid ?? "")) {
+      try { process.kill(Number(sidecars.pid), 0); daemonAlive = true; } catch { /* owned daemon already exited */ }
+    }
+    console.error(`[browser-smoke] ${JSON.stringify({ session, mcpPid: proc.pid, mcpExited: proc.exitCode ?? proc.signalCode, daemonAlive, sidecars })}`);
+    if (!daemonAlive) continue;
+    try {
+      // Failure evidence, not a fallback or prewarm: the MCP test still fails.
+      // Upstream Windows issue #1308/#1407 can leave MCP waiting on inherited
+      // pipe handles after navigation actually succeeded. A read-only command
+      // to the exact existing fixture session distinguishes those two cases.
+      const response = JSON.parse(await run(integration.command, ["--json", "--no-webmcp", "get", "url"], { ...env, ...integration.env }, 8_000));
+      console.error(`[browser-smoke] existing-session URL diagnostic ${JSON.stringify({ session, success: response.success, url: response.data?.url, error: response.error }).slice(0, 2_000)}`);
+    } catch (error) {
+      console.error(`[browser-smoke] existing-session URL diagnostic failed: ${error.message.slice(0, 2_000)}`);
+    }
+  }
 }
 
 function pngInfo(buffer) {
@@ -191,6 +231,7 @@ try {
 
   const title = `OpenMausBot bundled browser ${randomBytes(6).toString("hex")}`;
   server = createServer((_request, response) => {
+    fixtureRequests += 1;
     response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
     response.end(`<!doctype html><html><head><title>${title}</title></head><body>
       <h1>${title}</h1><label for="message">Test message</label><input id="message">
@@ -232,7 +273,12 @@ try {
   const screenshotInfo = pngInfo(await readFile(screenshotPath));
   assert.deepEqual(pngInfo(Buffer.from(image.data, "base64")), screenshotInfo, "MCP image differs from screenshot file");
   report = { ok: true, target, engineVersion, chromeVersion, checks: ["fresh-home auto-discovery", "real MCP navigation", "title", "input and click", "PNG screenshot", "two-bot cookie and localStorage isolation"], screenshot: screenshotInfo };
-} catch (error) { failure = error; }
+} catch (error) {
+  failure = error;
+  try { await failureDiagnostics(); } catch (diagnosticError) {
+    console.error(`[browser-smoke] failure diagnostics could not complete: ${diagnosticError.message}`);
+  }
+}
 finally {
   const cleanupErrors = [];
   for (const client of clients) {
