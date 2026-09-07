@@ -180,6 +180,38 @@ describe.skipIf(process.platform !== "linux")("Linux DEB upgrade hook", () => {
     expect(runHook(appRoot).status).toBe(0);
   });
 
+  it("reads numeric procfs sysctls without byte-at-a-time shell reads", () => {
+    const { appRoot, systemRoot } = fixture();
+    // A harmless read-only stand-in with the same numeric procfs handler.
+    // Unlike an ordinary fixture file, procfs ends a subsequent read at EOF;
+    // dash's read builtin therefore exits 1 before seeing the newline.
+    const procSysctl = "/proc/sys/kernel/core_uses_pid";
+    expect(fs.readFileSync(procSysctl, "utf8").trim()).toMatch(/^[01]$/);
+    const restriction = path.join(systemRoot, "apparmor_restrict_unprivileged_userns");
+    fs.unlinkSync(restriction);
+    fs.symlinkSync(procSysctl, restriction);
+    const result = runHook(appRoot);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("profile operation: -r");
+  });
+
+  it.each(["0", "1"])("reads an unterminated restriction value %s", (value) => {
+    const { appRoot, systemRoot } = fixture();
+    fs.writeFileSync(path.join(systemRoot, "apparmor_restrict_unprivileged_userns"), value);
+    const result = runHook(appRoot);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("profile operation: -r");
+  });
+
+  it.each(["", "2\n", "0 1\n", "disabled\n"])("fails closed for an invalid restriction value %j", (value) => {
+    const { appRoot, systemRoot } = fixture();
+    fs.writeFileSync(path.join(systemRoot, "apparmor_restrict_unprivileged_userns"), value);
+    const result = runHook(appRoot);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("restriction is invalid");
+    expect(result.stdout).not.toContain("profile operation");
+  });
+
   it("stages but does not load policy when AppArmor is disabled on an unrestricted host", () => {
     const { appRoot, systemRoot, apparmorStatus, apparmorDir } = fixture();
     fs.writeFileSync(apparmorStatus, "#!/bin/sh\nexit 1\n");

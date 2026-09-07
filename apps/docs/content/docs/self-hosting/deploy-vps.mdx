@@ -287,7 +287,8 @@ credentials, and paired sessions). Run it from the service account's shell:
 
 ```sh
 umask 077
-tar czf openmausbot-data.tgz -C "$HOME" .openmausbot
+backup_dir=$(mktemp -d "$PWD/openmausbot-backup.XXXXXX")
+tar czf "$backup_dir/openmausbot-data.tgz" -C "$HOME" .openmausbot
 ```
 
 A full backup also needs your engine credential/configuration paths, such as
@@ -302,10 +303,13 @@ volume name, so use your actual volume name if you changed the Compose project:
 
 ```sh
 docker compose stop omb
-docker run --rm -v deploy_data:/data -v "$PWD":/b alpine sh -c 'umask 077; tar czf /b/openmausbot-data.tgz -C /data .'
+backup_dir=$(mktemp -d "$PWD/openmausbot-backup.XXXXXX")
+docker run --rm -v deploy_data:/data:ro -v "$backup_dir":/b alpine sh -c 'umask 077; tar czf /b/openmausbot-data.tgz -C /data .'
 ```
 
-Keep backups privately on another machine. Restore with the server stopped,
+Each command creates a fresh private folder in the current directory, so it
+cannot overwrite an older archive with more permissive access. Keep the
+archive inside that folder privately on another machine. Restore with the server stopped,
 using the same paths and original ownership. After backup or restore, start the
 service with `sudo systemctl start openmausbot`, or `docker compose start omb`.
 

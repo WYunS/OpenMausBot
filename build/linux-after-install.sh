@@ -114,7 +114,22 @@ install_browser_apparmor_profile() {
   if [ "$TEST_MODE" -eq 0 ]; then chown root:root -- "$profile"; fi
   chmod 0644 -- "$profile"
   restricted=0
-  if [ -f "$USERNS_RESTRICTION" ]; then read -r restricted < "$USERNS_RESTRICTION"; fi
+  if [ -f "$USERNS_RESTRICTION" ]; then
+    # dash's read builtin reads one byte at a time. Numeric procfs sysctls
+    # return EOF on the next read, before the newline, so set -e aborts the
+    # install even after reading a valid digit. Read the value in one buffer.
+    if ! restricted=$(cat -- "$USERNS_RESTRICTION"); then
+      echo "OpenMausBot could not read the browser user-namespace restriction." >&2
+      exit 1
+    fi
+    case "$restricted" in
+      0|1) ;;
+      *)
+        echo "OpenMausBot browser user-namespace restriction is invalid; refusing unsafe sandbox setup." >&2
+        exit 1
+        ;;
+    esac
+  fi
 
   if [ ! -d "$APPARMOR_DIR" ] || [ ! -x "$APPARMOR_PARSER" ]; then
     if [ "$restricted" = 1 ]; then

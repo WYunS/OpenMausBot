@@ -31,7 +31,7 @@ describe("finding the browser engine", () => {
     const [platform, arch] = target.split("-");
     const env = { OMB_RESOURCES_PATH: join(tmpdir(), "OMB resources"), PATH: "" };
     const bundle = browserBundlePaths(join(env.OMB_RESOURCES_PATH, "browser-engine"), target);
-    const files = new Set([bundle.directory, bundle.engine, bundle.chrome, bundle.manifest]);
+    const files = new Set([bundle.directory, bundle.engine, bundle.chrome, bundle.manifest, bundle.licenses]);
     const options = { env, platform: platform as NodeJS.Platform, arch, exists: (p: string) => files.has(p) };
     expect(resolveAgentBrowserBinary(options)).toBe(bundle.engine);
     expect(browserEngineStatus(options)).toMatchObject({ kind: "ready", binaryPath: bundle.engine });
@@ -39,6 +39,9 @@ describe("finding the browser engine", () => {
     expect(resolveAgentBrowserBinary(options)).toBeNull();
     expect(browserEngineStatus(options)).toMatchObject({ kind: "unavailable", installable: false, reason: expect.stringContaining("Reinstall") });
     files.add(bundle.chrome);
+    files.delete(bundle.licenses);
+    expect(resolveAgentBrowserBinary(options)).toBeNull();
+    files.add(bundle.licenses);
     files.delete(bundle.manifest);
     expect(resolveAgentBrowserBinary(options)).toBeNull();
     // A deliberately configured external runtime remains an explicit override.
@@ -52,6 +55,7 @@ describe("finding the browser engine", () => {
     scratch.push(resources);
     const env = { OMB_RESOURCES_PATH: resources, PATH: "" };
     const bundle = browserBundlePaths(join(resources, "browser-engine"), `${process.platform}-${process.arch}`);
+    mkdirSync(bundle.licenses, { recursive: true });
     for (const file of [bundle.engine, bundle.chrome, bundle.manifest]) {
       mkdirSync(join(file, ".."), { recursive: true });
       writeFileSync(file, "fixture, not executable");

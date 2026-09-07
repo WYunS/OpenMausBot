@@ -76,7 +76,7 @@ function packagedBrowser(options: BrowserLookupOptions) {
 }
 
 function completePackage(bundle: NonNullable<ReturnType<typeof packagedBrowser>>, exists: (p: string) => boolean) {
-  return [bundle.manifest, bundle.engine, bundle.chrome].every(exists);
+  return [bundle.manifest, bundle.engine, bundle.chrome, bundle.licenses].every(exists);
 }
 
 /** OMB_AGENT_BROWSER_PATH, then the complete desktop bundle, pinned download, then
