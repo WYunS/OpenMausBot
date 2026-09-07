@@ -43,13 +43,24 @@ Desktop-only for now (needs the Mac/Linux app):
 On any machine with Node 24 or newer (a VPS, a Mac mini, a Raspberry Pi):
 
 ```sh
-npx openmausbot serve
+npx openmausbot start
 ```
 
-It starts the server, keeps your data in `~/.openmausbot`, and prints a
-pairing link with a QR code: scan it with the phone, or open it on the
-laptop. Install at least one engine CLI separately, then sign it in on the
-same machine (`claude`, `codex`, …); the npm package does not include them.
+First launch asks you to choose AI access, connect an account or API key,
+and choose the default model for new bots. Existing sign-ins can be reused;
+Codex also offers device-code login for SSH. API-key connections currently
+support chat, not agent tools or computer use. The [setup guide](cli-onboarding.md)
+explains the choices, key storage, and how to run setup again safely.
+
+It then starts the server and keeps your data in `~/.openmausbot`. If you
+choose phone access, it checks the remote address and prints a pairing link
+with a QR code: scan it with the phone, or open it on the laptop. Use
+`npx openmausbot setup` to configure without starting, or
+`npx openmausbot serve` to start non-interactively with your existing config
+(for services and scripts).
+
+The npm package does not include engine CLIs (`claude`, `codex`, …); setup
+can offer to install and sign in supported engines on this machine.
 Run setup, engine authentication, and the server as the same unprivileged
 operating-system user. Engine credentials live in that user's CLI-specific
 directories, not all under `.openmausbot`.
@@ -58,7 +69,7 @@ For a Linux service, the [VPS guide](deploy-vps.md#before-you-start) shows the
 account setup, engine installation, and browser dependency installation.
 After installing browser libraries as administrator, also run
 `npx openmausbot browser install` as the service user so that user's browser
-is present. Two ways to make the server reachable from elsewhere:
+is present. Three ways to make the server reachable from elsewhere:
 
 - **On your Tailscale network, no domain needed:**
   `npx openmausbot serve --tailscale`. Tailscale terminates HTTPS with its
