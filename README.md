@@ -347,7 +347,13 @@ which takes care of receipts and taxes; nothing about the app ever sits behind a
 ## Run it on a server
 
 Bots keep working with every laptop closed when the server runs on a VPS or
-a Mac mini. One command with Node 24: `npx openmausbot serve` (add
+a Mac mini. With Node 24, run `npx openmausbot start`: first launch guides
+you through choosing AI access, signing in or entering a hidden API key,
+and choosing a default model. Repeat `npx openmausbot setup` to change the
+default or add a connection without replacing your bots or conversations.
+See the [short setup guide](docs/cli-onboarding.md).
+
+For an already configured server or a service, use `npx openmausbot serve` (add
 `--tunnel` for a public address with no domain or open port, or
 `--tailscale` for your tailnet), or the Docker stack for your own domain.
 Devices pair once with a short code. The step-by-step guide is

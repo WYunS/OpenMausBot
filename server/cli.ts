@@ -4,6 +4,8 @@
 // `pnpm omb` (a checkout) — because scripts/bundle-server.mjs bundles this
 // file next to the server.
 //
+//   openmausbot setup [--data-dir ~/.openmausbot]
+//   openmausbot start [serve options]
 //   openmausbot serve [--port 8799] [--data-dir ~/.openmausbot] [--label "cab mini"]
 //                     [--public-url https://host] [--tailscale | --tunnel] [--no-pair]
 //   openmausbot pair  [--label "My MacBook"] [--client] [--public-url https://host]
@@ -29,13 +31,7 @@ import { fileURLToPath } from "node:url";
 import qrcode from "qrcode-terminal";
 
 import { explainTailscaleFailure, tailscaleServe, tailscaleServeOff, tailscaleStatus, type TailscaleStatus } from "./tailscale.ts";
-import {
-  browserEngineStatus,
-  describeBrowserEngine,
-  ensureChrome,
-  installAgentBrowserBinary,
-  resolveAgentBrowserBinary,
-} from "./browser-engine.ts";
+import { SetupCancelled } from "./cli-prompts.ts";
 import {
   cleanupTunnelOrigin,
   createTunnelAccount,
@@ -54,7 +50,7 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 export interface CliOptions {
-  command: "serve" | "pair" | "sessions" | "status" | "login" | "logout" | "browser" | "help";
+  command: "setup" | "start" | "serve" | "pair" | "sessions" | "status" | "login" | "logout" | "browser" | "help";
   port: number;
   dataDir: string;
   label?: string;
@@ -71,7 +67,7 @@ export interface CliOptions {
   json: boolean;
 }
 
-const COMMANDS = ["serve", "pair", "sessions", "status", "login", "logout", "browser", "help", "--help", "-h"];
+const COMMANDS = ["setup", "start", "serve", "pair", "sessions", "status", "login", "logout", "browser", "help", "--help", "-h"];
 
 export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): CliOptions | { error: string } {
   const [command = "help", ...rest] = argv;
@@ -125,6 +121,8 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
 
 export const USAGE = `openmausbot — run the server anywhere, pair devices to it
 
+  openmausbot setup [--data-dir DIR]
+  openmausbot start [the same options as serve]
   openmausbot serve [--port 8799] [--data-dir DIR] [--label NAME]
                     [--public-url https://host] [--tailscale | --tunnel] [--no-pair]
   openmausbot pair  [--label NAME] [--client] [--public-url https://host]
@@ -134,7 +132,9 @@ export const USAGE = `openmausbot — run the server anywhere, pair devices to i
   openmausbot logout
   openmausbot browser install [--with-deps] | status
 
-serve   starts the server and prints a pairing link + QR code
+setup   choose an AI provider, sign in or enter an API key, then pick a model
+start   run setup once if needed, then start with your saved settings
+serve   starts the server without prompts and prints a pairing link + QR code
 pair    mints a pairing code against a running server (--client: chat only)
 sessions lists paired devices; "sessions revoke ID" signs one out
 status  what the server says about itself
@@ -372,6 +372,7 @@ export async function runLogout(options: CliOptions, io: CliIo = defaultIo()): P
 }
 
 export async function runBrowser(options: CliOptions, io: CliIo = defaultIo()): Promise<number> {
+  const { browserEngineStatus, describeBrowserEngine, ensureChrome, installAgentBrowserBinary, resolveAgentBrowserBinary } = await import("./browser-engine.ts");
   const status = browserEngineStatus({ dataDir: options.dataDir });
   if (options.browserAction === "status") {
     io.log(describeBrowserEngine(status));
@@ -457,6 +458,7 @@ async function planTunnel(options: CliOptions, log: (line: string) => void): Pro
 }
 
 export async function runServe(options: CliOptions, log: (line: string) => void = console.log): Promise<number> {
+  const { browserEngineStatus, describeBrowserEngine } = await import("./browser-engine.ts");
   if (await serverUp(options.port)) {
     console.error(`something already answers on http://127.0.0.1:${options.port}; use \`openmausbot pair\` against it, or --port for a second server`);
     return 1;
@@ -568,13 +570,57 @@ export async function runServe(options: CliOptions, log: (line: string) => void 
   });
 }
 
+/** Keep setup imports behind the data-dir override: config binds its paths
+ * when first imported. `serve` remains usable with stdin closed. */
+export async function runOnboardingCommand(
+  options: CliOptions,
+  io: CliIo = defaultIo(),
+  startServer: (options: CliOptions) => Promise<number> = runServe,
+): Promise<number> {
+  const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
+  if (options.command === "setup" && !interactive) {
+    io.error("Setup needs an interactive terminal. Run `npx openmausbot setup` in a terminal, then use `npx openmausbot serve` for unattended starts.");
+    return 1;
+  }
+  process.env.OMB_DATA_DIR = options.dataDir;
+  const { runSetup, isSetupComplete } = await import("./cli-setup.ts");
+  if (options.command === "setup" || !(await isSetupComplete(options.dataDir))) {
+    if (!interactive) {
+      io.error("No completed setup was found. Run `npx openmausbot setup` in an interactive terminal first, or use `npx openmausbot serve` with an existing configuration.");
+      return 1;
+    }
+    try {
+      if (!(await runSetup({ dataDir: options.dataDir, port: options.port }))) {
+        io.log("Setup cancelled. Run `npx openmausbot setup` when you're ready.");
+        return 130;
+      }
+    } catch (error) {
+      if (!(error instanceof SetupCancelled)) throw error;
+      io.log("Setup cancelled. Run `npx openmausbot setup` when you're ready.");
+      return 130;
+    }
+  }
+  if (options.command === "setup") {
+    io.log("Start with: npx openmausbot start");
+    if (options.dataDir !== join(homedir(), ".openmausbot") || options.port !== 8799) {
+      io.log(`Use the same --data-dir (${options.dataDir}) and --port (${options.port}) options when starting.`);
+    }
+    return 0;
+  }
+  return startServer(options);
+}
+
 export async function main(argv = process.argv.slice(2)): Promise<number> {
   const options = parseArgs(argv);
   if ("error" in options) {
     console.error(`${options.error}\n\n${USAGE}`);
     return 2;
   }
+  process.env.OMB_DATA_DIR = options.dataDir;
   switch (options.command) {
+    case "setup":
+    case "start":
+      return runOnboardingCommand(options);
     case "serve":
       return runServe(options);
     case "pair":

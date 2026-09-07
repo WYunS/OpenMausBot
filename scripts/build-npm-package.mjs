@@ -58,14 +58,28 @@ Run the OpenMausBot server on any machine with Node 24+, then pair your
 devices to it.
 
 \`\`\`sh
+npx openmausbot start                # choose AI access once, then start with saved settings
+npx openmausbot setup                # run or change setup without starting
 npx openmausbot serve                 # starts the server, prints a pairing link + QR
 npx openmausbot serve --tailscale     # HTTPS over your tailnet, no domain needed
 npx openmausbot pair --label "Phone"  # another device later
 npx openmausbot sessions              # who is paired; "sessions revoke <id>" signs one out
 \`\`\`
 
-Engines (Claude Code, Codex, …) are separate CLIs signed in on the same
-machine. Full guide: https://github.com/milind-soni/OpenMausBot/blob/main/docs/self-hosting.md
+First start: choose ChatGPT/Codex, Claude Code, or an API service; sign in
+or paste a hidden API key; choose a model and save. Setup can install a
+missing Codex or Claude CLI. Later starts reuse your saved settings.
+
+API services include OpenAI, OpenRouter, Groq, and compatible endpoints.
+API connections currently support chat only; API billing is separate from
+ChatGPT/Claude subscriptions. New API keys are saved as plaintext in the
+private config.json (0600 on Unix). Keep this file private.
+
+Use \`serve\` for starts without prompts. \`login\` signs into an OpenMausBot
+account for remote access with \`--tunnel\`; AI-provider sign-in is in setup.
+
+Setup guide: https://github.com/milind-soni/OpenMausBot/blob/main/docs/cli-onboarding.md
+Hosting guide: https://github.com/milind-soni/OpenMausBot/blob/main/docs/self-hosting.md
 `,
 );
 console.log(`npm package assembled at ${out} (openmausbot@${app.version})`);

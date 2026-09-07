@@ -3,13 +3,16 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { formatSessions, pairingBlock, parseArgs, qrToString, runLogin, serverEntry } from "./cli.ts";
+import { formatSessions, pairingBlock, parseArgs, qrToString, runLogin, runOnboardingCommand, serverEntry, type CliOptions } from "./cli.ts";
+import { SetupCancelled } from "./cli-prompts.ts";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { startControlPlaneStub } from "./testing/control-plane-stub.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
+const setup = vi.hoisted(() => ({ runSetup: vi.fn(), isSetupComplete: vi.fn() }));
+vi.mock("./cli-setup.ts", () => setup);
 
 describe("openmausbot command line", () => {
   it("parses commands and flags, and explains mistakes", () => {
@@ -25,6 +28,8 @@ describe("openmausbot command line", () => {
     expect(parseArgs(["pair", "--public-url", "mini.example"], {})).toEqual({ error: "--public-url must start with http:// or https://" });
     expect(parseArgs(["serve", "--bogus"], {})).toEqual({ error: 'unknown argument "--bogus"' });
     expect(parseArgs(["serve", "--tunnel"], {})).toMatchObject({ command: "serve", tunnel: true });
+    expect(parseArgs(["setup", "--data-dir", "/tmp/cli-setup"], {})).toMatchObject({ command: "setup", dataDir: resolve("/tmp/cli-setup") });
+    expect(parseArgs(["start", "--port", "8125", "--no-pair"], {})).toMatchObject({ command: "start", port: 8125, pair: false });
     expect(parseArgs(["login", "--email", "a@b.test"], {})).toMatchObject({ command: "login", email: "a@b.test" });
     expect(parseArgs(["logout"], {})).toMatchObject({ command: "logout" });
     expect(parseArgs(["browser", "install", "--with-deps"], {})).toMatchObject({ command: "browser", browserAction: "install", withDeps: true });
@@ -99,6 +104,88 @@ describe("openmausbot command line", () => {
     }
     expect(dead).toBe(true);
   }, 90_000);
+});
+
+describe("terminal onboarding commands", () => {
+  const inputTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+  const outputTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  const terminal = (enabled: boolean) => {
+    Object.defineProperty(process.stdin, "isTTY", { value: enabled, configurable: true });
+    Object.defineProperty(process.stdout, "isTTY", { value: enabled, configurable: true });
+  };
+  afterEach(() => {
+    if (inputTty) Object.defineProperty(process.stdin, "isTTY", inputTty);
+    else Reflect.deleteProperty(process.stdin, "isTTY");
+    if (outputTty) Object.defineProperty(process.stdout, "isTTY", outputTty);
+    else Reflect.deleteProperty(process.stdout, "isTTY");
+    vi.unstubAllEnvs();
+    vi.resetAllMocks();
+  });
+  const command = (name: "setup" | "start") => parseArgs([name, "--data-dir", join(process.env.HOME!, "onboarding"), "--port", "18451"], {}) as CliOptions;
+  const io = () => ({ log: vi.fn(), error: vi.fn(), ask: vi.fn() });
+  const preserveEnv = () => vi.stubEnv("OMB_DATA_DIR", process.env.OMB_DATA_DIR);
+
+  it("runs explicit setup once and explains how to start without launching a server", async () => {
+    terminal(true);
+    preserveEnv();
+    const options = command("setup");
+    const output = io();
+    const serve = vi.fn();
+    setup.runSetup.mockImplementation(async () => {
+      expect(process.env.OMB_DATA_DIR).toBe(options.dataDir);
+      return true;
+    });
+    expect(await runOnboardingCommand(options, output, serve)).toBe(0);
+    expect(setup.runSetup).toHaveBeenCalledWith({ dataDir: options.dataDir, port: options.port });
+    expect(setup.isSetupComplete).not.toHaveBeenCalled();
+    expect(serve).not.toHaveBeenCalled();
+    expect(output.log).toHaveBeenCalledWith("Start with: npx openmausbot start");
+  });
+
+  it("starts after first-time setup and passes through the requested serve options", async () => {
+    terminal(true);
+    preserveEnv();
+    const options = command("start");
+    setup.isSetupComplete.mockResolvedValue(false);
+    setup.runSetup.mockResolvedValue(true);
+    const serve = vi.fn().mockResolvedValue(0);
+    expect(await runOnboardingCommand(options, io(), serve)).toBe(0);
+    expect(setup.runSetup).toHaveBeenCalledOnce();
+    expect(serve).toHaveBeenCalledWith(options);
+  });
+
+  it("uses completed setup without prompting even when start has no terminal", async () => {
+    terminal(false);
+    preserveEnv();
+    setup.isSetupComplete.mockResolvedValue(true);
+    const serve = vi.fn().mockResolvedValue(7);
+    expect(await runOnboardingCommand(command("start"), io(), serve)).toBe(7);
+    expect(setup.runSetup).not.toHaveBeenCalled();
+    expect(serve).toHaveBeenCalledOnce();
+  });
+
+  it.each(["setup", "start"] as const)("refuses an unconfigured %s without a terminal", async (name) => {
+    terminal(false);
+    preserveEnv();
+    setup.isSetupComplete.mockResolvedValue(false);
+    const output = io();
+    const serve = vi.fn();
+    expect(await runOnboardingCommand(command(name), output, serve)).toBe(1);
+    expect(setup.runSetup).not.toHaveBeenCalled();
+    expect(serve).not.toHaveBeenCalled();
+    expect(output.error).toHaveBeenCalledWith(expect.stringContaining("interactive terminal"));
+  });
+
+  it.each([false, new SetupCancelled()])("does not start after setup is cancelled (%s)", async (result) => {
+    terminal(true);
+    preserveEnv();
+    setup.isSetupComplete.mockResolvedValue(false);
+    if (result instanceof Error) setup.runSetup.mockRejectedValue(result);
+    else setup.runSetup.mockResolvedValue(result);
+    const serve = vi.fn();
+    expect(await runOnboardingCommand(command("start"), io(), serve)).toBe(130);
+    expect(serve).not.toHaveBeenCalled();
+  });
 });
 
 const exited = (child: ChildProcess) => (child.exitCode !== null ? Promise.resolve(child.exitCode) : new Promise<number | null>((done) => child.once("exit", (code) => done(code))));
