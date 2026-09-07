@@ -100,9 +100,11 @@ the dialog after a close action although a disposable diagnostic fixture's
 reducer/render saw `settingsOpen: false`. Foreground/committed-render confirmation
 was unavailable. No speculative production close-state change was made.
 
-Desktop browser bundling is a follow-up, not implemented by these corrections.
-Docker's build already includes the engine and Chrome; desktop/npm packaging
-must be assessed separately, including browser security updates and sandboxing.
+Desktop bundling was outside this VPS run. The subsequent
+[desktop browser packaging change](../browser-packaging.md) includes Chromium
+Headless Shell and separate native package checks; do not read this VPS report
+as verification of those installers. This run used the self-hosted browser
+installation flow, not the new desktop bundle.
 
 ## Cleanup
 
