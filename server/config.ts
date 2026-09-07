@@ -237,6 +237,12 @@ const defaultModelSelectionSchema = z.object({
 });
 const appConfigSchema = z.object({
   defaultModelSelection: defaultModelSelectionSchema.optional(),
+  /** CLI-only launch preferences. Never enable remote access implicitly. */
+  cliStartup: z.object({
+    access: z.enum(["local", "tunnel", "tailscale", "public-url"]),
+    publicUrl: z.string().url().optional(),
+    phone: z.enum(["ios", "android"]).optional(),
+  }).optional(),
   xai: z.object({ key: optionalText, url: optionalText }).optional(),
   /** `model` seeds the default selection; `provider` pins an OpenRouter
    * upstream (e.g. "fireworks"). Both are non-secret and optional. */
@@ -275,12 +281,17 @@ const appConfigSchema = z.object({
 const storedAppConfigSchema = appConfigSchema.extend({
   browserProfiles: storedBrowserProfilesSchema.optional(),
 });
-const appConfigPatchSchema = appConfigSchema.omit({ instances: true, mcpServers: true });
+const appConfigPatchSchema = appConfigSchema.omit({ instances: true, mcpServers: true, cliStartup: true });
 const jsonObjectSchema = z.record(z.string(), z.json());
 
 export interface AppConfig {
   /** Preferred selection for newly created bots; existing bots keep theirs. */
   defaultModelSelection?: ModelSelection;
+  cliStartup?: {
+    access: "local" | "tunnel" | "tailscale" | "public-url";
+    publicUrl?: string;
+    phone?: "ios" | "android";
+  };
   mcpServers?: Record<string, unknown>;
   language?: string;
   xai?: { key?: string; url?: string };
@@ -606,6 +617,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   if (checkedPatch.defaultModelSelection !== undefined) {
     disk.defaultModelSelection = checkedPatch.defaultModelSelection;
   }
+  if (checkedPatch.cliStartup !== undefined) disk.cliStartup = checkedPatch.cliStartup;
   // Custom MCP mutations go through their own dedicated local API, but
   // saveConfig remains the single atomic persistence boundary.
   if (checkedPatch.mcpServers !== undefined) {

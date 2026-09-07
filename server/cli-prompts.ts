@@ -1,6 +1,7 @@
+import { confirm as clackConfirm, isCancel, password, select, text } from "@clack/prompts";
 import { createInterface } from "node:readline";
-import type { Readable, Writable } from "node:stream";
-import { StringDecoder } from "node:string_decoder";
+import { PassThrough, type Readable, type Writable } from "node:stream";
+import { stripVTControlCharacters } from "node:util";
 
 export interface SetupIo {
   log(line: string): void;
@@ -22,155 +23,164 @@ type TerminalInput = Readable & {
   isRaw?: boolean;
   setRawMode?: (mode: boolean) => unknown;
 };
+type TerminalOutput = Writable & { isTTY?: boolean; columns?: number; rows?: number };
+type PromptContext = { input: TerminalInput; output: TerminalOutput; signal: AbortSignal };
 
-function displayText(text: string, multiline = false): string {
-  // These expressions deliberately remove terminal control characters.
-  // eslint-disable-next-line no-control-regex
-  const plain = text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+function displayText(value: string, multiline = false): string {
+  const plain = stripVTControlCharacters(value);
+  // Provider-supplied labels must not issue terminal control commands.
   // eslint-disable-next-line no-control-regex
   return plain.replace(/[\u0000-\u001f\u007f-\u009f]/g, (character) => character === "\n" && multiline ? "\n" : " ");
 }
 
-/** Streams are injectable so prompt tests never read the user's terminal. */
-export function defaultSetupIo(input: TerminalInput = process.stdin, output: Writable = process.stdout): SetupIo {
+/** A line-based fallback with no cursor/color output. Readline has no output
+ * stream for secrets, so even pasted input cannot be echoed. */
+function plainText(question: string, hidden: boolean, context: PromptContext): Promise<string> {
+  const { input, output, signal } = context;
+  return new Promise((resolve, reject) => {
+    input.setRawMode?.(hidden);
+    const rl = createInterface({ input, terminal: hidden });
+    let finished = false;
+    const finish = (answer?: string, error?: unknown) => {
+      if (finished) return;
+      finished = true;
+      signal.removeEventListener("abort", cancel);
+      rl.close();
+      output.write("\n");
+      if (error) reject(error);
+      else resolve(answer ?? "");
+    };
+    const cancel = () => finish(undefined, signal.reason ?? new SetupCancelled());
+    signal.addEventListener("abort", cancel, { once: true });
+    rl.once("line", (answer) => finish(answer));
+    rl.once("close", () => finish(undefined, new SetupCancelled()));
+    output.write(question);
+  });
+}
+
+/** Streams are injectable; fixtures never read the user's real terminal. */
+export function defaultSetupIo(input: TerminalInput = process.stdin, output: TerminalOutput = process.stdout): SetupIo {
   const log = (line: string) => { output.write(`${displayText(line, true)}\n`); };
-  const requireTerminal = () => {
+  const rich = () => output.isTTY === true && process.env.TERM !== "dumb" && process.env.NO_COLOR === undefined
+    && (output.columns ?? 80) >= 30 && (output.rows ?? 24) >= 8;
+
+  const run = <T>(prompt: (context: PromptContext) => Promise<T | symbol>): Promise<T> => {
     if (!input.isTTY || !input.setRawMode) throw new Error("Setup needs an interactive terminal.");
-  };
-  const restoreInput = (raw: boolean, flowing: boolean) => {
-    input.setRawMode?.(raw);
-    if (flowing) input.resume();
-    else input.pause();
-  };
-
-  const ask = (question: string): Promise<string> => {
-    requireTerminal();
     const raw = input.isRaw === true;
     const flowing = input.readableFlowing === true;
-    return new Promise((resolve, reject) => {
-      const rl = createInterface({ input, output, terminal: true });
-      let finished = false;
-      const restore = () => restoreInput(raw, flowing);
-      const finish = (answer?: string, error?: Error) => {
-        if (finished) return;
-        finished = true;
-        process.removeListener("SIGINT", cancel);
-        process.removeListener("SIGTERM", cancel);
-        process.removeListener("exit", restore);
-        input.removeListener("error", fail);
-        input.removeListener("keypress", onKeypress);
-        rl.close();
-        restore();
-        if (error) reject(error);
-        else resolve(answer ?? "");
-      };
-      const cancel = () => finish(undefined, new SetupCancelled());
-      const fail = (error: Error) => finish(undefined, error);
-      const onKeypress = (_text: string, key: { sequence?: string }) => {
-        if (key.sequence === "\u0004") cancel();
-      };
-      rl.once("SIGINT", cancel);
-      rl.once("close", cancel);
-      input.once("error", fail);
-      input.on("keypress", onKeypress);
-      process.once("SIGINT", cancel);
-      process.once("SIGTERM", cancel);
-      process.once("exit", restore);
-      rl.question(displayText(question), (answer) => finish(answer));
+    const controller = new AbortController();
+    // Clack owns this prompt's readline/key decoder, not the shared stdin.
+    // Discarding this stream also discards unfinished escape/paste sequences.
+    const promptInput = Object.assign(new PassThrough(), {
+      isTTY: true,
+      setRawMode: (mode: boolean) => input.setRawMode!(mode),
     });
-  };
-
-  const secret = (question: string): Promise<string> => {
-    requireTerminal();
-    const raw = input.isRaw === true;
-    const flowing = input.readableFlowing === true;
-    return new Promise((resolve, reject) => {
-      let value = "";
-      let escape = "";
-      let finished = false;
-      const decoder = new StringDecoder("utf8");
-      const restore = () => restoreInput(raw, flowing);
-      const finish = (error?: Error) => {
-        if (finished) return;
-        finished = true;
-        input.removeListener("data", onData);
-        input.removeListener("end", cancel);
-        input.removeListener("close", cancel);
-        input.removeListener("error", fail);
-        process.removeListener("SIGINT", cancel);
-        process.removeListener("SIGTERM", cancel);
-        process.removeListener("exit", restore);
-        restore();
-        output.write("\n");
-        if (error) reject(error);
-        else resolve(value);
-        value = "";
-      };
-      const cancel = () => finish(new SetupCancelled());
-      const fail = (error: Error) => finish(error);
-      const onData = (chunk: Buffer | string) => {
-        const text = typeof chunk === "string" ? chunk : decoder.write(chunk);
-        for (const character of text) {
-          if (character === "\u0003" || character === "\u0004") return cancel();
-          // Ignore cursor keys and bracketed-paste markers, including markers
-          // split across chunks. No input bytes are ever written to output.
-          if (escape === "\u001b") {
-            escape = character === "[" || character === "O" ? escape + character : "";
-            continue;
-          }
-          if (escape) {
-            if (/[@-~]/.test(character)) escape = "";
-            continue;
-          }
-          if (character === "\u001b") escape = character;
-          else if (character === "\r" || character === "\n") return finish();
-          else if (character === "\u007f" || character === "\b") value = Array.from(value).slice(0, -1).join("");
-          else if (character === "\u0015") value = "";
-          else if (character >= " " && character !== "\u007f") value += character;
-        }
-      };
-      input.on("data", onData);
+    let failure: Error | undefined;
+    let settled = false;
+    const fail = (error: Error) => {
+      failure ??= error;
+      controller.abort(failure);
+    };
+    const cancel = () => fail(new SetupCancelled());
+    const forward = (chunk: Buffer | string) => {
+      // Ctrl-D and cancellation during an incomplete escape must not wait
+      // for a key decoder. No prompt input is ever copied to its output.
+      const interrupted = typeof chunk === "string"
+        ? chunk.includes("\u0003") || chunk.includes("\u0004")
+        : chunk.includes(3) || chunk.includes(4);
+      if (interrupted) cancel();
+      else if (!controller.signal.aborted) promptInput.write(chunk);
+    };
+    const restore = () => {
+      input.setRawMode!(raw);
+      if (flowing) input.resume();
+      else input.pause();
+    };
+    return (async () => {
+      input.on("data", forward);
       input.once("end", cancel);
       input.once("close", cancel);
       input.once("error", fail);
+      output.once("error", fail);
       process.once("SIGINT", cancel);
       process.once("SIGTERM", cancel);
       process.once("exit", restore);
       try {
-        input.setRawMode!(true);
-        output.write(displayText(question));
+        if (input.readableEnded || input.destroyed) throw new SetupCancelled();
+        const pending = prompt({ input: promptInput, output, signal: controller.signal });
         input.resume();
+        const value = await pending;
+        settled = true;
+        if (failure) throw failure;
+        if (isCancel(value)) throw new SetupCancelled();
+        return value as T;
       } catch (error) {
-        finish(error instanceof Error ? error : new Error(String(error)));
+        if (!settled) controller.abort(error);
+        throw failure ?? error;
+      } finally {
+        input.removeListener("data", forward);
+        input.removeListener("end", cancel);
+        input.removeListener("close", cancel);
+        input.removeListener("error", fail);
+        output.removeListener("error", fail);
+        process.removeListener("SIGINT", cancel);
+        process.removeListener("SIGTERM", cancel);
+        process.removeListener("exit", restore);
+        promptInput.destroy();
+        restore();
       }
-    });
+    })();
   };
 
-  const choose: SetupIo["choose"] = async (question, options, defaultIndex) => {
+  const ask: SetupIo["ask"] = (question) => run((context) => rich()
+    ? text({ ...context, message: displayText(question) })
+    : plainText(displayText(question), false, context));
+  const secret: SetupIo["secret"] = (question) => run((context) => rich()
+    ? password({ ...context, message: displayText(question), mask: "*" })
+    : plainText(displayText(question), true, context));
+
+  const choose: SetupIo["choose"] = async (question, options, defaultIndex = 0) => {
     if (!options.length) throw new Error("There are no choices available.");
-    if (defaultIndex !== undefined && (!Number.isInteger(defaultIndex) || defaultIndex < 0 || defaultIndex >= options.length)) {
+    if (!Number.isInteger(defaultIndex) || defaultIndex < 0 || defaultIndex >= options.length) {
       throw new Error("The default choice is not available.");
     }
-    log(displayText(question));
-    options.forEach((option, index) => log(`  ${index + 1}. ${displayText(option)}${index === defaultIndex ? " (default)" : ""}`));
-    while (true) {
-      const answer = (await ask(`Choose 1–${options.length}${defaultIndex === undefined ? "" : ` [${defaultIndex + 1}]`}: `)).trim();
-      if (!answer && defaultIndex !== undefined) return defaultIndex;
-      const selected = /^\d+$/.test(answer) ? Number(answer) - 1 : -1;
-      if (selected >= 0 && selected < options.length) return selected;
+    if (rich()) return run((context) => select({
+      ...context,
+      message: displayText(question),
+      options: options.map((label, value) => ({ value, label: displayText(label) })),
+      initialValue: defaultIndex,
+      maxItems: 7,
+    }));
+
+    const pageSize = 20;
+    let start = Math.floor(defaultIndex / pageSize) * pageSize;
+    for (;;) {
+      log(question);
+      options.slice(start, start + pageSize).forEach((label, offset) => {
+        const index = start + offset;
+        log(`  ${index + 1}. ${label}${index === defaultIndex ? " (default)" : ""}`);
+      });
+      const paged = options.length > pageSize;
+      if (paged) log(`Showing ${start + 1}–${Math.min(start + pageSize, options.length)} of ${options.length}. Type n/p for next/previous page.`);
+      const answer = (await ask(`Choose 1–${options.length} [${defaultIndex + 1}]: `)).trim();
+      if (!answer) return defaultIndex;
+      if (paged && /^[np]$/i.test(answer)) {
+        start = Math.max(0, Math.min(Math.floor((options.length - 1) / pageSize) * pageSize, start + (answer.toLowerCase() === "n" ? pageSize : -pageSize)));
+        continue;
+      }
+      if (/^\d+$/.test(answer) && Number(answer) >= 1 && Number(answer) <= options.length) return Number(answer) - 1;
       log(`Enter a number from 1 to ${options.length}.`);
     }
   };
-
   const confirm: SetupIo["confirm"] = async (question, defaultYes = false) => {
-    while (true) {
-      const answer = (await ask(`${question} ${defaultYes ? "[Y/n]" : "[y/N]"}: `)).trim().toLowerCase();
+    if (rich()) return run((context) => clackConfirm({ ...context, message: displayText(question), initialValue: defaultYes }));
+    for (;;) {
+      const answer = (await ask(`${question} ${defaultYes ? "[Y/n]" : "[y/N]"}: `)).trim();
       if (!answer) return defaultYes;
-      if (answer === "y" || answer === "yes") return true;
-      if (answer === "n" || answer === "no") return false;
+      if (/^y(es)?$/i.test(answer)) return true;
+      if (/^n(o)?$/i.test(answer)) return false;
       log("Enter yes or no.");
     }
   };
-
   return { log, ask, secret, choose, confirm };
 }

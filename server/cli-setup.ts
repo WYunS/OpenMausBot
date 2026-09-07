@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   DATA_DIR, instanceConfigs, loadConfig, parseStoredConfig, saveConfig,
-  stripWorkspaceCredentialEnv, PROVIDER_CREDENTIAL_ENV,
+  stripWorkspaceCredentialEnv, PROVIDER_CREDENTIAL_ENV, type AppConfig,
 } from "./config.ts";
 import type { InstanceConfig, ModelCatalog, ProviderSnapshot } from "./contracts.ts";
 import { acquireDataDirLease } from "./data-dir-lease.ts";
@@ -52,7 +52,7 @@ export async function runSetupCli(cli: string, args: string[], environment: Reco
     child.once("exit", (code, signal) => {
       if (code === 0) done();
       else if (signal === "SIGINT" || code === 130) reject(new SetupCancelled());
-      else reject(new Error(`${cli} did not finish successfully. Fix the error shown above, then run setup again.`));
+      else reject(new Error(`${cli} did not finish successfully. Fix the error shown above, then try again.`));
     });
   });
   resetPathCache();
@@ -84,24 +84,37 @@ export async function isSetupComplete(dataDir: string): Promise<boolean> {
   return !!(saved && Object.hasOwn(instances, saved.instanceId) && instances[saved.instanceId]?.enabled !== false);
 }
 
+export function readCliStartup(dataDir: string): AppConfig["cliStartup"] {
+  assertDataDir(dataDir);
+  checkStoredConfig(dataDir);
+  return loadConfig().cliStartup;
+}
+
+export function saveCliStartup(dataDir: string, settings: NonNullable<AppConfig["cliStartup"]>): void {
+  assertDataDir(dataDir);
+  const lease = acquireDataDirLease(dataDir);
+  try {
+    checkStoredConfig(dataDir);
+    saveConfig({ cliStartup: settings });
+  } finally {
+    lease.release();
+  }
+}
+
 function rawObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 async function chooseModel(io: SetupIo, models: ModelCatalog): Promise<string> {
-  if (!models.options.length) throw new Error("This connection returned no models. Check the provider and run setup again.");
+  if (!models.options.length) throw new Error("This connection returned no models. Check the provider and try again.");
   let query = "";
   for (;;) {
     const matches = models.options.filter((m) => `${m.label} ${m.id}`.toLowerCase().includes(query.toLowerCase()));
-    const visible = matches.slice(0, 20);
     const preferred = matches.find((m) => m.id === models.default);
-    if (preferred && !visible.includes(preferred)) {
-      visible.pop();
-      visible.unshift(preferred);
-    }
+    const visible = (preferred ? [preferred, ...matches.filter((m) => m !== preferred)] : matches).slice(0, 20);
     const defaultIndex = visible.findIndex((m) => m.id === models.default);
-    const selected = await io.choose("3/3 · Choose a model", [
-      ...visible.map((m) => `${m.label}${m.label !== m.id ? ` (${m.id})` : ""}${m.id === models.default ? " — current default" : ""}`),
+    const selected = await io.choose("Choose your model", [
+      ...visible.map((m) => m.label.trim() || m.id),
       "Search models…",
     ], defaultIndex < 0 ? undefined : defaultIndex);
     if (selected < visible.length) return visible[selected]!.id;
@@ -118,15 +131,15 @@ async function connectNative(
   choice: typeof NATIVE[number], id: string, entry: InstanceConfig, io: SetupIo, deps: SetupDependencies,
 ): Promise<ModelCatalog> {
   const cli = typeof rawObject(entry.config).cli === "string" ? rawObject(entry.config).cli as string : choice.cli;
-  io.log("2/3 · Connect your account");
-  io.log("Your provider handles sign-in. Its account limits and billing apply; OMB does not need your password.");
+  io.log("Connecting your account…");
+  io.log("Sign-in stays with your provider. Its account limits apply; OMB never asks for your password.");
   let state = await deps.inspect(id, entry);
   if (state.snapshot.state !== "available") {
     if (cli !== choice.cli) throw new Error("Your custom CLI path is unavailable. Fix that path in Settings before running setup again.");
     if (!await io.confirm(`Install ${choice.cli} with npm install -g ${choice.pkg}?`, true)) throw new SetupCancelled();
     await deps.runCli("npm", ["install", "-g", choice.pkg]);
     state = await deps.inspect(id, entry);
-    if (state.snapshot.state !== "available") throw new Error(`${choice.cli} is still unavailable. Check the installation output and run setup again.`);
+    if (state.snapshot.state !== "available") throw new Error(`${choice.cli} is still unavailable. Check the installation output and try again.`);
   }
   if (!state.snapshot.authenticated) {
     let args = ["auth", "login"];
@@ -140,7 +153,7 @@ async function connectNative(
     await deps.runCli(cli, args, entry.environment);
     state = await deps.inspect(id, entry);
     if (state.snapshot.state !== "available" || !state.snapshot.authenticated) {
-      throw new Error("Sign-in was not confirmed. Your OMB settings are unchanged; complete provider sign-in and run setup again.");
+      throw new Error("Sign-in was not confirmed. Your OMB settings are unchanged; complete provider sign-in and try again.");
     }
   } else {
     io.log("Existing sign-in found — you do not need to sign in again.");
@@ -164,88 +177,105 @@ export async function runSetup(
     const existing = Object.entries(runtime).filter(([id, entry]) =>
       !!cfg.instances?.[id] && ["codex", "claudeAgent", "openai-compat"].includes(entry.driver) && entry.enabled !== false);
     io.log("\nWelcome to OpenMausBot\n");
-    io.log("Choose AI access → connect → choose a model. Ctrl-C cancels.");
-    io.log("Existing bots, conversations and connections stay as they are.");
-    io.log("Other engines, integrations and remote access can be configured in app Settings later.\n");
+    io.log("Let's connect your AI. Choose a provider, then a model.");
+    io.log("Existing bots and conversations stay untouched. Ctrl-C cancels.");
+    io.log("You can add integrations and change settings later.\n");
     const existingDefault = existing.findIndex(([id]) => id === cfg.defaultModelSelection?.instanceId);
-    const pick = await io.choose("1/3 · How do you want to connect?", [
+    const providerOptions = [
       ...NATIVE.map((n) => n.label),
       "API key — OpenAI, OpenRouter, Groq or a compatible service (chat only)",
       ...existing.map(([id, entry]) => `Use existing: ${entry.displayName ?? id}${id === cfg.defaultModelSelection?.instanceId ? " — current" : ""}`),
-    ], existingDefault < 0 ? 0 : existingDefault + 3);
+    ];
+    let pick: number | undefined;
 
-    const prior = pick >= 3 ? existing[pick - 3] : undefined;
-    const native = pick < 2 ? NATIVE[pick] : NATIVE.find((n) => n.driver === prior?.[1].driver);
     let id: string;
     let entry: InstanceConfig;
     let model: string;
-    if (native) {
-      // Reuse native provider settings, including custom CLI paths. If a user
-      // repurposed the familiar ID, do not overwrite their connection.
-      id = prior?.[0] ?? native.id;
-      if (!prior && runtime[id] && runtime[id]!.driver !== native.driver) id = `${native.id}-${randomUUID().slice(0, 8)}`;
-      entry = { ...(cfg.instances?.[id] ?? { driver: native.driver }), enabled: true };
-      const models = await connectNative(native, id, entry, io, deps);
-      const saved = cfg.defaultModelSelection;
-      model = await chooseModel(io, {
-        ...models,
-        default: saved?.instanceId === id ? saved.model : models.default,
-      });
-    } else {
-      io.log("2/3 · Connect an API key");
-      io.log("API usage is billed separately from ChatGPT/Claude subscriptions.");
-      io.log("This connection supports chat, not agent tools or computer use. Choose Codex or Claude for those.");
-      let url: string;
-      let key: string;
-      let label: string;
-      let reuse = false;
-      let routingProvider: string | undefined;
-      if (prior) {
-        const config = rawObject(prior[1].config);
-        const decoded = BUILT_IN_DRIVERS.find((d) => d.driverKind === "openai-compat")!.decodeConfig(config);
-        url = normalizeApiUrl(decoded.url);
-        key = decoded.key ?? prior[1].environment?.[decoded.apiKeyEnv]
-          ?? prior[1].environment?.OPENAI_COMPAT_API_KEY
-          ?? process.env[decoded.apiKeyEnv] ?? process.env.OPENAI_COMPAT_API_KEY ?? "";
-        routingProvider = decoded.provider;
-        label = prior[1].displayName ?? prior[0];
-        reuse = !!key;
-        if (!key) key = (await io.secret(`API key for ${url} (hidden): `)).trim();
-      } else {
-        const endpoint = await io.choose("Which API service?", [...API_ENDPOINTS.map((e) => e.label), "Other OpenAI-compatible endpoint"]);
-        const preset = API_ENDPOINTS[endpoint];
-        url = preset ? preset.url : normalizeApiUrl((await io.ask("API base URL (including /v1): ")).trim());
-        label = preset?.label ?? new URL(url).hostname;
-        if (preset) io.log(`Create a key: ${preset.keyUrl}`);
-        key = (await io.secret(`API key for ${url} (hidden): `)).trim();
+    for (;;) {
+      pick ??= await io.choose("Choose your AI connection", providerOptions, existingDefault < 0 ? 0 : existingDefault + 3);
+      const prior = pick >= 3 ? existing[pick - 3] : undefined;
+      const native = pick < 2 ? NATIVE[pick] : NATIVE.find((n) => n.driver === prior?.[1].driver);
+      try {
+        if (native) {
+          // Reuse native provider settings, including custom CLI paths. If a user
+          // repurposed the familiar ID, do not overwrite their connection.
+          id = prior?.[0] ?? native.id;
+          if (!prior && runtime[id] && runtime[id]!.driver !== native.driver) id = `${native.id}-${randomUUID().slice(0, 8)}`;
+          entry = { ...(cfg.instances?.[id] ?? { driver: native.driver }), enabled: true };
+          const models = await connectNative(native, id, entry, io, deps);
+          const saved = cfg.defaultModelSelection;
+          model = await chooseModel(io, {
+            ...models,
+            default: saved?.instanceId === id ? saved.model : models.default,
+          });
+        } else {
+          io.log("Connect an API key");
+          io.log("API usage is billed separately from ChatGPT/Claude subscriptions.");
+          io.log("This connection supports chat, not agent tools or computer use. Choose Codex or Claude for those.");
+          let url: string;
+          let key: string;
+          let label: string;
+          let reuse = false;
+          let routingProvider: string | undefined;
+          if (prior) {
+            const config = rawObject(prior[1].config);
+            const decoded = BUILT_IN_DRIVERS.find((d) => d.driverKind === "openai-compat")!.decodeConfig(config);
+            url = normalizeApiUrl(decoded.url);
+            key = decoded.key ?? prior[1].environment?.[decoded.apiKeyEnv]
+              ?? prior[1].environment?.OPENAI_COMPAT_API_KEY
+              ?? process.env[decoded.apiKeyEnv] ?? process.env.OPENAI_COMPAT_API_KEY ?? "";
+            routingProvider = decoded.provider;
+            label = prior[1].displayName ?? prior[0];
+            reuse = !!key;
+            if (!key) key = (await io.secret(`API key for ${url} (hidden): `)).trim();
+          } else {
+            const endpoint = await io.choose("Which API service?", [...API_ENDPOINTS.map((e) => e.label), "Other OpenAI-compatible endpoint"]);
+            const preset = API_ENDPOINTS[endpoint];
+            url = preset ? preset.url : normalizeApiUrl((await io.ask("API base URL (including /v1): ")).trim());
+            label = preset?.label ?? new URL(url).hostname;
+            if (preset) io.log(`Create a key: ${preset.keyUrl}`);
+            key = (await io.secret(`API key for ${url} (hidden): `)).trim();
+          }
+          if (!key) throw new Error("An API key is required. Nothing was saved.");
+          io.log("Checking the model catalog…");
+          let models: ModelCatalog["options"];
+          try { models = await deps.models(url, key); }
+          catch (error) {
+            if (error instanceof SetupCancelled) throw error;
+            io.log(error instanceof Error ? error.message : "Could not load this model catalog.");
+            if (!await io.confirm("Enter an exact chat model ID and check it directly instead?", false)) throw error;
+            const manual = (await io.ask("Chat model ID: ")).trim();
+            if (!manual) throw new Error("A model ID is required. Nothing was saved.");
+            models = [{ id: manual, label: manual }];
+          }
+          const previousModel = prior ? rawObject(prior[1].config).model : undefined;
+          const preferredModel = cfg.defaultModelSelection?.instanceId === prior?.[0]
+            ? cfg.defaultModelSelection?.model : previousModel;
+          io.log("Choose a chat model; image, audio and embedding-only models cannot reply here.");
+          model = await chooseModel(io, { default: typeof preferredModel === "string" ? preferredModel : "", options: models });
+          if (!await io.confirm("Send one short test message? Your API provider may charge for this request.", true)) throw new SetupCancelled();
+          if (routingProvider) await deps.verify(url, key, model, routingProvider);
+          else await deps.verify(url, key, model);
+          io.log("Test reply received.");
+          // API additions never change the URL/key behind an existing bot. A new
+          // isolated instance also avoids inherited global URL/key overrides.
+          id = reuse && prior ? prior[0] : `api-${randomUUID().slice(0, 8)}`;
+          entry = reuse && prior
+            ? { ...cfg.instances![id]!, config: { ...rawObject(cfg.instances![id]!.config), model } }
+            : { driver: "openai-compat", displayName: label, config: { url, key, model, provider: routingProvider ?? "" } };
+          if (!reuse) io.log("The key will be stored in your private config.json (plaintext, owner-only permissions on Unix). Never share this file.");
+        }
+        break;
+      } catch (error) {
+        if (error instanceof SetupCancelled) throw error;
+        io.log(error instanceof Error ? error.message : "This connection could not be set up.");
+        io.log("Your saved connection and model have not changed.");
+        const recovery = await io.choose("What would you like to do?", [
+          "Try this connection again", "Choose another connection or API key", "Cancel setup",
+        ], 0);
+        if (recovery === 2) throw new SetupCancelled();
+        if (recovery === 1) pick = undefined;
       }
-      if (!key) throw new Error("An API key is required. Nothing was saved.");
-      io.log("Checking the model catalog…");
-      let models: ModelCatalog["options"];
-      try { models = await deps.models(url, key); }
-      catch (error) {
-        io.log(error instanceof Error ? error.message : "Could not load this model catalog.");
-        if (!await io.confirm("Enter an exact chat model ID and check it directly instead?", false)) throw new SetupCancelled();
-        const manual = (await io.ask("Chat model ID: ")).trim();
-        if (!manual) throw new Error("A model ID is required. Nothing was saved.");
-        models = [{ id: manual, label: manual }];
-      }
-      const previousModel = prior ? rawObject(prior[1].config).model : undefined;
-      const preferredModel = cfg.defaultModelSelection?.instanceId === prior?.[0]
-        ? cfg.defaultModelSelection?.model : previousModel;
-      io.log("Choose a chat model; image, audio and embedding-only models cannot reply here.");
-      model = await chooseModel(io, { default: typeof preferredModel === "string" ? preferredModel : "", options: models });
-      if (!await io.confirm("Send one short test message? Your API provider may charge for this request.", true)) throw new SetupCancelled();
-      if (routingProvider) await deps.verify(url, key, model, routingProvider);
-      else await deps.verify(url, key, model);
-      io.log("Test reply received.");
-      // API additions never change the URL/key behind an existing bot. A new
-      // isolated instance also avoids inherited global URL/key overrides.
-      id = reuse && prior ? prior[0] : `api-${randomUUID().slice(0, 8)}`;
-      entry = reuse && prior
-        ? { ...cfg.instances![id]!, config: { ...rawObject(cfg.instances![id]!.config), model } }
-        : { driver: "openai-compat", displayName: label, config: { url, key, model, provider: routingProvider ?? "" } };
-      if (!reuse) io.log("The key will be stored in your private config.json (plaintext, owner-only permissions on Unix). Never share this file.");
     }
 
     io.log(`\nDefault for new bots: ${entry.displayName ?? id} / ${model}`);
