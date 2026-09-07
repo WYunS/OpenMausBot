@@ -2916,10 +2916,9 @@ bus.subscribe((event: RuntimeEvent) => {
             unattended,
             scope: event.approvalScope,
             requiresExplicitApproval: event.requiresExplicitApproval,
-            // Match Antigravity's dispatched mode, including delegated Full
-            // access and unattended Auto's downgrade to Ask.
-            nativeApproval: requiresNativeApproval(event.provider, event.provider === "antigravityAgent"
-              ? effectiveApprovalMode : approvalModeForTurn(asker)),
+            // Match the dispatched mode for every provider, including
+            // delegated Custom and unattended Auto downgrades.
+            nativeApproval: requiresNativeApproval(event.provider, effectiveApprovalMode),
           })
         : null;
       if (verdict?.approve && asker && event.requestId) {

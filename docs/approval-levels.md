@@ -77,6 +77,7 @@ HTTP elevation rejection, Full → Auto → Ask on resumed Claude turns, and
 Antigravity automatic tool approvals on new and resumed Full access turns across
 multiple model variants. It also checks that Ask and legacy Auto still prompt,
 peer-started Full turns auto-approve, switching the receiving bot back to Ask
-restores prompts even for a Full-access sender, and questions remain interactive. Provider
+restores prompts even for a Full-access sender, delegated Codex Custom uses the
+native Auto reviewer consistently, and questions remain interactive. Provider
 processes are scripted fakes; this does not verify live account eligibility or
 the quality of a provider's automatic reviewer. No live user data is used.
