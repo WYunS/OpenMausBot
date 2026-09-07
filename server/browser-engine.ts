@@ -185,8 +185,12 @@ export function agentBrowserIntegration(input: {
     AGENT_BROWSER_ENCRYPTION_KEY: input.encryptionKey,
   };
   if (input.headless !== false) env.AGENT_BROWSER_HEADLESS = "1";
-  const path = (input.env ?? process.env).PATH;
-  if (path) env.PATH = path;
+  const sourceEnv = input.env ?? process.env;
+  // MCP clients may filter the parent environment. Carry the configured
+  // Chrome path explicitly without forwarding unrelated secrets or flags.
+  for (const name of ["PATH", "AGENT_BROWSER_EXECUTABLE_PATH"] as const) {
+    if (sourceEnv[name]) env[name] = sourceEnv[name];
+  }
   return { command: input.binaryPath, args: ["mcp", "--tools", "core", "--no-webmcp"], env };
 }
 

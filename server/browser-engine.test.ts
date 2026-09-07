@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   agentBrowserIntegration,
@@ -20,6 +20,7 @@ import { removeTempDir } from "./testing/cleanup.ts";
 const posix = process.platform !== "win32";
 const scratch: string[] = [];
 afterEach(async () => {
+  vi.unstubAllEnvs();
   for (const dir of scratch.splice(0)) await removeTempDir(dir);
 });
 
@@ -98,6 +99,43 @@ describe("installing the browser engine", () => {
 });
 
 describe("what a bot gets", () => {
+  it("forwards the explicit Chrome path without copying arbitrary environment or overriding session isolation", () => {
+    vi.stubEnv("AGENT_BROWSER_EXECUTABLE_PATH", "/process/chrome");
+    const spec = agentBrowserIntegration({
+      binaryPath: "/x/agent-browser", session: "bot-1", encryptionKey: "session-key",
+      env: {
+        PATH: "/usr/bin", AGENT_BROWSER_EXECUTABLE_PATH: "/opt/trusted chrome/chrome",
+        PRIVATE_WORKSPACE_SECRET: "synthetic-secret",
+        AGENT_BROWSER_SESSION: "wrong-session", AGENT_BROWSER_ENCRYPTION_KEY: "wrong-key",
+        AGENT_BROWSER_ARGS: "--no-sandbox",
+      },
+    });
+    expect(spec.env).toEqual({
+      AGENT_BROWSER_SESSION: "bot-1", AGENT_BROWSER_RESTORE: "bot-1",
+      AGENT_BROWSER_RESTORE_SAVE: "auto", AGENT_BROWSER_ENCRYPTION_KEY: "session-key",
+      AGENT_BROWSER_HEADLESS: "1", PATH: "/usr/bin",
+      AGENT_BROWSER_EXECUTABLE_PATH: "/opt/trusted chrome/chrome",
+    });
+  });
+
+  it("reads the configured Chrome path from the process only when no explicit environment is supplied", () => {
+    vi.stubEnv("PATH", "/usr/bin");
+    vi.stubEnv("AGENT_BROWSER_EXECUTABLE_PATH", "/opt/process-chrome/chrome");
+    vi.stubEnv("PRIVATE_WORKSPACE_SECRET", "synthetic-process-secret");
+    const spec = agentBrowserIntegration({ binaryPath: "/x/agent-browser", session: "bot-1", encryptionKey: "session-key" });
+    expect(spec.env).toEqual({
+      AGENT_BROWSER_SESSION: "bot-1", AGENT_BROWSER_RESTORE: "bot-1",
+      AGENT_BROWSER_RESTORE_SAVE: "auto", AGENT_BROWSER_ENCRYPTION_KEY: "session-key",
+      AGENT_BROWSER_HEADLESS: "1", PATH: "/usr/bin",
+      AGENT_BROWSER_EXECUTABLE_PATH: "/opt/process-chrome/chrome",
+    });
+    for (const env of [{}, { AGENT_BROWSER_EXECUTABLE_PATH: "" }]) {
+      const explicit = agentBrowserIntegration({ binaryPath: "/x", session: "s", encryptionKey: "k", env });
+      expect(explicit.env.AGENT_BROWSER_EXECUTABLE_PATH).toBeUndefined();
+      expect(explicit.env.PRIVATE_WORKSPACE_SECRET).toBeUndefined();
+    }
+  });
+
   it("mounts agent-browser's MCP server with the core tools, an isolated auto-restored session, and WebMCP off", () => {
     const spec = agentBrowserIntegration({ binaryPath: "/x/agent-browser", session: "bot-1", encryptionKey: "k".repeat(64), env: { PATH: "/usr/bin" } });
     expect(spec.command).toBe("/x/agent-browser");
