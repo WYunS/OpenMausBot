@@ -223,6 +223,11 @@ struct AgentProfileView: View {
                 }
 
                 Section("Identity") {
+                    NavigationLink {
+                        BotOverviewView(bot: current)
+                    } label: {
+                        Label("What this bot does", systemImage: "list.bullet.rectangle")
+                    }
                     TextField("Name", text: $name)
                         .textInputAutocapitalization(.words)
                     TextField("Title", text: $title)
@@ -541,7 +546,7 @@ private struct ProfileFormSnapshot {
 }
 
 private extension AvatarCrop {
-    var label: String {
+    var label: LocalizedStringKey {
         switch self {
         case .mascot: "Mascot"
         case .circle: "Circle"

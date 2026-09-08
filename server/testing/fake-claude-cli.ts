@@ -7,6 +7,8 @@
 //   FAKE_CLAUDE_MODE   happy (default) | exit-early | hang | malformed
 //                      | stream (partial-message text deltas before the
 //                        whole-message frame, plus subagent noise to drop)
+//                      | not-logged-in (the frames a signed-out CLI really
+//                        sends, captured from 2.1.263)
 //   FAKE_CLAUDE_DUMP   path to write {argv, env, prompt, systemPrompt,
 //                      mcpConfig} as JSON,
 //                      so the test can assert on argv shape and env hygiene.
@@ -224,6 +226,28 @@ const playTurn = (prompt: JsonValue) => {
     process.stdout.write("this is not json\n{broken\n");
   }
 
+  // A signed-out CLI answers every prompt with this, verbatim: the login
+  // instruction arrives as assistant text, and only the frame's own error
+  // fields say it is a failure at all.
+  if (mode === "not-logged-in") {
+    out({
+      type: "assistant",
+      message: { model: "<synthetic>", content: [{ type: "text", text: "Not logged in \u00b7 Please run /login" }] },
+      error: "authentication_failed",
+      is_api_error_message: true,
+    });
+    out({
+      type: "result",
+      is_error: true,
+      stop_reason: "stop_sequence",
+      terminal_reason: "api_error",
+      result: "Not logged in \u00b7 Please run /login",
+    });
+    turnRunning = false;
+    finishIfDone();
+    return;
+  }
+
   if (mode === "stream") {
     const delta = (d: unknown) => out({ type: "stream_event", event: { type: "content_block_delta", delta: d } });
     delta({ type: "thinking_delta", thinking: "hmm" });
@@ -274,11 +298,21 @@ const playTurn = (prompt: JsonValue) => {
     // a gap a test can steer into; the closing reply carries anything that
     // was folded in, the way the real CLI includes a mid-turn message in
     // the same turn's next model call
-    setTimeout(() => {
+    const finishSlowTurn = () => {
       const tail = steered.length ? ` + steered: ${steered.join(" | ")}` : "";
       out({ type: "assistant", message: { content: [{ type: "text", text: `reply to: ${promptText(prompt)}${tail}` }] } });
       finish();
-    }, 800);
+    };
+    const finishGate = process.env.FAKE_CLAUDE_SLOW_FINISH_GATE;
+    if (finishGate) {
+      const poll = setInterval(() => {
+        if (!existsSync(finishGate)) return;
+        clearInterval(poll);
+        finishSlowTurn();
+      }, 10);
+    } else {
+      setTimeout(finishSlowTurn, 800);
+    }
   } else {
     finish();
   }

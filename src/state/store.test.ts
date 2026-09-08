@@ -5,15 +5,217 @@ import {
   initialState,
   loadSnapshotBoundary,
   openNotificationTarget,
+  persistBotUpdate,
   reducer,
   requestConfirmedBotDeletion,
   visibleNotificationThread,
   type Bot,
+  type BotAnnouncement,
   type Group,
   type Message,
 } from "./store";
 import { openLiveEvents, type LiveEventSourceLike, type LiveEventsPlatform } from "../lib/live-events";
 import type { RoutineRun } from "../lib/routines";
+
+describe("trusted approval-mode persistence", () => {
+  const announcement = (approvalMode: Bot["approvalMode"] = "ask") => ({
+    id: "bot-1",
+    threadId: "thread-1",
+    name: "Maus",
+    title: "Helper",
+    description: "",
+    notifications: true,
+    color: "green" as const,
+    unread: false,
+    modelSelection: { instanceId: "codex", model: "gpt-5.6-sol" },
+    approvalMode,
+  });
+
+  it("commits ordinary edits before granting Full through the private bridge", async () => {
+    const order: string[] = [];
+    const request = vi.fn(async (_path: string, _init?: RequestInit) => {
+      order.push("http");
+      return { bot: announcement("ask") };
+    });
+    const setMode = vi.fn(async () => {
+      order.push("private");
+      return announcement("full");
+    });
+
+    await expect(persistBotUpdate(
+      "bot-1",
+      { approvalMode: "full", confirmFullAccess: true, title: "Ops" },
+      new AbortController().signal,
+      request,
+      { setMode },
+    )).resolves.toMatchObject({ approvalMode: "full" });
+
+    expect(order).toEqual(["http", "private"]);
+    expect(JSON.parse(String(request.mock.calls[0]?.[1]?.body))).toEqual({ title: "Ops" });
+    expect(setMode).toHaveBeenCalledWith("bot-1", "full", { acknowledgeLocalAuto: false });
+  });
+
+  it("never sends a Full confirmation over HTTP after a rapid switch back to Ask", async () => {
+    const request = vi.fn(async (_path: string, _init?: RequestInit) => ({ bot: announcement("ask") }));
+    await persistBotUpdate(
+      "bot-1",
+      { approvalMode: "ask", confirmFullAccess: true },
+      new AbortController().signal,
+      request,
+    );
+    expect(JSON.parse(String(request.mock.calls[0]?.[1]?.body))).toEqual({ approvalMode: "ask" });
+  });
+
+  it("fails closed when trusted modes have no packaged desktop bridge", async () => {
+    const request = vi.fn(async (_path: string, _init?: RequestInit) => ({ bot: announcement("ask") }));
+    await expect(persistBotUpdate(
+      "bot-1",
+      { approvalMode: "custom" },
+      new AbortController().signal,
+      request,
+      undefined,
+    )).rejects.toThrow("packaged desktop app");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("uses the private bridge to leave Custom instead of the bot-callable HTTP API", async () => {
+    const request = vi.fn(async (_path: string, _init?: RequestInit) => ({ bot: announcement("custom") }));
+    const setMode = vi.fn(async () => announcement("ask"));
+
+    await expect(persistBotUpdate(
+      "bot-1",
+      { approvalMode: "ask" },
+      new AbortController().signal,
+      request,
+      { setMode },
+      announcement("custom"),
+    )).resolves.toMatchObject({ approvalMode: "ask" });
+
+    expect(request).not.toHaveBeenCalled();
+    expect(setMode).toHaveBeenCalledWith("bot-1", "ask", { acknowledgeLocalAuto: false });
+  });
+
+  it("revokes a trusted mode that completes after its save was cancelled", async () => {
+    let finishFull!: (bot: BotAnnouncement) => void;
+    const lateFull = new Promise<BotAnnouncement>((resolve) => {
+      finishFull = resolve;
+    });
+    const calls: string[] = [];
+    const setMode = vi.fn(async (_botId: string, mode: "ask" | "auto" | "full" | "custom") => {
+      calls.push(mode);
+      return mode === "full" ? lateFull : announcement(mode);
+    });
+    const controller = new AbortController();
+    const pending = persistBotUpdate(
+      "bot-1",
+      { approvalMode: "full", confirmFullAccess: true },
+      controller.signal,
+      vi.fn(),
+      { setMode },
+      announcement("ask"),
+    );
+    await Promise.resolve();
+
+    controller.abort();
+    finishFull(announcement("full"));
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(calls).toEqual(["full", "ask"]);
+  });
+
+  it("revokes a late Custom-to-Full grant when a newer save supersedes it", async () => {
+    let finishFull!: (bot: BotAnnouncement) => void;
+    const lateFull = new Promise<BotAnnouncement>((resolve) => {
+      finishFull = resolve;
+    });
+    const calls: string[] = [];
+    const setMode = vi.fn(async (_botId: string, mode: "ask" | "auto" | "full" | "custom") => {
+      calls.push(mode);
+      return mode === "full" ? lateFull : announcement(mode);
+    });
+    const controller = new AbortController();
+    const pending = persistBotUpdate(
+      "bot-1",
+      { approvalMode: "full", confirmFullAccess: true },
+      controller.signal,
+      vi.fn(),
+      { setMode },
+      announcement("custom"),
+    );
+    await Promise.resolve();
+
+    controller.abort();
+    finishFull(announcement("full"));
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(calls).toEqual(["full", "ask"]);
+  });
+
+  it("leaves Custom before persisting a coalesced non-Codex model switch", async () => {
+    const order: string[] = [];
+    const request = vi.fn(async (_path: string, _init?: RequestInit) => {
+      order.push("http");
+      return {
+        bot: {
+          ...announcement("ask"),
+          modelSelection: { instanceId: "gemini", model: "gemini-3.1-pro" },
+        },
+      };
+    });
+    const setMode = vi.fn(async () => {
+      order.push("private");
+      return announcement("ask");
+    });
+
+    await expect(persistBotUpdate(
+      "bot-1",
+      {
+        approvalMode: "ask",
+        modelSelection: { instanceId: "gemini", model: "gemini-3.1-pro" },
+      },
+      new AbortController().signal,
+      request,
+      { setMode },
+      announcement("custom"),
+    )).resolves.toMatchObject({
+      approvalMode: "ask",
+      modelSelection: { instanceId: "gemini", model: "gemini-3.1-pro" },
+    });
+
+    expect(order).toEqual(["private", "http"]);
+    expect(JSON.parse(String(request.mock.calls[0]?.[1]?.body))).toEqual({
+      modelSelection: { instanceId: "gemini", model: "gemini-3.1-pro" },
+    });
+    expect(setMode).toHaveBeenCalledWith("bot-1", "ask", { acknowledgeLocalAuto: false });
+  });
+
+  it("keeps local-computer consent on an ordinary PATCH coalesced with a private mode", async () => {
+    const request = vi.fn(async (_path: string, _init?: RequestInit) => ({
+      bot: { ...announcement("auto"), computer: "local" as const },
+    }));
+    const setMode = vi.fn(async () => announcement("full"));
+
+    await persistBotUpdate(
+      "bot-1",
+      {
+        computer: "local",
+        acknowledgeLocalAuto: true,
+        approvalMode: "full",
+        confirmFullAccess: true,
+      },
+      new AbortController().signal,
+      request,
+      { setMode },
+      announcement("auto"),
+    );
+
+    expect(JSON.parse(String(request.mock.calls[0]?.[1]?.body))).toEqual({
+      computer: "local",
+      acknowledgeLocalAuto: true,
+    });
+    expect(setMode).toHaveBeenCalledWith("bot-1", "full", { acknowledgeLocalAuto: true });
+  });
+});
 
 describe("server-authoritative bot deletion", () => {
   const bot = {
@@ -975,5 +1177,119 @@ describe("messageAdded leaf adoption", () => {
     });
     expect(next.bots[0].activeLeafId).toBe("m2"); // the user's message stays the tail
     expect(next.bots[0].messages.map((m) => m.id)).toContain("shot");
+  });
+});
+
+describe("bot settings section", () => {
+  const bot = {
+    id: "test-bot",
+    threadId: "test-thread",
+    name: "Test",
+    title: "",
+    description: "",
+    notifications: true,
+    color: "green",
+    unread: false,
+    modelSelection: { instanceId: "x", model: "y" },
+    messages: [],
+  } as never as Bot;
+
+  it("toggleSettings with a section sets it and opens", () => {
+    const next = reducer(initialState, {
+      type: "toggleSettings",
+      open: true,
+      section: "identity",
+    });
+    expect(next.settingsOpen).toBe(true);
+    expect(next.botSettingsSection).toBe("identity");
+  });
+
+  it("toggleSettings leaves the computer panel and inspector open, closes app settings", () => {
+    const withPanels = { ...initialState, computerOpen: true, inspectorOpen: true, appSettingsOpen: true };
+    const next = reducer(withPanels, { type: "toggleSettings", open: true });
+    expect(next.settingsOpen).toBe(true);
+    expect(next.computerOpen).toBe(true);
+    expect(next.inspectorOpen).toBe(true);
+    expect(next.appSettingsOpen).toBe(false);
+  });
+
+  it("toggleSettings without a section keeps it", () => {
+    const state = reducer(initialState, {
+      type: "toggleSettings",
+      open: true,
+      section: "soul",
+    });
+    const next = reducer(state, {
+      type: "toggleSettings",
+      open: true,
+    });
+    expect(next.botSettingsSection).toBe("soul");
+  });
+
+  it("selecting a different bot resets botSettingsSection to overview", () => {
+    // Add bot A and select it
+    let state = reducer(initialState, {
+      type: "botAdded",
+      bot: { ...bot, id: "bot-a", threadId: "thread-a" },
+    });
+    // Add bot B (becomes selected automatically)
+    state = reducer(state, {
+      type: "botAdded",
+      bot: { ...bot, id: "bot-b", threadId: "thread-b" },
+    });
+    expect(state.selectedId).toBe("bot-b");
+
+    // Set section to "identity" while bot-b is selected
+    state = reducer(state, {
+      type: "toggleSettings",
+      open: true,
+      section: "identity",
+    });
+    expect(state.botSettingsSection).toBe("identity");
+
+    // Select bot A → should reset to "overview" because we're changing bots
+    const next = reducer(state, {
+      type: "select",
+      id: "bot-a",
+    });
+    expect(next.botSettingsSection).toBe("overview");
+  });
+
+  it("re-selecting the same bot keeps botSettingsSection, but selecting a different bot resets it", () => {
+    // Add bot A (becomes selected)
+    let state = reducer(initialState, {
+      type: "botAdded",
+      bot: { ...bot, id: "bot-a", threadId: "thread-a" },
+    });
+    expect(state.selectedId).toBe("bot-a");
+
+    // Open settings with section "soul"
+    state = reducer(state, {
+      type: "toggleSettings",
+      open: true,
+      section: "soul",
+    });
+    expect(state.botSettingsSection).toBe("soul");
+
+    // Re-select bot A (same bot) → section should stay "soul"
+    state = reducer(state, {
+      type: "select",
+      id: "bot-a",
+    });
+    expect(state.botSettingsSection).toBe("soul");
+
+    // Add bot B (becomes selected)
+    state = reducer(state, {
+      type: "botAdded",
+      bot: { ...bot, id: "bot-b", threadId: "thread-b" },
+    });
+    expect(state.selectedId).toBe("bot-b");
+
+    // Select bot A again → should reset to "overview" because we're changing from bot-b to bot-a
+    state = reducer(state, {
+      type: "select",
+      id: "bot-a",
+    });
+    expect(state.botSettingsSection).toBe("overview");
   });
 });

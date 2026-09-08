@@ -67,6 +67,23 @@ export function claudeSignedIn(
   });
 }
 
+/** Whether a stream frame is the CLI reporting that it has no login.
+ *
+ * The CLI flags its own api-error frames (`error`, `is_api_error_message`);
+ * a model reply never carries them. Requiring that flag first is what keeps
+ * an answer that merely discusses being logged out from being read as a
+ * failure — the text classifier runs only once the CLI has already called
+ * the frame an error, and covers CLI builds that flag the frame without
+ * naming the reason.
+ */
+export function claudeAuthFailure(
+  frame: { error?: unknown; is_api_error_message?: unknown },
+  text: string,
+): boolean {
+  if (frame.is_api_error_message !== true && typeof frame.error !== "string") return false;
+  return frame.error === "authentication_failed" || classifyError({ text }).reason === "auth";
+}
+
 /** The CLI environment shared by auth probes and real turns.
  *
  * Subscription users can be billed pay-as-you-go if an inherited API key
@@ -615,7 +632,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       /** the CLI's session id from `init`, what --resume takes later */
       sessionId: string | null;
       /** the running turn, or null between turns */
-      turn: { turnId: string; settled: boolean; sawStreamDelta: boolean } | null;
+      turn: { turnId: string; settled: boolean; sawStreamDelta: boolean; authFailed?: boolean } | null;
       idleTimer: ReturnType<typeof setTimeout> | null;
       closing: boolean;
       stderr: string;
@@ -691,8 +708,17 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     const sendTurn = async (turn: SendTurnInput) => {
       const { threadId } = turn;
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
+      // A bot-level mode is authoritative for this turn. In particular, an
+      // old provider instance may still be configured with
+      // `bypassPermissions`; Ask/Auto must restore Claude's interactive
+      // broker instead of inheriting that silent bypass. Calls without a
+      // per-turn mode keep the legacy adapter behavior.
+      const permissionMode = turn.approvalMode === undefined
+        ? config.permissionMode
+        : turn.approvalMode === "full" ? "bypassPermissions"
+          : turn.approvalMode === "auto" ? "auto" : "default";
       const controlsHost = turn.integrations?.localComputer?.scope === "local-computer";
-      if (controlsHost && config.permissionMode === "bypassPermissions") {
+      if (controlsHost && permissionMode === "bypassPermissions" && turn.approvalMode !== "full") {
         throw new Error("local computer control requires the interactive approval broker");
       }
       // Materialize before creating a broker or process. A missing/corrupt
@@ -717,7 +743,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         // token-level streaming: content_block_delta events between the
         // whole-message frames, so the bubble grows as the model writes
         "--include-partial-messages",
-        "--permission-mode", config.permissionMode === "auto" ? "acceptEdits" : config.permissionMode,
+        "--permission-mode", permissionMode,
       ];
       if (config.tools !== undefined) args.push("--tools", config.tools.join(","));
       if (config.disallowedTools?.length) {
@@ -802,17 +828,15 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         if (name in mcpServers) continue;
         mcpServers[name] = { ...server };
       }
-      // permission broker: anything acceptEdits would silently deny becomes
-      // an Allow/Deny card in chat, and the agent gets ask_user. Skipped in
-      // bypassPermissions (fullAuto) — nothing would ever ask.
+      // Keep ask_user available even in Full access. Native bypass skips
+      // permission prompts, not questions requiring a person's answer.
       let broker: Awaited<ReturnType<typeof createPermissionBroker>> | undefined;
-      let socketPath: string | null = null;
-      if (config.permissionMode !== "bypassPermissions") {
-        socketPath = permissionSocketPath(threadId);
+      const socketPath = permissionSocketPath(threadId);
+      if (permissionMode !== "bypassPermissions") {
         args.push("--permission-prompt-tool", "mcp__ogb__approve");
-        mcpServers.ogb = { command: process.execPath, args: [PERM_PROXY_PATH, socketPath], env: { ...NODE_ENV_FLAG }, alwaysLoad: true };
-        allowed.push("mcp__ogb");
       }
+      mcpServers.ogb = { command: process.execPath, args: [PERM_PROXY_PATH, socketPath], env: { ...NODE_ENV_FLAG }, alwaysLoad: true };
+      allowed.push("mcp__ogb");
       // The MCP config carries credentials — a Composio consumer key in a
       // header, the box token in the computer proxy's env, the comms token in
       // the agents proxy's env. On argv every one of those is world-readable
@@ -852,7 +876,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       if (live && !live.turn && !live.closing && live.child.exitCode === null && live.argsKey === argsKey && (!sessionId || sessionId === live.sessionId)) {
         if (live.idleTimer) clearTimeout(live.idleTimer);
         live.turn = { turnId, settled: false, sawStreamDelta: false };
-        active.set(threadId, { stop: () => killCliTree(live.child), turnId, broker: live.broker });
+        active.set(threadId, { stop: () => {
+          closeSession(threadId, "interrupted");
+          killCliTree(live.child);
+        }, turnId, broker: live.broker });
         emit({ ...base(threadId, turnId), type: "turn.started" });
         const written = await writeUser(live, threadId, promptMsg);
         if (!written) {
@@ -1061,6 +1088,16 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           case "assistant": {
             const msg = o.message ?? {};
             const text = firstText(msg.content);
+            // An unauthenticated turn comes back as an api-error frame whose
+            // only content is the CLI's own "run /login" instruction — a
+            // command this app has no terminal to run, so relaying it as a
+            // reply strands the user. Every other engine reports this as a
+            // setup error; that is what routes them to the sign-in card.
+            if (claudeAuthFailure(o, text)) {
+              if (session.turn) session.turn.authFailed = true;
+              emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: text, setup: true });
+              break;
+            }
             if (text.trim()) {
               // fallback delta for CLIs/paths that never streamed the block
               if (!session.turn?.sawStreamDelta) {
@@ -1106,7 +1143,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             // of the figure was context re-read rather than new text.
             settle(
               o.is_error !== true,
-              o.stop_reason ?? o.terminal_reason ?? null,
+              session.turn?.authFailed ? "auth_required" : o.stop_reason ?? o.terminal_reason ?? null,
               o.total_cost_usd ?? null,
               o.usage
                 ? {
@@ -1254,6 +1291,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       });
 
       const stop = () => {
+        // taskkill is asynchronous on Windows. Retire steering and approvals
+        // now, before a still-connected child can submit more work.
+        closeSession(threadId, "interrupted");
         retry.cancelled = true;
         retryAbort.abort();
         killCliTree(child);
@@ -1377,7 +1417,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           nativeImageInput: true,
           effortLevels: ["low", "medium", "high", "xhigh", "max"],
           queueing: true,
-          localComputerMcp: config.permissionMode !== "bypassPermissions",
+          // Harness turns reassert a per-bot mode and restore the broker even
+          // when an old instance was configured with bypassPermissions.
+          localComputerMcp: true,
         },
         sendTurn,
         steer,

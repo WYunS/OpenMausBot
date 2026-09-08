@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { resolveLocale, setLocale, t } from "./i18n";
+import { resolveLocale, setLocale, t, tFromServer } from "./i18n";
 import { en, localeChoices, locales } from "@/locales";
 
 afterEach(() => {
@@ -95,5 +95,47 @@ describe("t", () => {
       name in { name: "Maus" } ? String({ name: "Maus" }[name as "name"]) : match,
     );
     expect(rendered).toBe("Hello Maus, {missing}!");
+  });
+});
+
+// The server picks which note a held approval card shows; the renderer picks
+// the language. A key this build has never heard of must still read.
+describe("tFromServer", () => {
+  it("translates a key the catalog knows", () => {
+    locales["zz"] = { "approval.held.destructive": "Sieht zerstoererisch aus." };
+    try {
+      setLocale("zz");
+      expect(tFromServer("approval.held.destructive", "This looks destructive, so Approve for me stopped to ask."))
+        .toBe("Sieht zerstoererisch aus.");
+    } finally {
+      delete locales["zz"];
+      setLocale("en");
+    }
+  });
+
+  it("falls back to English for a key this build does not carry", () => {
+    expect(tFromServer("approval.held.inventedLater", "A note from a newer server."))
+      .toBe("A note from a newer server.");
+  });
+
+  it.each(["constructor", "toString", "__proto__"])("rejects inherited catalog property %s", (key) => {
+    expect(tFromServer(key, "A note from the server.")).toBe("A note from the server.");
+  });
+
+  it("shows a card that carries only text, and nothing when it carries neither", () => {
+    expect(tFromServer(undefined, "Routine could not be applied: disk full"))
+      .toBe("Routine could not be applied: disk full");
+    expect(tFromServer(undefined, undefined)).toBeUndefined();
+  });
+
+  // The rule these notes have to keep — a note must name a button the reader
+  // can see — now lives in ApprovalModeSelector.i18n.test.ts, which checks the
+  // note against the label the selector renders in that same language. The
+  // labels used to be hardcoded English, so this file pinned the English words
+  // instead; the selector reads the catalog now.
+
+  it("prefers the catalog over stale text saved with an older card", () => {
+    expect(tFromServer("approval.held.destructive", "This looked destructive, so auto mode stopped to ask."))
+      .toBe(en["approval.held.destructive"]);
   });
 });

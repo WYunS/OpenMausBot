@@ -1,14 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { setLocale, t } from "@/lib/i18n";
 import {
   TASK_PICKER_DISMISS_MS,
-  TASK_RENAME_HINT,
   TaskDeleteConfirmDialog,
   filterTasks,
   taskPickerPointerIntent,
 } from "./TaskPicker";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+
+beforeEach(() => setLocale("en"));
 
 describe("taskPickerPointerIntent", () => {
   it("treats a single click as switch, not rename", () => {
@@ -34,8 +36,9 @@ describe("taskPickerPointerIntent", () => {
 
 describe("task picker copy", () => {
   it("advertises both gestures the row actually handles", () => {
-    expect(TASK_RENAME_HINT).toContain("double-click");
-    expect(TASK_RENAME_HINT).toContain("right-click");
+    // the hint moved into the catalog with the rest of the picker's copy
+    expect(t("task.renameHint")).toContain("double-click");
+    expect(t("task.renameHint")).toContain("right-click");
     expect(TASK_PICKER_DISMISS_MS).toBeGreaterThanOrEqual(500);
   });
 });

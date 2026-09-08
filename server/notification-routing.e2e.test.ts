@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,13 +33,13 @@ const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
 const FAKE_CLAUDE = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
 const FAKE_ACP = join(SERVER_DIR, "testing", "fake-acp-cli.ts");
+const TEST_CAPABILITY_KEY = "notification-routing-fixture-capability";
 
 let child: ChildProcess;
 let home = "";
 let base = "";
 let stderr = "";
 let dumpFile = "";
-let commsToken = "";
 
 const api = async (
   method: string,
@@ -55,15 +55,19 @@ const api = async (
   return { status: response.status, body: response.status === 204 ? null : await response.json() };
 };
 
-/** expect.poll only works inside a test; the boot below needs the same
- * wait-don't-sleep discipline in beforeAll. */
-const waitUntil = async (ready: () => boolean | Promise<boolean>, timeoutMs: number, what: string) => {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    if (await ready()) return;
-    if (Date.now() > deadline) throw new Error(`${what}. stderr: ${stderr.slice(-2000)}`);
-    await new Promise((resolve) => setTimeout(resolve, 150));
-  }
+const capability = async (
+  botId: string,
+  threadId: string,
+  kind: "agents" | "computer" = "agents",
+): Promise<Record<string, string>> => {
+  const minted = await api(
+    "POST",
+    "/api/testing/internal-capability",
+    { botId, threadId, kind },
+    { "x-openmausbot-test-capability": TEST_CAPABILITY_KEY },
+  );
+  expect(minted.status).toBe(201);
+  return { authorization: `Bearer ${minted.body.token}` };
 };
 
 const state = async (messages = 40) => (await api("GET", `/api/bots?messages=${messages}`)).body;
@@ -146,6 +150,7 @@ beforeAll(async () => {
       // the question-card test leaves its peer turn open on purpose; keep the
       // synchronous ask from parking for the production four minutes
       OMB_ASK_BOT_TIMEOUT_MS: "6000",
+      OMB_TEST_INTERNAL_CAPABILITY_KEY: TEST_CAPABILITY_KEY,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -163,24 +168,6 @@ beforeAll(async () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
-  // one ordinary turn hands the fake CLI its MCP config, which carries the
-  // boot token the internal endpoints below are sealed behind
-  const scribe = await createBot("Scribe", "quick");
-  expect((await api("POST", `/api/bots/${scribe.id}/messages`, { text: "warm up" })).status).toBe(202);
-  const readToken = (): string | undefined => {
-    try {
-      const dump = JSON.parse(readFileSync(dumpFile, "utf8"));
-      const value: unknown = dump?.mcpConfig?.mcpServers?.agents?.env?.OMB_COMMS_TOKEN;
-      return typeof value === "string" && value ? value : undefined;
-    } catch {
-      // not written yet, or mid-write
-      return undefined;
-    }
-  };
-  await waitUntil(() => Boolean(readToken()), 15_000, "the fake CLI never dumped its MCP config");
-  commsToken = readToken() ?? "";
-  await waitUntil(async () => (await botState(scribe.id))?.busy === false, 15_000, "the warm-up turn never settled");
-  await cleanup([], [scribe.id]);
 }, 45_000);
 
 afterAll(async () => {
@@ -267,7 +254,7 @@ describe("a room turn belongs to the room", () => {
           "POST",
           `/api/internal/computer-control?botId=${bot.id}`,
           { reason: "the login page wants a code" },
-          { authorization: `Bearer ${commsToken}` },
+          await capability(bot.id, room.threadId, "computer"),
         );
         expect(asked.status).toBe(200);
         requestId = asked.body.requestId;
@@ -295,7 +282,7 @@ describe("a room turn belongs to the room", () => {
           "DELETE",
           `/api/internal/computer-control?botId=${bot.id}`,
           { requestId },
-          { authorization: `Bearer ${commsToken}` },
+          await capability(bot.id, roomId ? (await groupState(roomId)).threadId : bot.threadId, "computer"),
         ).catch(() => undefined);
       }
       await cleanup([roomId], [bot.id]);
@@ -310,11 +297,17 @@ describe("bot-to-bot coordination is recorded, not announced", () => {
     let channelId: string | undefined;
     const stream = await openSse(`${base}/api/events`);
     try {
+      // Ink already answered the person earlier and they have not looked yet.
+      // A hop runs on Ink's own 1:1 thread, so this badge is the one it could
+      // spend by mistake — seeded true, or the "no badge" checks below would
+      // pass for a hop that had just cleared it.
+      expect((await api("PATCH", `/api/bots/${peer.id}`, { unread: true })).status).toBe(200);
+      expect((await botState(peer.id))?.unread).toBe(true);
       const asked = await api(
         "POST",
         "/api/internal/ask-bot",
         { fromBotId: asker.id, toBotId: peer.id, message: "Ink, can you take the deploy?" },
-        { authorization: `Bearer ${commsToken}` },
+        await capability(asker.id, asker.threadId),
       );
       expect(asked.status).toBe(200);
       expect(asked.body.botName).toBe("Ink");
@@ -343,10 +336,13 @@ describe("bot-to-bot coordination is recorded, not announced", () => {
       expect(chip(asker.id, "Messaged @Ink")).toBe(true);
       expect(chip(peer.id, "Message from @Pen")).toBe(true);
 
-      // nothing about it is worth interrupting anyone: no channel badge, no
-      // sidebar dot on the peer whose 1:1 thread only carries a chip
+      // nothing about it is worth interrupting anyone: no channel badge, and
+      // the asker — whose thread only carries a chip — gets no dot
       expect(channel.unread).toBeFalsy();
-      expect(current.bots.find((candidate: { id: string }) => candidate.id === peer.id)?.unread).toBeFalsy();
+      expect(current.bots.find((candidate: { id: string }) => candidate.id === asker.id)?.unread).toBeFalsy();
+      // ...while the badge Ink already earned is neither spent by the hop
+      // nor re-raised by it: still exactly the one signal the person had
+      expect(current.bots.find((candidate: { id: string }) => candidate.id === peer.id)?.unread).toBe(true);
 
       // A unique bot patch is an SSE ordering barrier: by the time it is
       // observed, every notification this exchange raised is already in
@@ -383,7 +379,7 @@ describe("bot-to-bot coordination is recorded, not announced", () => {
         "POST",
         "/api/internal/ask-bot",
         { fromBotId: asker.id, toBotId: peer.id, message: "Vellum, is the branch green?" },
-        { authorization: `Bearer ${commsToken}` },
+        await capability(asker.id, asker.threadId),
       );
       expect(asked.status).toBe(200);
       expect((await botState(peer.id))?.unread).toBeFalsy();
@@ -423,7 +419,7 @@ describe("bot-to-bot coordination is recorded, not announced", () => {
         "POST",
         "/api/internal/ask-bot",
         { fromBotId: asker.id, toBotId: peer.id, message: "Folio, still there?" },
-        { authorization: `Bearer ${commsToken}` },
+        await capability(asker.id, asker.threadId),
       );
       expect(asked.status).toBe(200);
       expect(asked.body.text).toContain("couldn't start");
@@ -448,6 +444,46 @@ describe("bot-to-bot coordination is recorded, not announced", () => {
     }
   }, 45_000);
 
+  it("buzzes when a bot stops to ask whether it may contact a teammate", async () => {
+    const asker = await createBot("Nib", "quick");
+    const peer = await createBot("Dot", "quick");
+    // the one gate a person switches on for a bot's peer comms — the card it
+    // raises is the one bot-to-bot event that genuinely blocks on them
+    expect((await api("PATCH", `/api/bots/${asker.id}`, { approvePeerComms: true })).status).toBe(200);
+    const stream = await openSse(`${base}/api/events`);
+    const asking = api(
+      "POST",
+      "/api/internal/ask-bot",
+      { fromBotId: asker.id, toBotId: peer.id, message: "Dot, can you take the deploy?" },
+      await capability(asker.id, asker.threadId),
+    );
+    try {
+      const frame = await stream.until(
+        (candidate) => candidate.kind === "notify" && candidate.notification?.botId === asker.id,
+        20_000,
+      );
+      expect(frame.notification).toMatchObject({
+        kind: "approval",
+        botId: asker.id,
+        threadId: asker.threadId,
+        title: "Nib needs approval",
+      });
+      expect(frame.notification.body).toContain("wants to contact @Dot");
+      // the card is really open where the banner points
+      const card = (await botState(asker.id))?.messages.findLast(
+        (message: { kind: string; card?: { requestId?: string; tool?: string } }) => message.kind === "options" && Boolean(message.card?.requestId),
+      );
+      expect(card?.card?.tool).toBe("ask_bot");
+      const denied = await api("POST", `/api/bots/${asker.id}/respond`, { requestId: card.card.requestId, behavior: "deny" });
+      expect(denied.status).toBe(200);
+      expect((await asking).body).toMatchObject({ error: "denied by user" });
+    } finally {
+      stream.close();
+      await asking.catch(() => undefined);
+      await cleanup([], [asker.id, peer.id]);
+    }
+  }, 45_000);
+
   it("still buzzes when a peer's turn stops to ask the person a question", async () => {
     const asker = await createBot("Quill", "quick");
     const peer = await createBot("Sage", "curious", "fake-model");
@@ -458,7 +494,7 @@ describe("bot-to-bot coordination is recorded, not announced", () => {
       "POST",
       "/api/internal/ask-bot",
       { fromBotId: asker.id, toBotId: peer.id, message: "Sage, which colour?" },
-      { authorization: `Bearer ${commsToken}` },
+      await capability(asker.id, asker.threadId),
     );
     try {
       const frame = await stream.until(

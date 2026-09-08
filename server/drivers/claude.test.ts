@@ -11,13 +11,14 @@ import { connect, createServer as createNetServer, type Socket } from "node:net"
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ensureDirs, NATIVE_DIR } from "../config.ts";
 import type { ProviderInstance } from "../contracts.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { brokerSocketCandidates, ClaudeDriver, createPermissionBroker, permissionSocketPath, type ClaudeConfig } from "./claude.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
+import * as procs from "../procs.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-claude-cli.ts");
 
@@ -119,7 +120,7 @@ describe("ClaudeDriver.decodeConfig", () => {
     expect(permissionSocketPath("t-perm-dup-1")).not.toBe(permissionSocketPath("t-perm-dup-2"));
   });
 
-  it("does not advertise or accept local CUA in bypassPermissions mode", async () => {
+  it("advertises per-bot local CUA but rejects legacy bypass turns without a mode", async () => {
     const bypass = await ClaudeDriver.create({
       instanceId: "claude-bypass",
       displayName: "Claude Bypass",
@@ -127,7 +128,7 @@ describe("ClaudeDriver.decodeConfig", () => {
       enabled: true,
       config: { cli: FAKE_CLI, permissionMode: "bypassPermissions" },
     });
-    expect(bypass.adapter.capabilities.localComputerMcp).toBe(false);
+    expect(bypass.adapter.capabilities.localComputerMcp).toBe(true);
     await expect(
       bypass.adapter.sendTurn({
         threadId: "t-bypass-local",
@@ -332,6 +333,25 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect((settled[0] as any).text).toBe("hello from fake claude");
   });
 
+  it("turns a signed-out CLI into a setup error, not a bot reply", async () => {
+    // issue #674: the CLI answers a signed-out turn with "Please run /login",
+    // a command this app has no terminal to run. Relaying it as assistant
+    // text left the user in a dead end; `setup: true` is what the chat reads
+    // to offer the sign-in card instead.
+    await create("not-logged-in");
+    await instance.adapter.sendTurn({ threadId: "t-auth", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const failure = recorder.events.find((e: any) => e.type === "runtime.error") as any;
+    expect(failure).toMatchObject({ message: "Not logged in \u00b7 Please run /login", setup: true });
+    // the CLI's instruction must not also land as something the bot said
+    expect(recorder.events.some((e: any) => e.type === "item.completed" && e.itemType === "assistant_text")).toBe(false);
+    expect(recorder.events.some((e: any) => e.type === "content.delta")).toBe(false);
+    // the same vocabulary codex and the ACP engines settle an unauthenticated
+    // turn with — not the CLI's "stop_sequence", which says nothing
+    expect(recorder.events.at(-1)).toMatchObject({ type: "turn.completed", ok: false, stopReason: "auth_required" });
+  });
+
   it("keeps user and system prompts off argv and strips identity env vars", async () => {
     await create();
     const dump = join(scratch, "dump.json");
@@ -360,6 +380,57 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.env.XAI_API_KEY).toBeUndefined();
     expect(seen.env.BOX_TOKEN).toBeUndefined();
     expect(seen.env.OMB_TTS_KEY).toBeUndefined();
+  });
+
+  it("per-bot Ask restores the broker on a legacy bypass instance", async () => {
+    await create(undefined, {}, { permissionMode: "bypassPermissions" });
+    const dump = join(scratch, "ask-overrides-bypass.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-ask-overrides-bypass",
+      text: "go",
+      approvalMode: "ask",
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv).toContain("--permission-mode");
+    expect(seen.argv[seen.argv.indexOf("--permission-mode") + 1]).toBe("default");
+    expect(seen.argv).toContain("--permission-prompt-tool");
+  });
+
+  it("reapplies Full, Auto, and Ask on the same resumed conversation", async () => {
+    await create(undefined, {}, { permissionMode: "bypassPermissions" });
+    const dump = join(scratch, "approval-transitions.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    for (const [approvalMode, nativeMode] of [["full", "bypassPermissions"], ["auto", "auto"], ["ask", "default"]] as const) {
+      const { turnId } = await instance.adapter.sendTurn({
+        threadId: "t-mode-transitions",
+        text: "hello",
+        approvalMode,
+        resumeCursor: "11111111-1111-4111-8111-111111111111",
+      });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      const seen = JSON.parse(readFileSync(dump, "utf8"));
+      expect(seen.argv[seen.argv.indexOf("--permission-mode") + 1]).toBe(nativeMode);
+      expect(seen.argv.includes("--permission-prompt-tool")).toBe(approvalMode !== "full");
+      expect(seen.argv).toContain("--resume");
+    }
+  });
+
+  it("keeps questions answerable in per-bot Full access", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-full-question", text: "go", approvalMode: "full" });
+    const conn = await connectSocket(permissionSocketPath("t-full-question"));
+    try {
+      conn.write(JSON.stringify({ t: "ask", kind: "question", id: "full-question", tool: "ask_user", input: { question: "Which account?" } }) + "\n");
+      const opened = await recorder.until((e) => e.type === "request.opened");
+      expect(opened).toMatchObject({ requestType: "question" });
+      expect(await instance.adapter.respondToRequest("t-full-question", (opened as { requestId: string }).requestId, { behavior: "answer", message: "Work" })).toBe("answered");
+    } finally {
+      conn.destroy();
+    }
   });
 
   it("sends attached images as native blocks before text without logging their bytes", async () => {
@@ -783,6 +854,60 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(false);
   });
 
+  it.each([false, true])("refuses steering and retires approvals after interrupt before process exit (retained=%s)", async (retained) => {
+    const finishGate = join(scratch, "finish-gate");
+    const dump = join(scratch, "interrupt-dump.json");
+    await create("slow", { FAKE_CLAUDE_SLOW_FINISH_GATE: finishGate, FAKE_CLAUDE_DUMP: dump });
+    const threadId = `t-stop-steer-${retained ? "retained" : "fresh"}`;
+    if (retained) {
+      writeFileSync(finishGate, "finish");
+      const first = await instance.adapter.sendTurn({ threadId, text: "first" });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === first.turnId);
+      rmSync(finishGate);
+    }
+    const running = await instance.adapter.sendTurn({ threadId, text: "stop this turn" });
+    await recorder.until((e) => e.type === "item.completed" && e.itemType === "tool" && e.turnId === running.turnId);
+    const stoppedPid = JSON.parse(readFileSync(dump, "utf8")).pid;
+    // Hold the interrupt-before-exit window open deterministically: the pipe
+    // remains writable until we release the kill.
+    const conn = await connectSocket(permissionSocketPath(threadId));
+    const nextAnswer = answerQueue(conn);
+    const kill = procs.killCliTree;
+    const delayedKill = vi.spyOn(procs, "killCliTree").mockImplementation(async () => false);
+    try {
+      const pendingAnswer = nextAnswer();
+      conn.write(JSON.stringify({ t: "ask", id: "before-stop", tool: "Bash", input: { command: "sleep 60" } }) + "\n");
+      await recorder.until((e) => e.type === "request.opened" && e.requestId === "before-stop");
+      const openedBefore = recorder.events.filter((e) => e.type === "request.opened").length;
+      await instance.adapter.interruptTurn(threadId);
+      expect(instance.adapter.hasSession(threadId)).toBe(true);
+      await expect(instance.adapter.steer!(threadId, "replacement")).resolves.toBe(false);
+      expect(recorder.events).toContainEqual(expect.objectContaining({
+        type: "request.resolved", requestId: "before-stop", behavior: "deny", source: "system",
+      }));
+      await expect(pendingAnswer).resolves.toMatchObject({ id: "before-stop", behavior: "deny" });
+      const lateAnswer = nextAnswer();
+      conn.write(JSON.stringify({ t: "ask", id: "after-stop", tool: "Bash", input: { command: "echo too late" } }) + "\n");
+      await expect(lateAnswer).resolves.toMatchObject({ id: "after-stop", behavior: "deny", message: "OpenMausBot: the turn ended" });
+      expect(recorder.events.filter((e) => e.type === "request.opened")).toHaveLength(openedBefore);
+      await expect(instance.adapter.respondToRequest(threadId, "after-stop", { behavior: "allow" })).resolves.toBe("unavailable");
+    } finally {
+      conn.destroy();
+      const children = delayedKill.mock.calls.map(([child]) => child);
+      delayedKill.mockRestore();
+      for (const child of children) kill(child);
+    }
+    await recorder.until((e) => e.type === "turn.completed" && e.turnId === running.turnId);
+
+    writeFileSync(finishGate, "finish");
+    const replacement = await instance.adapter.sendTurn({ threadId, text: "replacement" });
+    await recorder.until((e) => e.type === "turn.completed" && e.turnId === replacement.turnId);
+    expect(JSON.parse(readFileSync(dump, "utf8")).pid).not.toBe(stoppedPid);
+    expect(recorder.events).toContainEqual(expect.objectContaining({
+      type: "item.completed", turnId: replacement.turnId, text: "reply to: replacement",
+    }));
+  });
+
   it("a message sent mid-turn is steered into the running turn", async () => {
     await create("slow");
     const { turnId } = await instance.adapter.sendTurn({ threadId: "t-steer", text: "first" });
@@ -1002,10 +1127,11 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   });
 
   it("brokers a permission ask into request.opened and answers over the socket", async () => {
-    await create("hang");
+    await create("hang", {}, { permissionMode: "bypassPermissions" });
     await instance.adapter.sendTurn({
       threadId: "t-perm-abc",
       text: "go",
+      approvalMode: "ask",
       integrations: {
         localComputer: {
           command: "/cua-driver",
@@ -1289,24 +1415,20 @@ describe("ClaudeDriver turns (fake CLI)", () => {
 
     // Same connection stays open across the turn ending — the exact
     // condition that let a still-alive child raise an unanswerable card.
-    const conn = connect(permissionSocketPath("t-perm-late"));
-    await new Promise<void>((resolve, reject) => {
-      conn.on("connect", resolve);
-      conn.on("error", reject);
-    });
+    const conn = await connectSocket(permissionSocketPath("t-perm-late"));
+    const nextAnswer = answerQueue(conn);
+    const initialReply = nextAnswer();
+    conn.write(JSON.stringify({ t: "ask", id: "ask-ready", tool: "Bash", input: { command: "echo ready" } }) + "\n");
+    // Windows can signal client connect before the server accepts the pipe.
+    // Prove the broker owns this connection before closing its listener.
+    await recorder.until((e) => e.type === "request.opened" && e.requestId === "ask-ready");
 
     await instance.adapter.interruptTurn("t-perm-late");
+    await expect(initialReply).resolves.toMatchObject({ id: "ask-ready", behavior: "deny" });
     await recorder.until((e) => e.type === "turn.completed");
 
     const opensBefore = recorder.events.filter((e) => e.type === "request.opened").length;
-    const reply = new Promise<{ id: string; behavior: string; message?: string }>((resolve) => {
-      let buf = "";
-      conn.on("data", (c) => {
-        buf += c;
-        const nl = buf.indexOf("\n");
-        if (nl !== -1) resolve(JSON.parse(buf.slice(0, nl)));
-      });
-    });
+    const reply = nextAnswer();
     conn.write(JSON.stringify({ t: "ask", id: "ask-late", tool: "Bash", input: { command: "rm -rf /" } }) + "\n");
 
     // A dead card is a request.opened with no way to ever answer it — assert
@@ -1332,24 +1454,19 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await instance.adapter.sendTurn({ threadId: "t-question-late", text: "go" });
     await recorder.until((e) => e.type === "session.started");
 
-    const conn = connect(permissionSocketPath("t-question-late"));
-    await new Promise<void>((resolve, reject) => {
-      conn.on("connect", resolve);
-      conn.on("error", reject);
-    });
+    const conn = await connectSocket(permissionSocketPath("t-question-late"));
+    const nextAnswer = answerQueue(conn);
+    const initialReply = nextAnswer();
+    conn.write(JSON.stringify({ t: "ask", kind: "question", id: "q-ready", tool: "ask_user", input: { question: "ready?" } }) + "\n");
+    // Wait for server-side acceptance, not only the named-pipe connect event.
+    await recorder.until((e) => e.type === "request.opened" && e.requestId === "q-ready");
 
     await instance.adapter.interruptTurn("t-question-late");
+    await expect(initialReply).resolves.toMatchObject({ id: "q-ready", behavior: "answer" });
     await recorder.until((e) => e.type === "turn.completed");
 
     const opensBefore = recorder.events.filter((e) => e.type === "request.opened").length;
-    const reply = new Promise<{ id: string; behavior: string; message?: string }>((resolve) => {
-      let buf = "";
-      conn.on("data", (c) => {
-        buf += c;
-        const nl = buf.indexOf("\n");
-        if (nl !== -1) resolve(JSON.parse(buf.slice(0, nl)));
-      });
-    });
+    const reply = nextAnswer();
     conn.write(JSON.stringify({ t: "ask", kind: "question", id: "q-late", tool: "ask_user", input: { question: "still there?" } }) + "\n");
 
     expect(await reply).toMatchObject({

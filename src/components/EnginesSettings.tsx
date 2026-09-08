@@ -13,6 +13,7 @@ import { EngineToggle } from "./EngineToggle";
 import { ProviderMark } from "./ProviderIcons";
 import { splitEngineRail } from "@/lib/engine-rail";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 
 interface ProbeResult {
   ok: boolean;
@@ -115,11 +116,11 @@ function CustomPicker({ instance, cliDefault, onClose, onSaved }: {
               setSelected(e.target.value);
               setManual("");
             }}
-            aria-label={`${instance.displayName} detected CLI`}
+            aria-label={t("engines.detectedAria", { name: instance.displayName })}
             disabled={busy}
             className="w-full appearance-none rounded-lg border border-hairline/40 bg-inset px-3 py-2 pr-8 font-mono text-[12px] text-ink focus:border-hairline focus:outline-none disabled:opacity-50"
           >
-            <option value="">Select a detected binary…</option>
+            <option value="">{t("engines.selectBinary")}</option>
             {candidates.map((p) => (
               <option key={p} value={p}>{p}</option>
             ))}
@@ -137,8 +138,8 @@ function CustomPicker({ instance, cliDefault, onClose, onSaved }: {
           if (!value || !dirty) return; // nothing to save — same hint the disabled button gives
           save();
         }}
-        placeholder={candidates?.length ? "Enter path manually…" : "/absolute/path/to/cli"}
-        aria-label={`${instance.displayName} custom CLI path`}
+        placeholder={candidates?.length ? t("engines.manualPath") : "/absolute/path/to/cli"}
+        aria-label={t("engines.customAria", { name: instance.displayName })}
         spellCheck={false}
         disabled={busy}
         className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 font-mono text-[12px] text-ink placeholder:font-sans placeholder:text-ink-secondary focus:border-hairline focus:outline-none disabled:opacity-50"
@@ -146,14 +147,11 @@ function CustomPicker({ instance, cliDefault, onClose, onSaved }: {
       {probe && !probe.ok && probe.message && (
         <div role="alert" className="flex gap-1.5 rounded-lg border border-warning/25 bg-warning/10 px-2.5 py-2 text-[12px] leading-relaxed text-warning">
           <TriangleAlert size={13} className="mt-0.5 shrink-0" />
-          <span>
-            Test failed — {probe.message}
-            {" "}Register this path anyway?
-          </span>
+          <span>{t("engines.testFailed", { message: probe.message })}</span>
         </div>
       )}
       {probe?.ok && probe.version && (
-        <div className="text-[12px] text-success">Test passed — {probe.version}</div>
+        <div className="text-[12px] text-success">{t("engines.testPassed", { version: probe.version })}</div>
       )}
       {error && <div role="alert" className="text-[12px] text-danger">{error}</div>}
       <div className="flex justify-end gap-2">
@@ -162,7 +160,7 @@ function CustomPicker({ instance, cliDefault, onClose, onSaved }: {
           disabled={busy}
           className="rounded-lg px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-raised/50 hover:text-ink disabled:opacity-50"
         >
-          Cancel
+          {t("common.cancel")}
         </button>
         {probe && !probe.ok ? (
           <>
@@ -171,14 +169,14 @@ function CustomPicker({ instance, cliDefault, onClose, onSaved }: {
               disabled={busy}
               className="rounded-lg px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-raised/50 hover:text-ink disabled:opacity-50"
             >
-              Edit path
+              {t("engines.editPath")}
             </button>
             <button
               onClick={() => persist()}
               disabled={busy}
               className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-danger hover:bg-raised-hover disabled:opacity-50"
             >
-              {saving ? <Loader2 size={13} className="animate-spin" /> : "Save anyway"}
+              {saving ? <Loader2 size={13} className="animate-spin" /> : t("engines.saveAnyway")}
             </button>
           </>
         ) : (
@@ -191,7 +189,7 @@ function CustomPicker({ instance, cliDefault, onClose, onSaved }: {
               "disabled:cursor-not-allowed disabled:opacity-50",
             )}
           >
-            {busy ? <Loader2 size={13} className="animate-spin" /> : <><Check size={13} />Save</>}
+            {busy ? <Loader2 size={13} className="animate-spin" /> : <><Check size={13} />{t("common.save")}</>}
           </button>
         )}
       </div>
@@ -309,7 +307,7 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
             className="flex shrink-0 items-center gap-1 text-[11.5px] text-ink-secondary hover:text-ink disabled:opacity-50"
           >
             {updating ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-            {updating ? "Updating…" : "Update Claude"}
+            {updating ? t("engines.updating") : t("engines.updateClaude")}
           </button>
         )}
         <EngineToggle
@@ -324,7 +322,7 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
             disabled={switching || updating}
             className="shrink-0 text-[11.5px] text-ink-secondary hover:text-ink disabled:opacity-50"
           >
-            {switching ? "Resetting…" : "Reset"}
+            {switching ? t("engines.resetting") : t("engines.reset")}
           </button>
         )}
         <button
@@ -338,11 +336,11 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
             (!enabled || switching) && "cursor-not-allowed opacity-40",
           )}
         >
-          Set CLI…
+          {t("engines.setCli")}
         </button>
       </div>
       {updatedVersion && (
-        <div role="status" className="mt-1 text-[12px] text-success">Claude updated — {updatedVersion}</div>
+        <div role="status" className="mt-1 text-[12px] text-success">{t("engines.claudeUpdated", { version: updatedVersion })}</div>
       )}
       {error && <div role="alert" className="mt-1 text-[12px] text-danger">{error}</div>}
       {open && enabled && (
@@ -367,17 +365,17 @@ export function EnginesSettings() {
   return (
     <div className="flex flex-col gap-5">
       {rows.length === 0 && (
-        <div className="text-[13px] text-ink-secondary">No CLI engines detected yet.</div>
+        <div className="text-[13px] text-ink-secondary">{t("engines.none")}</div>
       )}
       {(() => {
         const { subscription, custom } = splitEngineRail(rows);
         return (
           <>
-            {subscription.length > 0 && <EngineGroupLabel>Cloud</EngineGroupLabel>}
+            {subscription.length > 0 && <EngineGroupLabel>{t("engines.cloud")}</EngineGroupLabel>}
             {subscription.map((i) => (
               <EngineRow key={i.instanceId} instance={i} />
             ))}
-            {custom.length > 0 && <EngineGroupLabel className="pt-1">Local</EngineGroupLabel>}
+            {custom.length > 0 && <EngineGroupLabel className="pt-1">{t("engines.local")}</EngineGroupLabel>}
             {custom.map((i) => (
               <EngineRow key={i.instanceId} instance={i} />
             ))}

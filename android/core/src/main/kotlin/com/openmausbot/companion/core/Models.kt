@@ -206,7 +206,17 @@ object MessageRoleSerializer : KSerializer<Message.Role> {
 }
 
 @Serializable
-data class ModelSelection(val instanceId: String, val model: String)
+data class ModelSelection(
+    val instanceId: String,
+    val model: String,
+    /**
+     * Optional reasoning effort passed through to engines that support it.
+     * Older computers omit this field, which means the engine default — and a
+     * null here is *omitted* on the wire, never sent as `null`, so an old
+     * server's validator does not see a field it does not know.
+     */
+    val effort: String? = null,
+)
 
 @Serializable
 data class BotTask(val threadId: String, val title: String, val createdAt: Double)
@@ -231,6 +241,8 @@ data class Bot(
     /** Desktop sidebar section. Missing or blank means the built-in Bots area. */
     val section: String? = null,
     val chiefOfStaff: Boolean? = null,
+    /** ask, auto, full, or custom; null when paired to an older harness. */
+    val approvalMode: String? = null,
     val autoApprove: Boolean? = null,
     val alwaysAllow: List<String>? = null,
     val computer: String? = null,
@@ -528,9 +540,14 @@ data class Instance(
     val id: String get() = instanceId
 }
 
+/**
+ * The small, phone-safe part of an engine's capabilities. Missing capabilities
+ * or effort levels mean the engine offers no reasoning control.
+ */
 @Serializable
 data class InstanceCapabilities(
     val images: Boolean? = null,
+    val effortLevels: List<String>? = null,
     /**
      * The engine can take a message into a turn that is already running.
      * Engines without it hold mid-turn sends until the turn settles, which is
@@ -995,3 +1012,18 @@ internal data class RoutineRunResponse(val run: RoutineRun)
 
 @Serializable
 internal data class ConnectorAuthorizationResponse(val url: String)
+
+@Serializable
+data class BotOverviewWho(val name: String, val title: String, val blurb: String, val soulLead: String)
+
+@Serializable
+data class BotOverviewRecent(val at: Double, val summary: String)
+
+@Serializable
+data class BotOverview(
+    val who: BotOverviewWho,
+    val does: List<String> = emptyList(),
+    val reaches: List<String> = emptyList(),
+    val wont: List<String> = emptyList(),
+    val recent: List<BotOverviewRecent> = emptyList(),
+)

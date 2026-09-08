@@ -549,7 +549,10 @@ export async function mcpIntegration(
       OMB_CONNECTOR_UPSTREAM_URL: `${context.harnessUrl}/api/internal/connectors/mcp`,
       OMB_CONNECTOR_UPSTREAM_HEADERS: JSON.stringify({ authorization: `Bearer ${context.commsToken}` }),
       OMB_HARNESS_URL: context.harnessUrl,
-      OMB_COMMS_TOKEN: context.commsToken,
+      // Distinct from the agents proxy token: Codex flattens mounted MCP env
+      // variables into one process environment, so a shared name would let
+      // the later agents mount overwrite this connector-scoped capability.
+      OMB_CONNECTOR_TOKEN: context.commsToken,
       OMB_BOT_ID: context.botId,
       OMB_THREAD_ID: context.threadId,
     },
@@ -1026,30 +1029,48 @@ export async function listToolkits(cfg: AppConfig): Promise<{ cards: ToolkitCard
   }
   if (backendKey || broker) {
     try {
-      const res = backendKey
-        ? await fetch(`${toolkitBase()}/toolkits?limit=500&sort_by=usage`, {
-            headers: { "x-api-key": backendKey },
-            signal: AbortSignal.timeout(15_000),
-          })
-        : await brokerRequest("/v1/catalog", { signal: AbortSignal.timeout(15_000) });
-      if (res.ok) {
+      // The marketplace runs to well over a thousand toolkits and the endpoint
+      // is cursor-paginated, so one page stops partway through the alphabet.
+      // Follow next_cursor, and keep the pages already collected if a later
+      // one fails — a partial catalog still beats the curated two dozen.
+      const items: any[] = [];
+      const seenCursors = new Set<string>();
+      let cursor: string | undefined;
+      for (let page = 0; page < MAX_CONNECTED_ACCOUNT_PAGES; page += 1) {
+        const params = new URLSearchParams({ limit: "500", sort_by: "usage" });
+        if (cursor) params.set("cursor", cursor);
+        const res = backendKey
+          ? await fetch(`${toolkitBase()}/toolkits?${params}`, {
+              headers: { "x-api-key": backendKey },
+              signal: AbortSignal.timeout(15_000),
+            })
+          : await brokerRequest(cursor ? `/v1/catalog?cursor=${encodeURIComponent(cursor)}` : "/v1/catalog", {
+              signal: AbortSignal.timeout(15_000),
+            });
+        if (!res.ok) break;
         const json: any = await res.json();
-        const items = json.items ?? json.data ?? [];
-        if (Array.isArray(items) && items.length) {
-          const cards: ToolkitCard[] = items.map((t: any) => ({
-            slug: canonicalToolkitSlug(String(t.slug ?? t.key ?? t.name ?? "")),
-            label: t.name ?? t.slug ?? "",
-            blurb: (t.meta?.description ?? t.description ?? "").slice(0, 90),
-            logo: t.meta?.logo ?? t.logo ?? null,
-            noAuth: t.no_auth === true,
-            domain: null,
-          }));
-          const uniqueCards = cards.filter(
-            (card, index) => card.slug && cards.findIndex((candidate) => candidate.slug === card.slug) === index,
-          );
-          toolkitCache = { at: Date.now(), cards: uniqueCards, identity: identity! };
-          return { cards: uniqueCards, source: "api" };
-        }
+        const pageItems = json.items ?? json.data ?? [];
+        if (!Array.isArray(pageItems)) break;
+        items.push(...pageItems);
+        const next = typeof json.next_cursor === "string" ? json.next_cursor.trim() : "";
+        if (!next || seenCursors.has(next)) break;
+        seenCursors.add(next);
+        cursor = next;
+      }
+      if (items.length) {
+        const cards: ToolkitCard[] = items.map((t: any) => ({
+          slug: canonicalToolkitSlug(String(t.slug ?? t.key ?? t.name ?? "")),
+          label: t.name ?? t.slug ?? "",
+          blurb: (t.meta?.description ?? t.description ?? "").slice(0, 90),
+          logo: t.meta?.logo ?? t.logo ?? null,
+          noAuth: t.no_auth === true,
+          domain: null,
+        }));
+        const uniqueCards = cards.filter(
+          (card, index) => card.slug && cards.findIndex((candidate) => candidate.slug === card.slug) === index,
+        );
+        toolkitCache = { at: Date.now(), cards: uniqueCards, identity: identity! };
+        return { cards: uniqueCards, source: "api" };
       }
     } catch {
       /* fall through to curated */

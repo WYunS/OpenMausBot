@@ -15,6 +15,7 @@ describe("package export", () => {
           name: "Lead",
           title: "Chief",
           description: "Coordinates",
+          soul: "Preserve the mission.\n",
           notifications: true,
           color: "purple",
           unread: false,
@@ -23,6 +24,7 @@ describe("package export", () => {
           chiefOfStaff: true,
           composio: true,
           cwd: "/private/path",
+          approvalMode: "full",
           autoApprove: true,
           alwaysAllow: ["everything"],
           installedPackage: {
@@ -100,6 +102,7 @@ describe("package export", () => {
       ],
     });
     expect(exported.package.routines).toHaveLength(2);
+    expect(exported.package.agents[0].soul).toBe("Preserve the mission.\n");
     expect(exported.package.routines?.[1]?.schedule).toEqual({
       type: "interval",
       everyMinutes: 15,
@@ -120,7 +123,7 @@ describe("package export", () => {
         playbooks: [{ key: "launch" }],
       },
     });
-    expect(JSON.stringify(exported)).not.toMatch(/private-id|private-thread|private-engine|secret-model|secret-session|private\/path|private-attachment|autoApprove|alwaysAllow|nextRunAt/);
+    expect(JSON.stringify(exported)).not.toMatch(/private-id|private-thread|private-engine|secret-model|secret-session|private\/path|private-attachment|approvalMode|autoApprove|alwaysAllow|nextRunAt/);
   });
 
   it("shares one identical playbook definition across multiple bots", () => {

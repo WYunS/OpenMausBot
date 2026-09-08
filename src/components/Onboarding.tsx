@@ -8,10 +8,11 @@ import { ProviderMark } from "./ProviderIcons";
 import { PhoneSetupFlow } from "./PhoneSetupFlow";
 import type { InstanceInfo } from "@/state/store";
 import { useRuijieAccount } from "@/state/ruijie-account";
+import { t } from "@/lib/i18n";
 
 // First-run onboarding: who you are (email), what's installed (live engine
 // checks from the harness), what the app may use (TCC), then an optional
-// phone setup that can always be resumed from Settings → Phone.
+// phone setup that can always be resumed from Settings → Remote access.
 // Every check is skippable — onboarding must never brick the app.
 
 type InstanceRow = InstanceInfo;
@@ -173,8 +174,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       label: instance.displayName,
       readyNote:
         instance.access === "custom"
-          ? "Installed — ready for a local model."
-          : "Installed — ready to power bots.",
+          ? t("onboarding.engines.readyLocal")
+          : t("onboarding.engines.readyCloud"),
     }));
   const readyEngines = engines.filter((e) => engineReady(e.instance));
   const setupEngines = engines.filter((e) => !engineReady(e.instance));
@@ -211,20 +212,20 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
 
         {step === 1 && (
           <div className="flex min-h-0 flex-col">
-            <h1 className="text-[18px] font-semibold text-ink">Your engines</h1>
+            <h1 className="text-[18px] font-semibold text-ink">{t("onboarding.engines.title")}</h1>
             <p className="mt-1 text-[13.5px] text-ink-secondary">
-              Bots run on AI tools installed on this computer — here&rsquo;s what we found.
+              {t("onboarding.engines.intro")}
             </p>
             <div className="mt-4 flex min-h-0 flex-col gap-2.5 overflow-y-auto pr-1 [scrollbar-width:thin]">
               {!instances ? (
                 <div className="flex items-center gap-2 py-6 text-ink-secondary">
-                  <Loader2 size={16} className="animate-spin" /> Checking…
+                  <Loader2 size={16} className="animate-spin" /> {t("common.checking")}
                 </div>
               ) : (
                 <>
                   {readyEngines.length > 0 && (
                     <>
-                      <div className="text-[11.5px] font-medium uppercase tracking-wide text-ink-secondary">Ready</div>
+                      <div className="text-[11.5px] font-medium uppercase tracking-wide text-ink-secondary">{t("onboarding.engines.ready")}</div>
                       <div className="grid grid-cols-2 gap-2.5">
                         {readyEngines.map((e) => (
                           <ReadyTile key={e.label} {...e} />
@@ -235,7 +236,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                   {setupEngines.length > 0 && (
                     <>
                       <div className={`text-[11.5px] font-medium uppercase tracking-wide text-ink-secondary ${readyEngines.length ? "mt-2" : ""}`}>
-                        Needs setup
+                        {t("onboarding.engines.needsSetup")}
                       </div>
                       {setupEngines.map((e) => (
                         <SetupRow key={e.label} {...e} />
@@ -249,25 +250,25 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               onClick={() => setStep(capabilities.dictation.available ? 2 : 3)}
               className="mt-5 w-full shrink-0 rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white"
             >
-              Continue
+              {t("onboarding.continue")}
             </button>
           </div>
         )}
 
         {step === 2 && (
           <div className="flex flex-col">
-            <h1 className="text-[18px] font-semibold text-ink">Permissions</h1>
+            <h1 className="text-[18px] font-semibold text-ink">{t("onboarding.perms.title")}</h1>
             <p className="mt-1 text-[13.5px] text-ink-secondary">
-              Optional, and only ever used when you ask for the feature.
+              {t("onboarding.perms.intro")}
             </p>
             <div className="mt-4 flex flex-col gap-2.5">
               <div className="flex items-center justify-between gap-3 rounded-xl bg-card p-3.5">
                 <div className="flex items-start gap-3">
                   <Mic size={18} className="mt-0.5 shrink-0 text-ink-secondary" />
                   <div>
-                    <div className="text-[14px] font-medium text-ink">Microphone & speech</div>
+                    <div className="text-[14px] font-medium text-ink">{t("onboarding.perms.mic")}</div>
                     <div className="mt-0.5 text-[12.5px] text-ink-secondary">
-                      Voice dictation into the composer, transcribed on-device.
+                      {t("onboarding.perms.micDetail")}
                     </div>
                   </div>
                 </div>
@@ -278,7 +279,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                     onClick={() => window.ogb?.permOpenSettings?.("mic")}
                     className="shrink-0 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
                   >
-                    Open Settings
+                    {t("onboarding.perms.openSettings")}
                   </button>
                 ) : (
                   <button
@@ -287,7 +288,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                     }
                     className="shrink-0 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
                   >
-                    Enable
+                    {t("onboarding.perms.enable")}
                   </button>
                 )}
               </div>
@@ -298,10 +299,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                   which is the moment the user has context for the dialog. */}
             </div>
             <button onClick={() => setStep(3)} className="mt-5 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white">
-              Continue
+              {t("onboarding.continue")}
             </button>
             <button onClick={() => setStep(3)} className="mt-3 text-[12px] text-ink-secondary hover:text-ink">
-              Skip for now
+              {t("onboarding.skip")}
             </button>
           </div>
         )}

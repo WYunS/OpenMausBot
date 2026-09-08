@@ -31,6 +31,7 @@ const calls: Array<{
 }> = [];
 let malformedConnectedAccounts = false;
 let connectedAccountsUnavailable = false;
+let emptyConnectedAccounts = false;
 // The project's own auth configs, and the ones the stub Session was created
 // with — a Session only knows the configs named at its creation, which is
 // the whole reason #509 happened.
@@ -92,7 +93,7 @@ beforeAll(async () => {
     }
 
     const apiKey = String(req.headers["x-api-key"] ?? "");
-    if (!["ak_test", "ak_catalog_a", "ak_catalog_b"].includes(apiKey)) {
+    if (!["ak_test", "ak_catalog_a", "ak_catalog_b", "ak_catalog_pages", "ak_catalog_partial", "ak_catalog_stuck"].includes(apiKey)) {
       res.writeHead(401, { "content-type": "application/json" });
       return res.end(JSON.stringify({ error: { message: "invalid project key" } }));
     }
@@ -104,6 +105,37 @@ beforeAll(async () => {
         session_id: "trs_test",
         mcp: { type: "http", url: "https://app.composio.dev/tool_router/v3/trs_test/mcp" },
         config: { user_id: body.user_id, multi_account: body.multi_account, auth_configs: sessionAuthConfigs },
+      }));
+    }
+    if (
+      req.method === "GET" && url.pathname === "/api/v3/toolkits"
+      && (apiKey === "ak_catalog_pages" || apiKey === "ak_catalog_partial" || apiKey === "ak_catalog_stuck")
+    ) {
+      if (apiKey === "ak_catalog_stuck") {
+        // A broker deployed before this fix ignores the cursor and replays page one.
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ items: [{ slug: "gmail", name: "Gmail" }], next_cursor: "catalog-page-2" }));
+      }
+      // Mirrors the real marketplace: a usage-sorted head, then an alphabetical
+      // tail only a second page reaches. ak_catalog_partial loses that page.
+      if (url.searchParams.get("cursor") === "catalog-page-2") {
+        if (apiKey === "ak_catalog_partial") {
+          res.writeHead(502, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ error: "catalog page unavailable" }));
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end(JSON.stringify({
+          items: [{ slug: "deepgram", name: "Deepgram" }, { slug: "zoom", name: "Zoom" }],
+        }));
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({
+        items: [
+          { slug: "gmail", name: "Gmail" },
+          { slug: "bland_ai", name: "Bland AI" },
+          { slug: "currencyscoop", name: "CurrencyScoop" },
+        ],
+        next_cursor: "catalog-page-2",
       }));
     }
     if (req.method === "GET" && url.pathname === "/api/v3/toolkits") {
@@ -172,6 +204,7 @@ beforeAll(async () => {
       }
       res.writeHead(200, { "content-type": "application/json" });
       if (malformedConnectedAccounts) return res.end(JSON.stringify({ items: {} }));
+      if (emptyConnectedAccounts) return res.end(JSON.stringify({ items: [] }));
       if (url.searchParams.get("cursor") === "accounts-page-2") {
         return res.end(JSON.stringify({
           items: [
@@ -287,6 +320,33 @@ describe.sequential("Composio Sessions", () => {
       "ak_catalog_a",
       "ak_catalog_b",
     ]);
+  });
+
+  it("pages the marketplace catalog past the first page", async () => {
+    const before = calls.length;
+    const { cards } = await listToolkits({ composio: { apiKey: "ak_catalog_pages" } });
+
+    // "Deepgram" only exists on page two: #634 saw the catalog stop at "CurrencyScoop".
+    expect(cards.map((card) => card.slug)).toEqual(["gmail", "bland_ai", "currencyscoop", "deepgram", "zoom"]);
+    const pages = calls.slice(before).filter((call) => call.path === "/api/v3/toolkits");
+    expect(pages).toHaveLength(2);
+    expect(pages[0]?.query).not.toContain("cursor=");
+    expect(pages[1]?.query).toContain("cursor=catalog-page-2");
+  });
+
+  it("keeps the catalog pages already read when a later page fails", async () => {
+    await expect(listToolkits({ composio: { apiKey: "ak_catalog_partial" } })).resolves.toMatchObject({
+      source: "api",
+      cards: [{ slug: "gmail" }, { slug: "bland_ai" }, { slug: "currencyscoop" }],
+    });
+  });
+
+  it("stops paging a catalog endpoint that replays the same cursor", async () => {
+    const before = calls.length;
+    const { cards } = await listToolkits({ composio: { apiKey: "ak_catalog_stuck" } });
+
+    expect(cards).toEqual([expect.objectContaining({ slug: "gmail" })]);
+    expect(calls.slice(before).filter((call) => call.path === "/api/v3/toolkits")).toHaveLength(2);
   });
 
   it("drops a managed MCP session when routing switches to a user project", async () => {
@@ -621,7 +681,7 @@ describe.sequential("Composio Sessions", () => {
         OMB_CONNECTOR_UPSTREAM_URL: "http://127.0.0.1:8799/api/internal/connectors/mcp",
         OMB_CONNECTOR_UPSTREAM_HEADERS: JSON.stringify({ authorization: "Bearer secret" }),
         OMB_HARNESS_URL: "http://127.0.0.1:8799",
-        OMB_COMMS_TOKEN: "secret",
+        OMB_CONNECTOR_TOKEN: "secret",
         OMB_BOT_ID: "bot-1",
         OMB_THREAD_ID: "thread-1",
       },
@@ -770,12 +830,20 @@ describe.sequential("Composio Sessions", () => {
     const cfg: AppConfig = {
       composio: { apiKey: "ak_test", userId: "openmausbot_existing", sessionId: "trs_test" },
     };
-    const before = calls.length;
-    await expect(authorizeService(cfg, "slack", "team")).resolves.toEqual({
-      url: "https://connect.composio.dev/link/slack",
-    });
-    const linkCalls = calls.slice(before).filter((call) => call.method === "POST" && call.path.endsWith("/link"));
-    expect(linkCalls).toHaveLength(1);
-    expect(linkCalls[0].body).toEqual({ toolkit: "slack", alias: "team" });
+    emptyConnectedAccounts = true;
+    try {
+      await expect(connectionStatus(cfg, ["slack"])).resolves.toMatchObject({
+        slack: { connected: false, pending: false, accounts: [] },
+      });
+      const before = calls.length;
+      await expect(authorizeService(cfg, "slack", "team")).resolves.toEqual({
+        url: "https://connect.composio.dev/link/slack",
+      });
+      const linkCalls = calls.slice(before).filter((call) => call.method === "POST" && call.path.endsWith("/link"));
+      expect(linkCalls).toHaveLength(1);
+      expect(linkCalls[0].body).toEqual({ toolkit: "slack", alias: "team" });
+    } finally {
+      emptyConnectedAccounts = false;
+    }
   });
 });

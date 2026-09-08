@@ -46,6 +46,7 @@ import type {
 import { newEventId, newId } from "../../contracts.ts";
 import { computerProxyEnv } from "../../container-computer.ts";
 import { augmentedPath } from "../../env-path.ts";
+import { supportsApprovalMode } from "../../../shared/approval-mode.ts";
 
 // Resolved from the server root, never relative to this file: bundling inlines
 // this module two directories up, so the `".."` pair here would climb past the
@@ -264,7 +265,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
 
     async create(input: DriverCreateInput<AcpConfig>): Promise<ProviderInstance> {
       const { instanceId, config } = input;
-      const childEnv = () => {
+      const childEnv = (activeConfig = config) => {
         const env: Record<string, string | undefined> = {
           ...process.env,
           ...input.environment,
@@ -279,7 +280,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         for (const key of [...PROVIDER_CREDENTIAL_ENV, ...WORKSPACE_CREDENTIAL_ENV]) {
           if (!allowedCredentials.has(key)) delete env[key];
         }
-        support.transformEnv?.(env, config, instanceId);
+        support.transformEnv?.(env, activeConfig, instanceId);
         return env;
       };
       let models = support.models;
@@ -410,17 +411,27 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
       const sendTurn = async (turn: SendTurnInput) => {
         const { threadId } = turn;
         if (active.has(threadId)) throw new Error("a turn is already running on this thread");
+        // Provider-instance `fullAuto` predates per-bot approval levels. Every
+        // harness turn now carries the bot's mode, so Ask/Auto must explicitly
+        // put the native agent back into its interactive mode. Otherwise a
+        // legacy Grok bypassPermissions / Cursor --force / Droid auto-high /
+        // Antigravity yolo setting would silently outrank the selector. Calls
+        // that omit approvalMode retain the old adapter-level behavior for
+        // embedders and tests outside the harness.
+        const turnConfig = turn.approvalMode === undefined
+          ? config
+          : { ...config, fullAuto: turn.approvalMode === "full" && supportsApprovalMode(DRIVER_KIND, "full") };
         const controlsHost = turn.integrations?.localComputer?.scope === "local-computer";
-        if (controlsHost && config.fullAuto) {
+        if (controlsHost && turnConfig.fullAuto && turn.approvalMode !== "full") {
           throw new Error("local computer control requires interactive provider approvals");
         }
         const turnId = newId();
-        const cwd = turn.cwd ?? config.workspace ?? homedir();
-        const env = childEnv();
+        const cwd = turn.cwd ?? turnConfig.workspace ?? homedir();
+        const env = childEnv(turnConfig);
         if (
           support.requireAuthenticationBeforeSpawn
           && !skipSubscriptionAuthForLocalInject(turn.model)
-          && !(await support.isAuthenticated(env, config, instanceId))
+          && !(await support.isAuthenticated(env, turnConfig, instanceId))
         ) {
           emit({ ...base(threadId, turnId), type: "turn.started" });
           emit({ ...base(threadId, turnId), type: "runtime.error", message: support.loginNote, setup: true });
@@ -437,8 +448,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         let launch: { command: string; args?: string[]; env?: Record<string, string | undefined> };
         try {
           launch = support.resolveCommand
-            ? await support.resolveCommand(env, config, instanceId)
-            : { command: config.cli };
+            ? await support.resolveCommand(env, turnConfig, instanceId)
+            : { command: turnConfig.cli };
         } catch (error) {
           emit({ ...base(threadId, turnId), type: "turn.started" });
           emit({
@@ -451,7 +462,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           return { turnId };
         }
 
-        const child = spawnCli(launch.command, [...(launch.args ?? []), ...support.spawnArgs(config, cliTurn)], {
+        const child = spawnCli(launch.command, [...(launch.args ?? []), ...support.spawnArgs(turnConfig, cliTurn)], {
           cwd,
           env: launch.env ?? env,
           stdio: ["pipe", "pipe", "pipe"],
@@ -611,7 +622,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
 
           const toolCall = params.toolCall ?? {};
           const isQuestion = String(toolCall.toolCallId ?? "").startsWith("interaction_");
-          if (config.fullAuto && !isQuestion) {
+          if (turnConfig.fullAuto && turn.approvalMode === undefined && !isQuestion) {
             const allow = optionFor("allow");
             if (!allow) missing("allow");
             return send({
@@ -910,7 +921,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
                   request: (method, params, timeoutMs) =>
                     request(method, params, timeoutMs ?? SESSION_CONFIG_TIMEOUT),
                   sessionId,
-                  config,
+                  config: turnConfig,
                   turn: cliTurn,
                   sessionModels: Array.isArray(sessionResult?.models?.availableModels)
                     ? sessionResult.models.availableModels
@@ -1025,7 +1036,10 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             images: support.images !== false,
             nativeImageInput: support.images === true,
             effortLevels: support.effortLevels,
-            localComputerMcp: !config.fullAuto,
+            // OpenMausBot supplies a per-bot approvalMode on every harness
+            // turn, which safely overrides a legacy instance fullAuto value.
+            // Direct adapter calls that omit it still fail closed in sendTurn.
+            localComputerMcp: true,
           },
           sendTurn,
           interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),

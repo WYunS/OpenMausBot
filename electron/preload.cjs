@@ -4,8 +4,7 @@ const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 // Sandboxed preloads receive Electron's restricted `require`, which cannot
 // load sibling CommonJS files. Keep this tiny predicate inline here; main's
-// privileged process uses the shared browser-platform helper.
-const browserSurfaceSupported = process.platform === "darwin" || process.platform === "linux";
+const desktopRemoteClient = process.argv.includes("--openmausbot-remote-client");
 
 let pendingPackageInstallUrl = null;
 const packageInstallListeners = new Set();
@@ -21,7 +20,7 @@ ipcRenderer.on("package:install", (_event, url) => {
 // helpers here. Main enforces the same rule on the sensitive channels.
 const localOrigin = process.argv.find((arg) => arg.startsWith("--omb-local-origin="))?.slice("--omb-local-origin=".length) ?? null;
 const isLocalPage = !localOrigin || location.origin === localOrigin;
-const REMOTE_SAFE = new Set(["platform", "getCapabilities", "onCapabilitiesChanged", "applySkin", "setUnreadCount", "openExternal", "getPathForFile", "permStatus", "environments"]);
+const REMOTE_SAFE = new Set(["platform", "getCapabilities", "onCapabilitiesChanged", "applySkin", "setUnreadCount", "permStatus"]);
 
 const bridge = {
   /** Host platform ("darwin" | "win32" | "linux") — for platform-aware UI. */
@@ -31,6 +30,14 @@ const bridge = {
     const handler = (_event, capabilities) => cb(capabilities);
     ipcRenderer.on("desktop:capabilities-changed", handler);
     return () => ipcRenderer.removeListener("desktop:capabilities-changed", handler);
+  },
+  /** Pair this desktop app to another OpenMausBot host. The bearer remains in
+   * the main process and is never returned over this bridge. */
+  remoteClient: {
+    active: desktopRemoteClient,
+    state: () => ipcRenderer.invoke("desktop-remote:state"),
+    pair: (endpoint, code) => ipcRenderer.invoke("desktop-remote:pair", endpoint, code),
+    disconnect: () => ipcRenderer.invoke("desktop-remote:disconnect"),
   },
   /** The companion sidecar: the one part of this app that listens off the
    * machine, so it runs as its own process and is off until switched on.
@@ -61,6 +68,10 @@ const bridge = {
     state: () => ipcRenderer.invoke("ruijie-account:state"),
     signIn: () => ipcRenderer.invoke("ruijie-account:sign-in"),
     signOut: () => ipcRenderer.invoke("ruijie-account:sign-out"),
+  },
+  /** Local-only bridge for trusted approval-mode transitions. */
+  approvals: {
+    setMode: (botId, mode, options) => ipcRenderer.invoke("approvals:set-trusted-mode", botId, mode, options),
   },
   localControl: {
     status: () => ipcRenderer.invoke("cua:linux-status"),
@@ -180,33 +191,6 @@ const bridge = {
       return () => ipcRenderer.removeListener("desktop-workspace:state", handler);
     },
   },
-  /** The built-in browser: a native page view per bot that the Browser tab
-   * positions over its own rectangle. Bots drive it through their tools; the
-   * person drives it by clicking into the view. */
-  browser: browserSurfaceSupported ? {
-    available: () => ipcRenderer.invoke("browser:available"),
-    state: (botId) => ipcRenderer.invoke("browser:state", botId),
-    layout: (botId, bounds, profile, mode, layoutOwner) =>
-      ipcRenderer.invoke("browser:layout", botId, bounds, profile, mode, layoutOwner),
-    navigate: (botId, url, profile) => ipcRenderer.invoke("browser:navigate", botId, url, profile),
-    back: (botId, profile) => ipcRenderer.invoke("browser:back", botId, profile),
-    forward: (botId, profile) => ipcRenderer.invoke("browser:forward", botId, profile),
-    reload: (botId, profile) => ipcRenderer.invoke("browser:reload", botId, profile),
-    setHumanControl: (botId, held, profile) => ipcRenderer.invoke("browser:set-human-control", botId, held, profile),
-    /** Wipe a named profile's logins, storage and cache after it is deleted. */
-    forgetProfile: (partitionId) => ipcRenderer.invoke("browser:forget-profile", partitionId),
-    close: (botId) => ipcRenderer.invoke("browser:close", botId),
-    onState: (cb) => {
-      const handler = (_event, state) => cb(state);
-      ipcRenderer.on("browser:state", handler);
-      return () => ipcRenderer.removeListener("browser:state", handler);
-    },
-    onUserInteraction: (cb) => {
-      const handler = (_event, state) => cb(state);
-      ipcRenderer.on("browser:user-interaction", handler);
-      return () => ipcRenderer.removeListener("browser:user-interaction", handler);
-    },
-  } : undefined,
   /** Native folder picker for a bot's working folder; null when cancelled. */
   pickFolder: (current) => ipcRenderer.invoke("desktop:pick-folder", current),
   /** Writes the redacted diagnostics report to a user-chosen file; resolves

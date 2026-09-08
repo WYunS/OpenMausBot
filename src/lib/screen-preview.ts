@@ -1,8 +1,12 @@
+import type { LocaleKey } from "@/locales";
+
 export type ScreenPreviewFailurePhase = "cancelled" | "unavailable" | "error";
 
+// The caller keeps this in React state, so a failure carries a catalog key
+// rather than a sentence — a language switch must not freeze the message.
 export type ScreenPreviewStartResult =
   | { ok: true; stream: MediaStream }
-  | { ok: false; phase: ScreenPreviewFailurePhase; message: string };
+  | { ok: false; phase: ScreenPreviewFailurePhase; messageKey: LocaleKey };
 
 type ScreenPreviewRequest = {
   beginIntent: () => boolean;
@@ -33,7 +37,7 @@ export function requestSkillRecordingScreen({
       preview: {
         ok: false as const,
         phase: "unavailable" as const,
-        message: "Skill recording is currently available in the macOS and Windows desktop apps.",
+        messageKey: "computer.screen.unavailable",
       },
     });
   }
@@ -51,7 +55,7 @@ export function screenPreviewFailure(error: unknown): Exclude<ScreenPreviewStart
     return {
       ok: false,
       phase: "cancelled",
-      message: "Screen selection was cancelled. Nothing is being shared.",
+      messageKey: "computer.screen.cancelled",
     };
   }
   if (
@@ -63,10 +67,10 @@ export function screenPreviewFailure(error: unknown): Exclude<ScreenPreviewStart
     return {
       ok: false,
       phase: "unavailable",
-      message: "Screen preview isn't available right now.",
+      messageKey: "computer.screen.unavailableNow",
     };
   }
-  return { ok: false, phase: "error", message: "Couldn't start screen preview." };
+  return { ok: false, phase: "error", messageKey: "computer.screen.error" };
 }
 
 export async function requestScreenPreview({
@@ -80,7 +84,7 @@ export async function requestScreenPreview({
       return {
         ok: false,
         phase: "unavailable",
-        message: "Screen preview isn't available from this window.",
+        messageKey: "computer.screen.unavailableWindow",
       };
     }
     const stream = await getDisplayMedia({
@@ -94,7 +98,7 @@ export async function requestScreenPreview({
       return {
         ok: false,
         phase: "unavailable",
-        message: "The selected source did not provide a video stream.",
+        messageKey: "computer.screen.noVideoTrack",
       };
     }
     return { ok: true, stream };
