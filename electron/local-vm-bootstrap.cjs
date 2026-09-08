@@ -255,6 +255,16 @@ function createLocalVmBootstrap(options) {
       if (error?.name === "AbortError") throw error;
       machines = [];
     }
+    const existingMachine = Array.isArray(machines)
+      ? machines.find((machine) => machine?.Running === true || machine?.running === true)
+        ?? machines.find((machine) => machine?.Default === true || machine?.default === true)
+        ?? machines[0]
+      : null;
+    const existingMachineName = typeof existingMachine?.Name === "string" && existingMachine.Name.trim()
+      ? existingMachine.Name.trim()
+      : typeof existingMachine?.name === "string" && existingMachine.name.trim()
+        ? existingMachine.name.trim()
+        : null;
     if (!Array.isArray(machines) || machines.length === 0) {
       try {
         await runCommand(podman, ["machine", "init"], {
@@ -274,9 +284,10 @@ function createLocalVmBootstrap(options) {
         return false;
       }
     }
+    if (existingMachine?.Running === true || existingMachine?.running === true) return true;
     update({ stage: "runtime-start", message: "Starting Podman…", progress: 45 });
     try {
-      await runCommand(podman, ["machine", "start"], {
+      await runCommand(podman, ["machine", "start", ...(existingMachineName ? [existingMachineName] : [])], {
         signal,
         timeoutMs: 10 * 60_000,
         env: options.env,

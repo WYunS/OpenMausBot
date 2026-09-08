@@ -106,6 +106,39 @@ test("an installed stopped Podman resumes first, then starts an existing VM", as
   }
 });
 
+test("an existing named Podman machine is started by its real name instead of the missing default", async () => {
+  const machineCommands = [];
+  const f = fixture({
+    runCommand: async (_command, args) => {
+      machineCommands.push(args);
+      if (args.includes("list")) {
+        return {
+          stdout: JSON.stringify([{ Name: "openmausbot-machine-v1", Default: false, Running: false }]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (args[0] === "machine" && args[1] === "start") {
+        if (args[2] !== "openmausbot-machine-v1") {
+          throw new Error("podman-machine-default: VM does not exist");
+        }
+        f.setStatus({ daemonUp: true });
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+  f.setStatus({ daemonUp: false });
+  try {
+    await f.bootstrap.start({ target: {}, confirmed: false });
+    assert.equal(f.bootstrap.state().status, "ready");
+    assert.equal(machineCommands.some((args) =>
+      args[0] === "machine" && args[1] === "start" && args[2] === "openmausbot-machine-v1"
+    ), true);
+  } finally {
+    f.cleanup();
+  }
+});
+
 test("confirmed first setup reports ordered progress and uses the shared image endpoint", async () => {
   const f = fixture({
     runCommand: async (_command, args) => {
