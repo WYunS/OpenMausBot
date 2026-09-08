@@ -9,9 +9,7 @@ import {
   Bug,
   Copy,
   Crown,
-  Folder,
   ListTree,
-  Monitor,
   MessageSquareReply,
   Pencil,
   Pin,
@@ -61,7 +59,7 @@ import { SpeakButton } from "./SpeakButton";
 import { CallButton, CallOverlay } from "./CallView";
 import { cn } from "@/lib/cn";
 import { activeLocale, t } from "@/lib/i18n";
-import { COMPACT_BUBBLE, COMPACT_SQUARE } from "@/lib/compact-chip";
+import { COMPACT_BUBBLE } from "@/lib/compact-chip";
 import { useFocusMessage } from "@/lib/focus-message";
 import { groupTranscript } from "@/lib/activity-runs";
 import { ActivityRun } from "./ActivityRun";
@@ -1185,19 +1183,10 @@ export function ChatView({ bot }: { bot: Bot }) {
           )}
           <TaskPicker bot={bot} />
           <UsageChip bot={bot} />
-          {!remoteClient && <WorkingFolderChip bot={bot} />}
           {!remoteClient && <ModelPicker bot={bot} />}
           <CallButton bot={bot} />
-          <button
-            onClick={() => dispatch({ type: "toggleComputer" })}
-            className={cn(
-              "rounded-md p-1.5 hover:bg-raised",
-              state.computerOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
-            )}
-            title={t("chat.computer")}
-          >
-            <Monitor size={18} />
-          </button>
+          {/* the working folder and the computer toggle moved into the
+              composer tray, next to the tools the bot has */}
           {!remoteClient && <button
             onClick={() => dispatch({ type: "toggleInspector" })}
             aria-label={t("chat.inspector")}
@@ -1416,26 +1405,3 @@ function UsageChip({ bot }: { bot: Bot }) {
   );
 }
 
-/** The folder this task's tools run in — quiet unless it's somewhere other
- * than home. Shows the pinned task folder when there is one, else the bot's
- * folder a first turn would pin. Click opens bot settings to change it. */
-function WorkingFolderChip({ bot }: { bot: Bot }) {
-  const { dispatch } = useStore();
-  const task = bot.tasks?.find((t) => t.threadId === bot.threadId);
-  const folder = task?.cwd === undefined ? bot.cwd : (task.cwd ?? undefined);
-  if (!folder) return null;
-  const name = folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || folder;
-  return (
-    <button
-      onClick={() => dispatch({ type: "toggleSettings", open: true, section: "access" })}
-      className={cn(
-        "flex max-w-[180px] items-center gap-1.5 rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink",
-        COMPACT_SQUARE,
-      )}
-      title={t("chat.workingFolder", { folder })}
-    >
-      <Folder size={12} className="@max-4xl/chathead:size-[14px]" />
-      <span className="truncate font-mono @max-4xl/chathead:hidden">{name}</span>
-    </button>
-  );
-}

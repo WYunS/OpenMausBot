@@ -1,6 +1,7 @@
 import { track } from "@/lib/analytics";
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { ArrowUp, BookOpen, Clock, Mic, Paperclip, Square, Target, Users, X } from "lucide-react";
+import { ComposerTray } from "./ComposerTray";
 import { useStore, visibleMessages, type Bot, type Group, type Message } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { activeLocale, t } from "@/lib/i18n";
@@ -794,7 +795,7 @@ export function Composer({
             aria-hidden
             className="absolute -left-5 -right-5 top-1/2 h-[50vh] bg-app"
           />
-        <div className="relative z-[1] flex items-end gap-1 rounded-3xl bg-raised px-2 py-1.5">
+        <div className="relative z-[1] flex flex-col rounded-3xl bg-raised px-2 py-1.5">
           <input
             ref={fileInput}
             type="file"
@@ -806,62 +807,6 @@ export function Composer({
               e.target.value = "";
             }}
           />
-          {!locked && (
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => fileInput.current?.click()}
-                aria-label={t("composer.attach")}
-                title={t("composer.attach")}
-                className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-control hover:text-ink"
-              >
-                <Paperclip size={17} />
-              </button>
-              {group && !group.dm && (
-                <button
-                  type="button"
-                  aria-pressed={effectiveChannelMode === "goal"}
-                  aria-label={t("composer.goal.aria")}
-                  title={t("composer.goal.title")}
-                  onClick={() => {
-                    markDraftEdited(draftId);
-                    if (typedGoalText !== null) {
-                      const nextCaret = Math.max(0, caret - (text.length - typedGoalText.length));
-                      editText(typedGoalText);
-                      setCaret(nextCaret);
-                      setChannelMode("chat");
-                      requestAnimationFrame(() => {
-                        inputRef.current?.focus();
-                        inputRef.current?.setSelectionRange(nextCaret, nextCaret);
-                      });
-                      return;
-                    }
-                    setChannelMode((current) => current === "goal" ? "chat" : "goal");
-                  }}
-                  className={cn(
-                    "flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 text-[13px] transition-colors",
-                    effectiveChannelMode === "goal"
-                      ? "border-accent/35 bg-accent/10 text-accent"
-                      : "border-hairline/20 bg-transparent text-ink-secondary hover:bg-raised hover:text-ink",
-                  )}
-                >
-                  <Target size={14} aria-hidden="true" />
-                  {effectiveChannelMode === "goal" ? "/goal" : t("composer.goal.chip")}
-                </button>
-              )}
-              {modeBot && approvalEngine && !remoteClient && (
-                <ApprovalModeSelector
-                  approvalMode={modeBot.approvalMode}
-                  autoApprove={modeBot.autoApprove}
-                  providerName={approvalEngine.displayName}
-                  driverKind={approvalEngine.driverKind}
-                  onSelect={setApprovalMode}
-                  disabled={Boolean(modeBot.busy)}
-                  trustedModesAvailable={Boolean(window.ogb?.approvals && capabilities.host.packaged)}
-                />
-              )}
-            </div>
-          )}
           <textarea
           ref={inputRef}
           rows={1}
@@ -955,6 +900,65 @@ export function Composer({
           aria-label={t("composer.placeholder.bot", { name: group ? group.name : (bot?.name ?? "") })}
             className="max-h-[9rem] min-h-6 min-w-0 flex-1 resize-none overflow-y-auto self-center bg-transparent px-1 py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none"
           />
+          <div className="flex items-end gap-1 pt-1">
+          {!locked && (
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+              <button
+                type="button"
+                onClick={() => fileInput.current?.click()}
+                aria-label={t("composer.attach")}
+                title={t("composer.attach")}
+                className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-control hover:text-ink"
+              >
+                <Paperclip size={17} />
+              </button>
+              {group && !group.dm && (
+                <button
+                  type="button"
+                  aria-pressed={effectiveChannelMode === "goal"}
+                  aria-label={t("composer.goal.aria")}
+                  title={t("composer.goal.title")}
+                  onClick={() => {
+                    markDraftEdited(draftId);
+                    if (typedGoalText !== null) {
+                      const nextCaret = Math.max(0, caret - (text.length - typedGoalText.length));
+                      editText(typedGoalText);
+                      setCaret(nextCaret);
+                      setChannelMode("chat");
+                      requestAnimationFrame(() => {
+                        inputRef.current?.focus();
+                        inputRef.current?.setSelectionRange(nextCaret, nextCaret);
+                      });
+                      return;
+                    }
+                    setChannelMode((current) => current === "goal" ? "chat" : "goal");
+                  }}
+                  className={cn(
+                    "flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 text-[13px] transition-colors",
+                    effectiveChannelMode === "goal"
+                      ? "border-accent/35 bg-accent/10 text-accent"
+                      : "border-hairline/20 bg-transparent text-ink-secondary hover:bg-raised hover:text-ink",
+                  )}
+                >
+                  <Target size={14} aria-hidden="true" />
+                  {effectiveChannelMode === "goal" ? "/goal" : t("composer.goal.chip")}
+                </button>
+              )}
+              {modeBot && approvalEngine && !remoteClient && (
+                <ApprovalModeSelector
+                  approvalMode={modeBot.approvalMode}
+                  autoApprove={modeBot.autoApprove}
+                  providerName={approvalEngine.displayName}
+                  driverKind={approvalEngine.driverKind}
+                  onSelect={setApprovalMode}
+                  disabled={Boolean(modeBot.busy)}
+                  trustedModesAvailable={Boolean(window.ogb?.approvals && capabilities.host.packaged)}
+                />
+              )}
+              {bot && !group && !remoteClient && <ComposerTray bot={bot} />}
+            </div>
+          )}
+          {locked && <div className="flex-1" />}
           <div className="flex items-center gap-1">
           {/* Stop stays a stop. Stop-then-steer is named beside the queued
               message above, where its effect is visible before activation. */}
@@ -1011,6 +1015,7 @@ export function Composer({
             {busy && !canSteer ? <Clock size={15} /> : <ArrowUp size={17} />}
           </button>
           )}
+          </div>
           </div>
         </div>
         </div>

@@ -140,6 +140,7 @@ import {
   MAX_MCP_SERVERS,
   listMcpServers,
   parseMcpServerMutation,
+  parseMcpServersImport,
   parseStoredMcpServer,
 } from "./mcp-registry.ts";
 import { probeMcpServer } from "./mcp-probe.ts";
@@ -251,6 +252,7 @@ import {
   computerPrompt,
   mentionPrompt,
   COMPOSIO_PROMPT,
+  customMcpPrompt,
   CREDENTIAL_PROMPT,
   LEARN_PROMPT,
   PROFILE_PROMPT,
@@ -1178,6 +1180,7 @@ function previewSystemPrompt(bot: BotRecord) {
     },
     { id: "computer", label: "Computer", text: computerPrompt(computerPromptKind) },
     { id: "composio", label: "Connected apps", text: caps?.composioMcp && bot.composio !== false && composio.configured(cfg) ? COMPOSIO_PROMPT : "" },
+    { id: "mcp", label: "MCP servers", text: caps?.customMcp ? customMcpPrompt(Object.keys(customMcpServers(cfg, bot.mcpServers))) : "" },
     { id: "browser", label: "Browser", text: caps?.browserMcp && builtInBrowserEnabled(cfg) && bot.browser !== false && bot.computer !== "off" ? BUILT_IN_BROWSER_SYSTEM_PROMPT : "" },
     { id: "coordination", label: "Team", text: agentsMounted && coordination ? ` ${coordination}` : "" },
     { id: "credential", label: "Credentials", text: agentsMounted ? CREDENTIAL_PROMPT : "" },
@@ -1216,7 +1219,12 @@ async function botOverview(bot: BotRecord): Promise<BotOverview> {
   // overview right after causing a change must see its own row.
   await flushProfileHistory(bot.id);
   const recent = readHistory(bot.id, 5).map((r) => ({ at: r.at, summary: r.summary }));
+  // "Send it a first message" on the setup checklist: any task of this bot
+  // with a user turn counts, not only the active one.
+  const threadIds = new Set([bot.threadId, ...(bot.tasks ?? []).map((task) => task.threadId)]);
+  const hasTalked = [...threadIds].some((threadId) => store.messagesFor(threadId).some((message) => message.role === "user"));
   return buildBotOverview({
+    hasTalked,
     bot: {
       name: bot.name,
       title: bot.title,
@@ -4080,7 +4088,7 @@ async function startTurn(
       // composio — only to a driver that can mount them. Their tools are
       // never pre-allowed, so every call rides the normal permission flow.
       if (instance.adapter.capabilities.customMcp === true) {
-        const custom = customMcpServers(cfg);
+        const custom = customMcpServers(cfg, bot.mcpServers);
         if (Object.keys(custom).length) integrations.custom = custom;
       }
       // CLI engines work inside the bot's own workspace directory rather
@@ -4437,6 +4445,7 @@ async function startTurn(
         // gated on the integration, not the key: the hint only goes to a
         // bot whose driver actually mounted the tools
         { id: "composio", label: "Connected apps", text: integrations.composio ? COMPOSIO_PROMPT : "" },
+        { id: "mcp", label: "MCP servers", text: customMcpPrompt(Object.keys(integrations.custom ?? {})) },
         { id: "browser", label: "Browser", text: integrations.browser ? BUILT_IN_BROWSER_SYSTEM_PROMPT : "" },
         { id: "coordination", label: "Team", text: coordinationPrompt ? ` ${coordinationPrompt}` : "" },
         { id: "credential", label: "Credentials", text: credentialPrompt },
@@ -5302,7 +5311,7 @@ async function runGroupMemberTurn(
   }
   // user-configured MCP servers: same gating as the 1:1 site above.
   if (instance.adapter.capabilities.customMcp === true) {
-    const custom = customMcpServers(cfg);
+    const custom = customMcpServers(cfg, bot.mcpServers);
     if (Object.keys(custom).length) integrations.custom = custom;
   }
   // Connected-app discovery is intentionally awaited before a provider owns
@@ -10464,6 +10473,17 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         patch.composio = body.composio;
       }
       // per-bot gate on the app's built-in browser
+      if (body.mcpServers !== undefined) {
+        // null clears the list (back to "every enabled server"); a list is
+        // checked like alwaysAllow: names only, and never trusted as-is
+        if (body.mcpServers === null) {
+          patch.mcpServers = undefined;
+        } else if (!Array.isArray(body.mcpServers) || body.mcpServers.some((t: unknown) => typeof t !== "string")) {
+          return json(res, 400, { error: "mcpServers must be a list of server names, or null" });
+        } else {
+          patch.mcpServers = [...new Set(body.mcpServers as string[])].slice(0, MAX_MCP_SERVERS);
+        }
+      }
       if (body.browser !== undefined) {
         if (typeof body.browser !== "boolean") return json(res, 400, { error: "browser must be true or false" });
         if (existingBot?.busy && body.browser !== (existingBot.browser !== false)) {
@@ -12180,6 +12200,36 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (!parsed.ok) return json(res, 400, { error: parsed.error });
         persistMcpServers({ ...current, [name]: parsed.server });
         return json(res, 201, mcpServerResponse());
+      } finally {
+        mcpConfigBusy = false;
+      }
+    }
+
+    // Paste-to-add: the {"mcpServers": {...}} block every other agent tool
+    // writes. Same rules and the same disabled-until-tested start as POST.
+    if (method === "POST" && path === "/api/mcp/servers/import") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      if (mcpConfigBusy) return json(res, 409, { error: "MCP servers are already being updated." });
+      mcpConfigBusy = true;
+      try {
+        const body = await readBody(req);
+        const text = typeof body?.json === "string" ? body.json : "";
+        if (!text.trim()) return json(res, 400, { error: "Paste the JSON block first." });
+        const parsed = parseMcpServersImport(text);
+        if (!parsed.ok) return json(res, 400, { error: parsed.error });
+        const current = cfg.mcpServers ?? {};
+        const names = Object.keys(parsed.servers);
+        const taken = names.filter((name) => Object.hasOwn(current, name));
+        if (taken.length) {
+          return json(res, 409, { error: `Already added: ${taken.join(", ")}. Remove or rename ${taken.length === 1 ? "it" : "them"} first.` });
+        }
+        if (Object.keys(current).length + names.length > MAX_MCP_SERVERS) {
+          return json(res, 400, { error: `You can add at most ${MAX_MCP_SERVERS} MCP servers.` });
+        }
+        persistMcpServers({ ...current, ...parsed.servers });
+        return json(res, 201, { ...mcpServerResponse(), added: names });
       } finally {
         mcpConfigBusy = false;
       }

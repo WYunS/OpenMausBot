@@ -8,6 +8,7 @@ import { ChatView } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
 import { BotSettingsDialog } from "@/components/BotSettingsDialog";
 import { RemoteAgentSettingsPanel } from "@/components/RemoteAgentSettingsPanel";
+import { NewBotDialog } from "@/components/NewBotDialog";
 import { PluginsPanel, preloadConnectedApps } from "@/components/PluginsPanel";
 import { ComputerPanel } from "@/components/ComputerPanel";
 import { RemoteDesktopPanel } from "@/components/remote-desktop-panel";
@@ -74,7 +75,7 @@ function Shell() {
       const bots = state.bots.filter((b) => !b.hidden);
       if (e.key === "n" && !e.shiftKey) {
         e.preventDefault();
-        dispatch({ type: "newBot" });
+        dispatch({ type: "toggleNewBot", open: true });
       } else if (/^[1-9]$/.test(e.key)) {
         const target = bots[Number(e.key) - 1];
         if (target) {
@@ -271,6 +272,7 @@ function Shell() {
       {!remoteClient && state.inspectorOpen && bot && <InspectorPanel bot={bot} />}
       {state.appSettingsOpen && <SettingsModal />}
       {state.pluginsOpen && <PluginsPanel />}
+      {state.newBotOpen && <NewBotDialog />}
       {/* mounted after the modals: same z-50 tier, so DOM order keeps the
           palette on top when one of them is open underneath */}
       <CommandPalette onOpenChange={setPaletteOpen} />

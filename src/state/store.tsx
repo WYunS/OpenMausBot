@@ -32,6 +32,7 @@ import type { WebhookAttempt, WebhookIngressStatus, WebhookTrigger } from "@/lib
 import { currentCall } from "@/lib/call";
 import { showNotification, type NotificationTarget } from "@/lib/notify";
 import { speaker } from "@/lib/tts";
+import { roleProfilePatch, type BotRole } from "@/lib/bot-roles";
 import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
 import { skillRecorderEnabled } from "@/lib/feature-flags";
 import { openLiveEvents } from "@/lib/live-events";
@@ -310,6 +311,9 @@ export interface Bot {
   composio?: boolean;
   /** Whether this bot gets the app's built-in browser (Browser tab). On unless switched off. */
   browser?: boolean;
+  /** Which app-wide MCP servers (Plugins → MCP servers) this bot mounts, by
+   * name. Absent = every enabled server; [] = none (null clears over PATCH). */
+  mcpServers?: string[] | null;
   /** Named browser profile id (config.browserProfiles); absent/null = the
    * bot's own session (null is how a clear travels over PATCH). */
   browserProfile?: string | null;
@@ -512,6 +516,11 @@ export interface AppState {
   webhookIngress: WebhookIngressStatus | null;
   settingsOpen: boolean;
   pluginsOpen: boolean;
+  /** Which tab the Plugins panel opens on; "mcp" when a bot's tools
+   * sent the user there to add a server. */
+  pluginsSurface: "apps" | "mcp";
+  /** The "New bot" role picker. */
+  newBotOpen: boolean;
   computerOpen: boolean;
   /** the per-thread event inspector (runtime stream + native protocol tee) */
   inspectorOpen: boolean;
@@ -688,7 +697,7 @@ export type Action =
   | { type: "taskSwitched"; bot: Bot }
   | { type: "renameTask"; botId: string; threadId: string; title: string }
   | { type: "deleteTask"; botId: string; threadId: string }
-  | { type: "newBot" }
+  | { type: "newBot"; role?: BotRole }
   | { type: "botAdded"; bot: Bot }
   | { type: "deleteBot"; botId: string }
   | { type: "botDeletionPending"; botId: string; on: boolean }
@@ -706,7 +715,8 @@ export type Action =
   | { type: "connected"; value: boolean }
   | { type: "error"; message: string | null }
   | { type: "toggleSettings"; open?: boolean; section?: BotSettingsSection }
-  | { type: "togglePlugins"; open?: boolean }
+  | { type: "togglePlugins"; open?: boolean; surface?: "apps" | "mcp" }
+  | { type: "toggleNewBot"; open?: boolean }
   | { type: "toggleComputer"; open?: boolean }
   | { type: "toggleInspector"; open?: boolean }
   | { type: "focusMessage"; threadId: string; messageId: string }
@@ -1256,7 +1266,13 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     }
     case "togglePlugins":
-      return { ...state, pluginsOpen: action.open ?? !state.pluginsOpen };
+      return {
+        ...state,
+        pluginsOpen: action.open ?? !state.pluginsOpen,
+        pluginsSurface: action.surface ?? (action.open === false ? state.pluginsSurface : "apps"),
+      };
+    case "toggleNewBot":
+      return { ...state, newBotOpen: action.open ?? !state.newBotOpen };
     case "focusMessage":
       return {
         ...state,
@@ -1526,6 +1542,8 @@ export const initialState: AppState = {
   webhookIngress: null,
   settingsOpen: false,
   pluginsOpen: false,
+  pluginsSurface: "apps",
+  newBotOpen: false,
   computerOpen: false,
   inspectorOpen: false,
   appSettingsOpen: false,
@@ -2107,11 +2125,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           break;
         }
-        case "newBot":
+        case "newBot": {
+          // A role is a blank bot plus a profile PATCH, the same two steps
+          // duplicateBot takes: the server never learns about roles.
+          const role = action.role;
           api("/api/bots", { method: "POST" })
-            .then(({ bot }) => rawDispatch({ type: "botAdded", bot }))
+            .then(({ bot }) =>
+              role
+                ? api(`/api/bots/${bot.id}`, { method: "PATCH", body: JSON.stringify(roleProfilePatch(role)) })
+                    .then(({ bot: patched }) => rawDispatch({ type: "botAdded", bot: { ...bot, ...patched, messages: bot.messages } }))
+                : rawDispatch({ type: "botAdded", bot }),
+            )
             .catch(showError);
           break;
+        }
         case "duplicateBot": {
           const source = stateRef.current.bots.find((b) => b.id === action.botId);
           if (!source) break;

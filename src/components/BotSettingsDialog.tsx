@@ -333,6 +333,10 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
                   prompt={prompt}
                   promptError={promptError}
                   onOpen={(target) => dispatch({ type: "toggleSettings", open: true, section: target })}
+                  onSetup={() => {
+                    dispatch({ type: "toggleSettings", open: false });
+                    dispatch({ type: "send", botId: bot.id, text: "/setup", threadId: bot.threadId });
+                  }}
                 />
               ))}
 

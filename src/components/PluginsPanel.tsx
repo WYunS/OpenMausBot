@@ -211,11 +211,11 @@ function ServiceIcon({ card }: { card: ToolkitCard }) {
 }
 
 export function PluginsPanel() {
-  const { dispatch } = useStore();
+  const { state, dispatch } = useStore();
   const remoteClient = window.ogb?.remoteClient?.active === true;
   const mayDisconnect = connectedAppsMayDisconnect(remoteClient);
   const dialogRef = useRef<HTMLDivElement>(null);
-  const [surface, setSurface] = useState<"apps" | "mcp">("apps");
+  const [surface, setSurface] = useState<"apps" | "mcp">(state.pluginsSurface);
   const [cards, setCards] = useState<ToolkitCard[] | null>(null);
   const [source, setSource] = useState<"api" | "curated">("curated");
   const [configured, setConfigured] = useState(true);
