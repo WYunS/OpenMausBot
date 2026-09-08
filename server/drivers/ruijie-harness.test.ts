@@ -294,7 +294,7 @@ describe("Ruijie Harness driver", () => {
       expect(preset).toContain("@deepseek-ai/dsh-mcp-client");
       expect(preset).toContain('command: "C:\\\\OpenMaus\\\\cua-driver.exe"');
       expect(preset).toContain('"OMB_CONTROL_TOKEN":"secret"');
-      expect(preset).toContain("failOnStartupError: false");
+      expect(preset).toContain("failOnStartupError: true");
     } finally {
       await rm(dshHome, { recursive: true, force: true });
     }
@@ -409,6 +409,43 @@ describe("Ruijie Harness driver", () => {
         .map((call) => call.payload.agentPreset);
       expect(presets).toHaveLength(2);
       expect(presets[0]).not.toBe(presets[1]);
+      expect(calls.map((call) => call.method)).toEqual([
+        "agentPreset.read", "session.create",
+        "agentPreset.read", "session.create",
+        "session.selectModel", "session.prompt",
+      ]);
+    } finally {
+      await rm(dshHome, { recursive: true, force: true });
+    }
+  });
+
+  it("does not prompt the model when every computer MCP mount fails", async () => {
+    const dshHome = await mkdtemp(join(tmpdir(), "openmaus-rjh-test-"));
+    try {
+      const instance = await RuijieHarnessDriver.create({
+        instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
+        config: {
+          endpoint: "http://127.0.0.1:49724",
+          expectedAccountEmail: "wangyunshang@ruijie.com.cn",
+          dshHome,
+        },
+      });
+
+      sessionCreateFailuresRemaining = 2;
+      await expect(instance.adapter.sendTurn({
+        threadId: "thread-computer-unavailable", text: "查看桌面", cwd: "C:\\work",
+        integrations: {
+          localComputer: {
+            command: "C:\\OpenMaus\\cua-driver.exe",
+            args: ["mcp", "--direct"],
+            env: { OMB_CONTROL_TOKEN: "secret" },
+            scope: "local-computer",
+          },
+        },
+      })).rejects.toThrow("preset failed to mount");
+
+      expect(calls.filter((call) => call.method === "session.create")).toHaveLength(2);
+      expect(calls.some((call) => call.method === "session.prompt")).toBe(false);
     } finally {
       await rm(dshHome, { recursive: true, force: true });
     }

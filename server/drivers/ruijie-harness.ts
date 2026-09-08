@@ -183,10 +183,11 @@ function mcpPresetContent(base: string, integration: StdioIntegration, key: stri
     `    command: ${JSON.stringify(integration.command)}\n` +
     `    args: ${JSON.stringify(integration.args)}\n` +
     `    env: ${JSON.stringify(integration.env)}\n` +
-    // The MCP client already reconnects with backoff. Failing the whole
-    // preset on its first handshake races Podman/Cua startup and discards
-    // that recovery path, leaving the user's turn permanently red.
-    `    failOnStartupError: false\n`;
+    // Harness snapshots the session tool set when the preset mounts. If the
+    // MCP handshake fails open, the prompt can run without computer tools and
+    // reconnecting later cannot repair that turn. Keep creation atomic; the
+    // caller retries with a fresh mount name before it sends any prompt.
+    `    failOnStartupError: true\n`;
 }
 
 async function ensureComputerPreset(
