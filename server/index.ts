@@ -2201,6 +2201,15 @@ async function answerRequest(
       outcome = "unavailable";
     }
   }
+  // An answered question keeps its words. `request.resolved` only records
+  // the behavior, so without this the card reads "answer" forever and the
+  // person can no longer see what they told the bot.
+  if (outcome !== "unavailable" && behavior === "answer" && message && cardMessage) {
+    const settled = store.messagesFor(threadId).find((m) => m.id === cardMessage.id)?.card;
+    if (settled) {
+      store.patchMessage(threadId, cardMessage.id, { card: { ...settled, answeredText: message } });
+    }
+  }
   // The human's verdict, recorded only when it actually reached the engine:
   // `unavailable` means the action never ran, and a "user-approved" row
   // over a request nothing answered would be the audit log lying. A
@@ -2924,7 +2933,11 @@ bus.subscribe((event: RuntimeEvent) => {
       }
       break;
     case "request.opened": {
-      const permission = event.requestType === "permission";
+      // A structured ask carries the model's own options and has no
+      // allow/deny answer, so it is a question no matter which channel the
+      // provider routed it through — and, like every question, no approval
+      // mode may ever answer it for the person.
+      const permission = event.requestType === "permission" && !event.questions?.length;
       // Approval modes and always-allow can answer permission requests for
       // the bot so it keeps working. A QUESTION always reaches the human —
       // even Full access never invents a person's answer. Safe Auto stops on
@@ -3036,6 +3049,10 @@ bus.subscribe((event: RuntimeEvent) => {
           ? supportsApprovalMode(registry.cliTarget(asker.modelSelection.instanceId)?.driverKind, "full")
           : false,
       };
+      // A structured ask (Claude's AskUserQuestion) is a question whatever
+      // the provider routed it as: it has no allow/deny answer, only the
+      // model's own options. The card carries them so the person can choose.
+      const questions = event.questions?.length ? event.questions : undefined;
       const message = pushMessage({
         role: "bot",
         kind: "options",
@@ -3050,6 +3067,7 @@ bus.subscribe((event: RuntimeEvent) => {
           options: event.choices?.length ? event.choices : permission ? ["Allow", "Deny"] : [],
           requestId: event.requestId,
           tool: permission ? event.tool : undefined,
+          questionRequest: questions ? { version: 1, questions } : undefined,
           // the exact grant "always allow" would remember, decided here so
           // client and server can never derive it differently
           allowKey: permission
