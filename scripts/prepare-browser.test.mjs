@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { browserBundlePaths, browserBundleSpec, CHROME_VERSION, SUPPORTED_BROWSER_TARGETS } from "../server/browser-bundle-release.ts";
 import { resolveAgentBrowserReleaseAsset } from "../server/browser-engine-release.ts";
-import { BROWSER_LICENSE_FILES, browserExtractionCommand, bundleInventory, parsePrepareBrowserArgs, releaseBytes, stageBrowserTarget, targetsForPreparation, verifyAssetBytes, verifyBrowserBundle, verifyBundleInventory } from "./prepare-browser.mjs";
+import { BROWSER_LICENSE_FILES, browserExtractionCommand, bundleInventory, parsePrepareBrowserArgs, releaseBytes, renameWithWindowsRetry, stageBrowserTarget, targetsForPreparation, verifyAssetBytes, verifyBrowserBundle, verifyBundleInventory } from "./prepare-browser.mjs";
 
 const fixtures = [];
 function fixture() { const root = mkdtempSync(join(tmpdir(), "omb-browser-prepare-test-")); fixtures.push(root); return root; }
@@ -61,6 +61,17 @@ describe("pinned desktop browser preparation", () => {
   it("uses Windows' ZIP-capable system tar instead of Git Bash's GNU tar", () => {
     expect(browserExtractionCommand("a.zip", "out", { platform: "win32", systemRoot: "D:\\Windows" })).toEqual({ file: "D:\\Windows\\System32\\tar.exe", args: ["-xf", "a.zip", "-C", "out"] });
     expect(browserExtractionCommand("a.zip", "out", { platform: "darwin" })).toEqual({ file: "unzip", args: ["-q", "a.zip", "-d", "out"] });
+  });
+
+  it("retries transient Windows directory rename failures", async () => {
+    const rename = vi.fn()
+      .mockImplementationOnce(() => { throw Object.assign(new Error("busy"), { code: "EPERM" }); })
+      .mockImplementationOnce(() => { throw Object.assign(new Error("scanning"), { code: "EACCES" }); })
+      .mockImplementationOnce(() => undefined);
+    const delay = vi.fn();
+    await renameWithWindowsRetry("stage", "destination", { platform: "win32", rename, delay, attempts: 3 });
+    expect(rename).toHaveBeenCalledTimes(3);
+    expect(delay).toHaveBeenCalledTimes(2);
   });
 
   it("rechecks cached bytes and fails closed on same-size tampering", async () => {

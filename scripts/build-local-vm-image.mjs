@@ -67,6 +67,15 @@ async function pullPinnedBase() {
   const candidates = process.env.OPENMAUSBOT_BASE_IMAGE
     ? [process.env.OPENMAUSBOT_BASE_IMAGE]
     : [constants.BASE_IMAGE, ...constants.BASE_IMAGE_MIRRORS];
+  for (const candidate of candidates) {
+    try {
+      await run(runtime, ["image", "inspect", candidate]);
+      console.log(`Reusing cached pinned base: ${candidate}`);
+      return candidate;
+    } catch {
+      // The exact digest is not cached under this registry name.
+    }
+  }
   let lastError;
   for (const candidate of candidates) {
     try {

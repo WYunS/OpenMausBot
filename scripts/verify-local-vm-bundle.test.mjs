@@ -16,3 +16,9 @@ test("every desktop packaging entry point verifies its Local VM bundle first", a
     assert.match(packageJson.scripts[name], /^pnpm verify:local-vm-bundle /, name);
   }
 });
+
+test("optional image mirror arguments remain safe under shell nounset", async () => {
+  const containerfile = await readFile(new URL("../vm-image/Containerfile", import.meta.url), "utf8");
+  assert.match(containerfile, /^ARG APT_DEBIAN_MIRROR=""$/m);
+  assert.match(containerfile, /^ARG APT_SECURITY_MIRROR=""$/m);
+});

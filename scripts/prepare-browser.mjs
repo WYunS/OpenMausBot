@@ -144,6 +144,25 @@ function extract(archive, directory) {
   if (result.error || result.status !== 0) throw new Error(`Browser archive extraction failed: ${result.error?.message ?? result.stderr ?? result.status}`);
 }
 
+export async function renameWithWindowsRetry(source, destination, {
+  platform = process.platform,
+  rename = renameSync,
+  delay = (milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds)),
+  attempts = 40,
+  delayMs = 250,
+} = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      rename(source, destination);
+      return;
+    } catch (error) {
+      const transient = platform === "win32" && (error?.code === "EPERM" || error?.code === "EACCES");
+      if (!transient || attempt >= attempts) throw error;
+      await delay(delayMs);
+    }
+  }
+}
+
 export async function stageBrowserTarget(root, target, { cacheDirectory = process.env.OMB_BROWSER_ARCHIVE_DIR ?? join(root, "dist-native", "browser-archives") } = {}) {
   const spec = browserBundleSpec(target);
   const parent = join(root, "dist-native", "browser");
@@ -169,10 +188,10 @@ export async function stageBrowserTarget(root, target, { cacheDirectory = proces
     verifyBrowserBundle(stage, target);
     // Keep the previous complete tree until the new one passes every check.
     const previous = join(scratch, "previous");
-    if (existsSync(destination)) renameSync(destination, previous);
-    try { renameSync(stage, destination); }
+    if (existsSync(destination)) await renameWithWindowsRetry(destination, previous);
+    try { await renameWithWindowsRetry(stage, destination); }
     catch (error) {
-      if (existsSync(previous)) renameSync(previous, destination);
+      if (existsSync(previous)) await renameWithWindowsRetry(previous, destination);
       throw error;
     }
     console.log(`Browser ready: agent-browser ${spec.engine.version} + Chromium headless ${spec.chrome.version} (${target})`);
