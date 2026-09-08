@@ -422,3 +422,26 @@ describe("held notes are translatable", () => {
     }
   });
 });
+
+describe("tools that ask a person", () => {
+  // A question normally arrives typed as a question and never reaches a
+  // verdict. This is the backstop for the path where one arrives typed as a
+  // permission: auto mode must not answer it, because auto-approving does
+  // not answer anything — the CLI runs the tool with no answers and the
+  // model is told "The user did not answer the questions."
+  const bot = { autoApprove: true, alwaysAllow: ["AskUserQuestion", "ask_user"] };
+
+  it("never auto-approves AskUserQuestion, in auto mode or by remembered grant", () => {
+    expect(autoDecision(bot, "AskUserQuestion", "Which framework should we use?")).toBeNull();
+    expect(autoVerdict(bot, "AskUserQuestion", "Which framework?").source).toBe("no-grant");
+  });
+
+  it("never auto-approves ask_user, bare or MCP-prefixed", () => {
+    expect(autoDecision(bot, "ask_user", "Ready to ship?")).toBeNull();
+    expect(autoDecision(bot, "mcp__ogb__ask_user", "Ready to ship?")).toBeNull();
+  });
+
+  it("still auto-approves an ordinary tool for the same bot", () => {
+    expect(autoDecision(bot, "Read", "/tmp/notes.md")).toBeTruthy();
+  });
+});

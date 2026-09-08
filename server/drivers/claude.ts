@@ -269,9 +269,14 @@ function askSummary(ask: Ask): string {
   if (typeof input.question === "string") return input.question.slice(0, 300);
   if (typeof input.command === "string") return input.command.slice(0, 200);
   if (typeof input.url === "string") return input.url.slice(0, 200);
+  // Last resort, and deliberately still the raw arguments: for a permission
+  // ask on an unknown tool, its arguments are the only thing a person has to
+  // decide with, and hiding them behind a tidy label would make the decision
+  // worse rather than the card prettier.
   const text = JSON.stringify(input);
   return text === "{}" ? (ask.tool ?? "tool") : text.slice(0, 200);
 }
+
 
 export function permissionSocketPath(threadId: string) {
   // A readable prefix alone is not unique: ids that agree on their first
@@ -392,7 +397,10 @@ export async function createPermissionBroker(opts: {
           if (!pending.delete(askId)) return;
           clearTimeout(timer);
           try {
-            conn.write(JSON.stringify({ t: "answer", id: askId, behavior, message }) + "\n");
+            // `source` travels with the answer: a proxy that cannot tell the
+            // human's words from a timeout note will file the timeout note as
+            // the human's words.
+            conn.write(JSON.stringify({ t: "answer", id: askId, behavior, message, source }) + "\n");
           } catch {}
           opts.onResolve({ ...ask, behavior, source });
         };
