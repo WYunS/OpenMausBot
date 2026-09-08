@@ -146,11 +146,12 @@ describe("Claude server-owned sign-in", () => {
 
   it("times out when the CLI prints no link, and cancel kills the process", async () => {
     const controller = create("no-url", { startupTimeoutMs: 20_000 });
-    const started = controller.start();
+    // the rejection lands during cancel(); the expectation must already be listening
+    const started = expect(controller.start()).rejects.toThrow(/cancelled/);
     await expect.poll(() => { try { return readFileSync(join(home, "pid"), "utf8").length > 0; } catch { return false; } }).toBe(true);
     const pid = Number(readFileSync(join(home, "pid"), "utf8"));
     await controller.cancel();
-    await expect(started).rejects.toThrow(/cancelled/);
+    await started;
     await expect.poll(() => alive(pid)).toBe(false);
   });
 
