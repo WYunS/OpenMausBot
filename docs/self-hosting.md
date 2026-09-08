@@ -92,6 +92,23 @@ is present. Three ways to make the server reachable from elsewhere:
   the server treats as "through a proxy", never as the owner. `npx openmausbot
   logout` releases the address. The account credentials live in
   `~/.openmausbot/tunnel-account.json` (mode 0600).
+  Starting it from a fleet or a container, where nobody can type an emailed
+  code? Set `OMB_INSTALLATION_CREDENTIAL` to the installation credential the
+  fleet issued and skip `login`: the address and connector token are fetched
+  at every start and nothing is written to disk. A rejected credential stops
+  the start with a clear message rather than serving locally.
+- **Your own domain, still one command:**
+
+  ```sh
+  npx openmausbot serve --domain maus.example.com
+  ```
+
+  Point the domain's A record at this machine and open ports 80 and 443.
+  The server downloads a pinned Caddy once into its data dir, writes the
+  same Caddyfile the Docker stack uses, runs it as a child, and Caddy gets
+  and renews the certificate from Let's Encrypt. On Linux, binding ports 80
+  and 443 as a normal user needs one privilege grant; when Caddy reports the
+  refusal, `serve` prints the exact `setcap` command to run once.
 - **Behind your own proxy or domain:** `npx openmausbot serve --public-url
   https://maus.example.com`, with the proxy rules from "Putting a proxy in
   front".
@@ -257,6 +274,20 @@ WantedBy=multi-user.target
 Engine CLIs read their logins from the service user's home — sign in as
 that user (`sudo -u maus claude` etc.) before starting the service.
 
+## Signing the engines in without a terminal
+
+On a hosted server, the engine CLIs sign in from Settings → Engines:
+
+- **Codex**: "Connect ChatGPT" shows a one-time code to enter on OpenAI's
+  device page.
+- **Claude Code**: "Sign in to Claude" opens Anthropic's own sign-in page in
+  your browser; after you sign in it shows a code, which you paste back into
+  Settings. The server hands that code to the unmodified `claude` CLI once and
+  never stores it; the login lands where Claude Code keeps it for the account
+  that runs your bots. This is the sign-in Anthropic permits for a hosted,
+  unmodified Claude Code with your own subscription; the bots then share that
+  subscription's usage limits.
+
 ## Using it from your computer
 
 Pair once, then use the server from any browser on any machine that can
@@ -321,6 +352,41 @@ ssh -L 8799:localhost:8799 you@your-server
 # then open http://localhost:8799 — loopback, so no pairing needed
 ```
 
+## Sign in with your email
+
+A pairing code is fine for the owner's own devices. For a workspace other
+people use every day, let them sign in with an emailed code instead: set an
+allow-list, and `/pair` on your server offers "Sign in with your email" first.
+
+```sh
+OMB_SIGNIN_EMAILS="her@yourcompany.com, @yourcompany.com"   # full access
+OMB_SIGNIN_MEMBER_EMAILS="freelancer@example.com"          # chat and approvals only
+```
+
+With the npm package, the same thing from the command line, with the server
+running or not, no restart needed:
+
+```sh
+npx openmausbot access add her@yourcompany.com
+npx openmausbot access add freelancer@example.com --chat-only
+npx openmausbot access list
+```
+
+An entry is an address or `@domain` (everyone at that domain). Admins get
+the same access as a pairing code from `openmausbot serve`; members get the
+chat-only scope, the same as `openmausbot pair --client`. The same lists live
+in `config.json` under `signIn.admins` and `signIn.members` and can be changed
+through the settings API without a restart; the environment variables win
+when set, which is how a container or a service unit is bootstrapped.
+
+The code itself comes from `accounts.openmausbot.com`, the OpenMausBot
+account service, so your server needs no email credentials. Your server asks
+it to send the code, checks the answer, and then issues its own session
+cookie: the browser only ever talks to your server, and who is welcome is
+decided only by your allow-list. Wrong codes count against the same lockout
+as pairing codes. Sessions from a sign-in show the email in
+`openmausbot sessions` and can be revoked the same way.
+
 ## Putting a proxy in front
 
 Any reverse proxy works, given three things:
@@ -343,13 +409,23 @@ is the reference implementation.
 
 ## Using it from your phone
 
+Signed in on a hosted server as an admin (with a pairing code or your
+email)? Settings → Remote access → **Pair a phone or another computer**
+creates a one-time code with a QR right in the browser, and lists every
+paired device with a sign-out button. Nobody needs the command line.
+
 The iOS app pairs with a server the same way a laptop does: scan the QR
-code that `openmausbot serve` (or `openmausbot pair`) prints, or paste the
+code that `openmausbot serve` (or `openmausbot pair`) prints, paste the
 whole `https://host/pair#code=…` link into the address field on the pairing
-screen. The phone gets a session of its own, listed and revocable with
-`openmausbot sessions`. It can chat, approve, and read; creating bots,
-changing models, connecting apps and cloud computers stay with the owner in
-the server's own UI, and the app hides those controls.
+screen, or type the address and then the code. The phone gets a session of
+its own, listed and revocable with `openmausbot sessions`. What it may do is
+the code's scope: a code from `openmausbot pair` carries `admin` and the app
+shows everything; a code from `openmausbot pair --client` (also what the
+guided phone setup mints) can chat, approve and read, and the app hides
+creating bots and sections, changing models, generating avatars, connecting
+apps and cloud desktops — those stay with the owner. A server reinstalled at
+the same address has a new identity; the app then asks to pair again rather
+than present the old session to it.
 
 Older way, still supported: run the companion sidecar next to the harness
 and pair by its own QR. It advertises on your private networks
