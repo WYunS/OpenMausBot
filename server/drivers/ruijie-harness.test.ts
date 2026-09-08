@@ -294,6 +294,7 @@ describe("Ruijie Harness driver", () => {
       expect(preset).toContain("@deepseek-ai/dsh-mcp-client");
       expect(preset).toContain('command: "C:\\\\OpenMaus\\\\cua-driver.exe"');
       expect(preset).toContain('"OMB_CONTROL_TOKEN":"secret"');
+      expect(preset).toContain("failOnStartupError: false");
     } finally {
       await rm(dshHome, { recursive: true, force: true });
     }

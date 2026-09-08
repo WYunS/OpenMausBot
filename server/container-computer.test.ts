@@ -876,16 +876,32 @@ describe("containerComputerAction", () => {
     expect(fake.calls.some((call) => call.startsWith("docker run "))).toBe(false);
   });
 
-  it("never starts a stopped desktop because its stale X lock makes resume unsafe", async () => {
+  it("resumes a stopped desktop only after all safety checks pass", async () => {
     const fake = runner({
       "/usr/bin/which docker": "docker\n",
       "/usr/bin/which podman": new Error("missing"),
       "docker info --format {{.ServerVersion}}": "29\n",
       [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
       [`docker inspect ${CONTAINER}`]: readyInspect({ State: { Running: false } }),
+      [`docker start ${CONTAINER}`]: "",
     });
 
-    await expect(containerComputerAction("start", fake.run, "linux")).rejects.toThrow("cannot safely resume");
+    await containerComputerAction("start", fake.run, "linux");
+    expect(fake.calls).toContain(`docker start ${CONTAINER}`);
+  });
+
+  it("still refuses to resume a stopped desktop that fails a safety check", async () => {
+    const detail = JSON.parse(readyInspect({ State: { Running: false } }))[0];
+    detail.HostConfig.PortBindings["6901/tcp"][0].HostIp = "0.0.0.0";
+    const fake = runner({
+      "/usr/bin/which docker": "docker\n",
+      "/usr/bin/which podman": new Error("missing"),
+      "docker info --format {{.ServerVersion}}": "29\n",
+      [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
+      [`docker inspect ${CONTAINER}`]: JSON.stringify([detail]),
+    });
+
+    await expect(containerComputerAction("start", fake.run, "linux")).rejects.toThrow("exposes its viewer publicly");
     expect(fake.calls).not.toContain(`docker start ${CONTAINER}`);
   });
 });
@@ -1027,10 +1043,12 @@ describe("localVmRecreatableOnDemand", () => {
     expect(localVmRecreatableOnDemand(status)).toBe(true);
   });
 
-  it("leaves a stopped container alone, because it is asked to be recreated not started", async () => {
+  it("reports a verified stopped container as resumable but not recreatable", async () => {
     const target = SHARED_LOCAL_VM_TARGET;
     const detail = JSON.parse(readyInspect())[0];
     detail.State = { Running: false, Status: "exited" };
+    detail.EffectiveCaps = ["CAP_SETGID", "CAP_SETUID", "CAP_SYS_CHROOT"];
+    detail.BoundingCaps = ["CAP_SETGID", "CAP_SETUID", "CAP_SYS_CHROOT"];
     const fake = runner({
       ...linuxPodman,
       [`podman image inspect ${IMAGE}`]: preparedImageInspect(),
@@ -1040,6 +1058,7 @@ describe("localVmRecreatableOnDemand", () => {
     const status = await containerComputerStatus(fake.run, "linux", target);
 
     expect(status.container).toBe("stopped");
+    expect(status.problem).toBe("Start the Local VM");
     expect(localVmRecreatableOnDemand(status)).toBe(false);
   });
 

@@ -1131,8 +1131,7 @@ export function LocalComputerSection() {
   const existing = status?.container !== "missing";
   const needsRecreate = Boolean(
     existing &&
-      (status?.container === "stopped" ||
-        !status?.imageMatches ||
+      (!status?.imageMatches ||
         !status?.managed ||
         status?.network === "unsafe" ||
         status?.security === "unsafe" ||

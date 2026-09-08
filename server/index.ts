@@ -91,6 +91,7 @@ import {
   containerComputerStatus,
   containerRuntimeStatus,
   localVmRecreatableOnDemand,
+  localVmResumable,
   perBotLocalVmTarget,
   SHARED_LOCAL_VM_TARGET,
   setupCommands,
@@ -7419,22 +7420,21 @@ async function localVmPayload(target: LocalVmTarget) {
  * provisioned on first use behind a `provisioning` broadcast. This gives the
  * Local VM the same lifecycle for the same reason.
  *
- * Only `missing` is recovered, and only when a fresh `run` is all it takes.
- * Every other problem still surfaces: no runtime installed, no image pulled,
- * `create_supported` false, or an existing container that is stale, unmanaged
- * or unsafe. Those need a decision — install podman, download 1.4 GB, replace
- * a container someone else made — and a stopped container is deliberately not
- * resumed here, because `localVmProblem` says this desktop image cannot safely
- * resume and asks for a recreate rather than a start. Per-bot mode keeps its
- * instance cap; creating past it would quietly do what the lifecycle route
- * refuses.
+ * A missing VM is recreated, while a stopped VM is resumed only after its
+ * image, ownership, loopback binding, hardening and durable mount all verify.
+ * Every other problem still surfaces for a person to decide. Per-bot mode
+ * keeps its instance cap; creating past it would quietly do what the lifecycle
+ * route refuses.
  */
 async function readyLocalVmForTurn(botId: string, target: LocalVmTarget, isCurrent = () => true) {
   let status = await containerComputerStatus(undefined, undefined, target);
   if (!isCurrent()) return status;
-  if (status.ready || !localVmRecreatableOnDemand(status)) return status;
+  if (status.ready) return status;
+  const action = localVmResumable(status) ? "start" : localVmRecreatableOnDemand(status) ? "run" : null;
+  if (!action) return status;
 
-  if (target.key !== SHARED_LOCAL_VM_TARGET.key) {
+  if (action === "run" && target.key !== SHARED_LOCAL_VM_TARGET.key) {
+    if (!status.runtime) return status;
     const count = await existingPerBotLocalVmCount(status.runtime);
     if (!isCurrent() || count >= localVmMaxInstances(cfg)) return status;
   }
@@ -7443,7 +7443,7 @@ async function readyLocalVmForTurn(botId: string, target: LocalVmTarget, isCurre
   localVmLifecycleBusy.add(target.key);
   localVmProvisionBusy = true;
   try {
-    status = await containerComputerAction("run", undefined, undefined, target);
+    status = await containerComputerAction(action, undefined, undefined, target);
   } catch {
     // Keep the inspected status: its `problem` names the real obstacle, which
     // is more use to the person than "podman run exited non-zero".

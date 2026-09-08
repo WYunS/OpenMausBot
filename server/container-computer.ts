@@ -381,10 +381,8 @@ function emptyStatus(platform: NodeJS.Platform, target: LocalVmTarget): Containe
  *
  * Every other problem in `statusProblem` stays the person's call and returns
  * false here: no runtime, daemon down, image never prepared, `create_supported`
- * false, and any existing container — stale image, unmanaged, unsafe network,
- * security or persistence. A stopped container is excluded deliberately, since
- * `statusProblem` says this desktop image cannot safely resume and asks for a
- * recreate rather than a start.
+ * false, and any existing container. A separately verified stopped container
+ * is resumable, not recreatable.
  */
 export function localVmRecreatableOnDemand(
   status: ContainerComputerStatus,
@@ -394,6 +392,20 @@ export function localVmRecreatableOnDemand(
     && status.image
     && status.container === "missing"
     && status.create_supported;
+}
+
+/** A stopped VM may resume only when the exact image, ownership boundary,
+ * loopback viewer, hardening and durable workspace all still verify. */
+export function localVmResumable(status: ContainerComputerStatus): boolean {
+  return Boolean(status.runtime)
+    && status.daemonUp
+    && status.image
+    && status.container === "stopped"
+    && status.imageMatches
+    && status.managed
+    && status.network === "loopback"
+    && status.security === "hardened"
+    && status.persistence === "durable";
 }
 
 function statusProblem(status: ContainerComputerStatus): string | null {
@@ -409,7 +421,7 @@ function statusProblem(status: ContainerComputerStatus): string | null {
   if (status.network === "unsafe") return "The existing Local VM exposes its viewer publicly; recreate it";
   if (status.security === "unsafe") return "The existing Local VM is missing safety limits; recreate it";
   if (status.persistence === "unsafe") return "The existing Local VM is missing its durable workspace; recreate it";
-  if (status.container === "stopped") return "This desktop image cannot safely resume; recreate the Local VM";
+  if (status.container === "stopped") return "Start the Local VM";
   if (status.desktop_error) return `The Local VM desktop failed to start: ${status.desktop_error}`;
   if (!status.desktopReady) return "The Local VM started, but Cua Driver is not ready yet";
   return null;
@@ -1096,10 +1108,8 @@ export async function containerComputerAction(
   if (action === "run" && !before.create_supported) {
     throw Object.assign(new Error(before.problem ?? "This runtime cannot create a per-bot Local VM"), { status: 409 });
   }
-  if (action === "start") {
-    throw Object.assign(new Error("This desktop image cannot safely resume; remove and recreate the Local VM"), {
-      status: 409,
-    });
+  if (action === "start" && !localVmResumable(before)) {
+    throw Object.assign(new Error(before.problem ?? "This Local VM cannot safely resume"), { status: 409 });
   }
   if (action === "stop" && before.container !== "running") {
     throw Object.assign(new Error("The Local VM is not running"), { status: 409 });

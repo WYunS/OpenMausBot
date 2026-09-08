@@ -183,7 +183,10 @@ function mcpPresetContent(base: string, integration: StdioIntegration, key: stri
     `    command: ${JSON.stringify(integration.command)}\n` +
     `    args: ${JSON.stringify(integration.args)}\n` +
     `    env: ${JSON.stringify(integration.env)}\n` +
-    `    failOnStartupError: true\n`;
+    // The MCP client already reconnects with backoff. Failing the whole
+    // preset on its first handshake races Podman/Cua startup and discards
+    // that recovery path, leaving the user's turn permanently red.
+    `    failOnStartupError: false\n`;
 }
 
 async function ensureComputerPreset(
