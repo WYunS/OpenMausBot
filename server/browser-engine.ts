@@ -86,7 +86,8 @@ export async function closeBrowserSession(binaryPath: string, env: NodeJS.Proces
       if (output.length > 262_144) { clearTimeout(timer); child.kill(); finish(false); }
     });
     child.on("error", () => { clearTimeout(timer); finish(false); });
-    child.on("exit", (code) => { clearTimeout(timer); finish(code === 0); });
+    // exit can precede the last piped stdout chunk; close follows stdio.
+    child.on("close", (code) => { clearTimeout(timer); finish(code === 0); });
   });
   if (!(await run(["close"])).ok) return false;
   // Native close acknowledges before the daemon exits. Observe its actual

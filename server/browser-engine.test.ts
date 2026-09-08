@@ -44,6 +44,7 @@ function lifecycleChild(args: readonly string[] = [], options: { code?: number; 
     if (args[0] === "session") child.stdout.emit("data", options.inventory ?? JSON.stringify({ success: true, data: { sessions: options.sessions ?? [] } }));
     else options.onClose?.();
     child.emit("exit", args[0] === "session" ? 0 : options.code ?? 0);
+    child.emit("close", args[0] === "session" ? 0 : options.code ?? 0);
   });
   return child as ReturnType<typeof spawn>;
 }
@@ -100,6 +101,23 @@ describe("deleting one browser session's saved logins", () => {
     vi.mocked(spawn).mockImplementation((_binary, args) => lifecycleChild(args, { sessions: args?.[0] === "session" && ++polls === 1 ? ["work", "work-client"] : ["work-client"] }));
     expect(await closeBrowserSession("fixture-browser", { ...options.env, AGENT_BROWSER_SESSION: "work" })).toBe(true);
     expect(polls).toBe(2);
+  });
+
+  it("waits for inventory stdout to finish after the process exits", async () => {
+    const { options } = fixture();
+    vi.mocked(spawn).mockImplementation((_binary, args) => {
+      if (args?.[0] !== "session") return lifecycleChild(args);
+      const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), kill: () => true });
+      queueMicrotask(() => {
+        child.emit("exit", 0);
+        queueMicrotask(() => {
+          child.stdout.emit("data", '{"success":true,"data":{"sessions":[]}}');
+          child.emit("close", 0);
+        });
+      });
+      return child as ReturnType<typeof spawn>;
+    });
+    expect(await closeBrowserSession("fixture-browser", { ...options.env, AGENT_BROWSER_SESSION: "work" })).toBe(true);
   });
 
   it.each(['not-json', '{"success":true}', '{"success":false,"data":{"sessions":[]}}'])("refuses an invalid shutdown inventory %s", async (inventory) => {
