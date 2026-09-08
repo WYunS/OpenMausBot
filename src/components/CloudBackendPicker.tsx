@@ -3,6 +3,7 @@
 // homes (ComputerPanel and the bot settings dialog's Access section), so the copy and the disabled
 // rules can never drift apart.
 import type { CloudBackend } from "../../server/contracts.ts";
+import { RUIJIE_SANDBOX_ENABLED, RUIJIE_SANDBOX_UNAVAILABLE_MESSAGE } from "../../server/product-features";
 import { cn } from "@/lib/cn";
 
 export function CloudBackendPicker({
@@ -30,12 +31,17 @@ export function CloudBackendPicker({
       </div>
       <div className="mt-2 flex overflow-hidden rounded-lg border border-hairline/40">
         {(["box", "vps", "ruijie-sandbox"] as const).map((backend, i) => {
-          const disabled = backend === "vps" && !vpsSupported;
+          const disabled = (backend === "vps" && !vpsSupported) || (backend === "ruijie-sandbox" && !RUIJIE_SANDBOX_ENABLED);
+          const title = backend === "ruijie-sandbox" && !RUIJIE_SANDBOX_ENABLED
+            ? RUIJIE_SANDBOX_UNAVAILABLE_MESSAGE
+            : disabled
+              ? "Self-hosted VPS requires Claude or an ACP engine"
+              : undefined;
           return (
             <button
               key={backend}
               disabled={disabled}
-              title={disabled ? "Self-hosted VPS requires Claude or an ACP engine" : undefined}
+              title={title}
               onClick={() => onChange(backend)}
               className={cn(
                 "flex-1 py-1.5 text-[12px]",
@@ -49,6 +55,7 @@ export function CloudBackendPicker({
           );
         })}
       </div>
+      {!RUIJIE_SANDBOX_ENABLED && <div className="mt-1.5 text-[11px] text-ink-secondary">Ruijie sandbox · Temporarily unavailable</div>}
     </div>
   );
 }

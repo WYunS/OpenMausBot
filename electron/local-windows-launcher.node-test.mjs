@@ -18,12 +18,16 @@ test("development services start from absolute paths in this checkout", async ()
   const source = await readFile(launcher, "utf8");
   assert.match(source, /Join-Path \$repoRoot 'server\\index\.ts'/);
   assert.match(source, /Join-Path \$repoRoot 'node_modules\\vite\\bin\\vite\.js'/);
-  assert.match(source, /Stop-LocalDevelopmentService 8799/);
+  assert.match(source, /\$developmentServerPort\s*=\s*38799/);
+  assert.match(source, /Stop-LocalDevelopmentService \$developmentServerPort/);
   assert.match(source, /Stop-LocalDevelopmentService 5199/);
   assert.match(source, /\$env:OMB_CONTROL_PLANE_URL\s*=\s*'https:\/\/accounts\.openmausbot\.com'/);
   assert.match(source, /\[char\]0x9510/);
   assert.match(source, /\[char\]0x6377/);
   assert.match(source, /\$env:OMB_USER_DATA\s*=\s*Join-Path \$env:APPDATA \$ruijieAppName/);
+  assert.match(source, /\$env:OMB_DATA_DIR\s*=\s*Join-Path \$env:USERPROFILE '\.openmausbot'/);
+  assert.match(source, /\$env:OMB_PORT\s*=\s*\[string\]\$developmentServerPort/);
+  assert.match(source, /\$env:OMB_LOCAL_VM_PROFILE\s*=\s*'development'/);
   assert.match(source, /\$env:OMB_DESKTOP_PARENT\s*=\s*\$null/);
   assert.doesNotMatch(source, /\$env:OMB_USER_DATA\s*=.*'锐捷Bot'/);
 });
@@ -77,6 +81,9 @@ test("the development shortcut uses a branded native launcher", async () => {
   const mainAppId = mainSource.match(/app\.isPackaged\s*\?\s*"com\.openmausbot\.app"\s*:\s*"([^"]+)"/)?.[1];
   assert.equal(installerAppId, "com.openmausbot.app.localdev.source");
   assert.equal(mainAppId, installerAppId);
+  assert.match(mainSource, /app\.isPackaged\) app\.setPath\("userData", path\.join\(app\.getPath\("appData"\), "锐捷Bot Installed"\)\)/);
+  assert.match(mainSource, /OMB_LOCAL_VM_PROFILE:\s*"installed"/);
+  assert.match(mainSource, /server-data/);
   assert.match(mainSource, /title:\s*"锐捷Bot"/);
   assert.match(mainSource, /nativeTheme\.themeSource\s*=\s*nativeThemeSourceForSkin\(skin\)/);
   assert.match(installerSource, /set-windows-shortcut-app-id\.ps1/);

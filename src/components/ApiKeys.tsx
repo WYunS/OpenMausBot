@@ -5,6 +5,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Check, CircleHelp, ExternalLink, Loader2, TriangleAlert } from "lucide-react";
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { RUIJIE_SANDBOX_ENABLED, RUIJIE_SANDBOX_UNAVAILABLE_MESSAGE } from "../../server/product-features";
 import { t } from "@/lib/i18n";
 import type { LocaleKey } from "@/locales";
 
@@ -327,7 +328,7 @@ export function RuijieSandboxConnection() {
   }, [state.config?.ruijieSandbox?.managerUrl]);
 
   const save = async () => {
-    if (saving || !managerUrl.trim() || (!requestJson.trim() && !configured)) return;
+    if (!RUIJIE_SANDBOX_ENABLED || saving || !managerUrl.trim() || (!requestJson.trim() && !configured)) return;
     setSaving(true);
     setError(null);
     try {
@@ -359,11 +360,15 @@ export function RuijieSandboxConnection() {
       <div className="mb-1.5 flex items-center gap-2 text-[13px] text-ink-secondary">
         <span className={cn("size-1.5 rounded-full", configured ? "bg-success" : "bg-raised-hover")} />
         <span>Ruijie microVM sandbox</span>
-        <span className="rounded bg-control px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ink-secondary">Development</span>
+        <span className="rounded bg-control px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ink-secondary">
+          {RUIJIE_SANDBOX_ENABLED ? "Development" : "Unavailable"}
+        </span>
         {configured && <span className="text-[11px] text-success">Configured</span>}
       </div>
       <div className="mb-2 text-[12px] leading-relaxed text-ink-secondary">
-        Creates a pooled Linux desktop through sandbox-manager and opens its VNC session. The request template is stored write-only.
+        {RUIJIE_SANDBOX_ENABLED
+          ? "Creates a pooled Linux desktop through sandbox-manager and opens its VNC session. The request template is stored write-only."
+          : `${RUIJIE_SANDBOX_UNAVAILABLE_MESSAGE}. Existing connection details are preserved but cannot be changed or used.`}
       </div>
       <div className="space-y-2">
         <input
@@ -373,6 +378,7 @@ export function RuijieSandboxConnection() {
           placeholder="http://manager.internal:12581"
           aria-label="Ruijie sandbox manager URL"
           autoComplete="off"
+          disabled={!RUIJIE_SANDBOX_ENABLED}
           className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
         />
         <textarea
@@ -382,11 +388,12 @@ export function RuijieSandboxConnection() {
           aria-label="Ruijie sandbox request JSON"
           rows={4}
           spellCheck={false}
+          disabled={!RUIJIE_SANDBOX_ENABLED}
           className="w-full resize-y rounded-lg border border-hairline/40 bg-inset px-3 py-2 font-mono text-[11px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
         />
         <button
           onClick={() => void save()}
-          disabled={saving || !managerUrl.trim() || (!requestJson.trim() && !configured)}
+          disabled={!RUIJIE_SANDBOX_ENABLED || saving || !managerUrl.trim() || (!requestJson.trim() && !configured)}
           className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-control py-2 text-[13px] text-ink hover:bg-raised-hover disabled:cursor-not-allowed disabled:opacity-50"
         >
           {saving ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}

@@ -273,6 +273,7 @@ import { RepeatDetector, callKey } from "./repeat-detector.ts";
 import { redactSecretsInText } from "./redact.ts";
 import * as vps from "./vps-computer.ts";
 import * as ruijieSandbox from "./ruijie-sandbox.ts";
+import { RUIJIE_SANDBOX_ENABLED, RUIJIE_SANDBOX_UNAVAILABLE_MESSAGE } from "./product-features.ts";
 import { RoutineManager, type RoutineRun, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
 import { CalendarCallManager, type CalendarCall } from "./calendar-calls.ts";
 import {
@@ -4402,6 +4403,7 @@ async function startTurn(
       }
 
       if (wants === "cloud" && cloudBackend === "ruijie-sandbox") {
+        if (!RUIJIE_SANDBOX_ENABLED) throw new Error(RUIJIE_SANDBOX_UNAVAILABLE_MESSAGE);
         if (!mountsLocalComputer) {
           throw new Error("this model engine cannot use the Ruijie sandbox computer — choose an engine with computer tools");
         }
@@ -10691,6 +10693,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (body.cloudBackend !== undefined && !["box", "vps", "ruijie-sandbox"].includes(String(body.cloudBackend))) {
         return json(res, 400, { error: "cloudBackend must be box, vps, or ruijie-sandbox" });
       }
+      if (body.cloudBackend === "ruijie-sandbox" && !RUIJIE_SANDBOX_ENABLED) {
+        return json(res, 409, { error: RUIJIE_SANDBOX_UNAVAILABLE_MESSAGE });
+      }
       if (body.autoStartVps !== undefined) {
         if (typeof body.autoStartVps !== "boolean") return json(res, 400, { error: "autoStartVps must be true or false" });
         patch.autoStartVps = body.autoStartVps;
@@ -12449,6 +12454,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const body = await readBody(req);
       const patch = parseConfigPatch(body);
       if (!Object.keys(patch).length) return json(res, 400, { error: "nothing to save" });
+      if (patch.ruijieSandbox !== undefined && !RUIJIE_SANDBOX_ENABLED) {
+        return json(res, 409, { error: RUIJIE_SANDBOX_UNAVAILABLE_MESSAGE });
+      }
       if (providerConfigBusy) return json(res, 409, { error: "provider settings are already being updated" });
       const disablingBuiltInBrowser = patch.features?.browser === false && builtInBrowserEnabled(cfg);
       const removedBrowserProfileIds = patch.browserProfiles === undefined
@@ -13060,6 +13068,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (m && method === "GET") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      if (bot.cloudBackend === "ruijie-sandbox" && !RUIJIE_SANDBOX_ENABLED) {
+        return json(res, 503, { backend: "ruijie-sandbox", error: RUIJIE_SANDBOX_UNAVAILABLE_MESSAGE });
+      }
       return bot.cloudBackend === "vps"
         ? json(res, 200, { backend: "vps", ...(await vps.vpsComputerStatus(cfg, bot.id)) })
         : bot.cloudBackend === "ruijie-sandbox"
@@ -13119,6 +13130,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
       }
+      if (bot.cloudBackend === "ruijie-sandbox" && !RUIJIE_SANDBOX_ENABLED) {
+        return json(res, 503, { error: RUIJIE_SANDBOX_UNAVAILABLE_MESSAGE });
+      }
       return json(res, 200, bot.cloudBackend === "vps" ? vps.closeVpsDesktopTunnel(bot.id) : { closed: false });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/computer\/(provision|join|sleep|exec|screenshot|remove)$/);
@@ -13133,6 +13147,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // both backends — the Box branch runs commands too.
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
+      }
+      if (bot.cloudBackend === "ruijie-sandbox" && !RUIJIE_SANDBOX_ENABLED) {
+        return json(res, 503, { error: RUIJIE_SANDBOX_UNAVAILABLE_MESSAGE });
       }
       const remoteProvider: RemoteComputerProvider = bot.cloudBackend === "vps"
         ? "vps"

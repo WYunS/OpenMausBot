@@ -41,7 +41,22 @@ export const IMAGE_REPOSITORY = "localhost/openmausbot/cua-local-vm";
 export const IMAGE_LAYER_VERSION = "6";
 export const IMAGE_LAYER_LABEL = "com.openmausbot.image-layer";
 export const IMAGE = `${IMAGE_REPOSITORY}:driver-${CUA_DRIVER_VERSION}-v${IMAGE_LAYER_VERSION}`;
-export const CONTAINER = "openmausbot-computer";
+const BASE_CONTAINER = "openmausbot-computer";
+export type LocalVmRuntimeProfileName = "development" | "installed";
+
+/** Podman and the immutable image are deliberately shared machine-wide. Only
+ * mutable runtime resources are namespaced so source and installed builds can
+ * remain open together without stealing each other's container or viewer. */
+export function localVmRuntimeProfile(profile: LocalVmRuntimeProfileName) {
+  return profile === "installed"
+    ? { image: IMAGE, containerName: `${BASE_CONTAINER}-installed`, viewerPort: 6081 }
+    : { image: IMAGE, containerName: BASE_CONTAINER, viewerPort: 6080 };
+}
+
+const LOCAL_VM_RUNTIME_PROFILE = localVmRuntimeProfile(
+  process.env.OMB_LOCAL_VM_PROFILE === "installed" ? "installed" : "development",
+);
+export const CONTAINER = LOCAL_VM_RUNTIME_PROFILE.containerName;
 export const MANAGED_LABEL = "com.openmausbot.local-vm";
 export const DRIVER_LABEL = "com.openmausbot.cua-driver";
 export const BASE_IMAGE_LABEL = "com.openmausbot.cua-base";
@@ -92,7 +107,7 @@ export type Runtime = (typeof RUNTIMES)[number];
 export type LifecycleAction = "pull" | "run" | "start" | "stop" | "remove";
 
 const INTERNAL_VIEWER_PORT = 6901;
-const HOST_VIEWER_PORT = 6080;
+const HOST_VIEWER_PORT = LOCAL_VM_RUNTIME_PROFILE.viewerPort;
 const MEMORY_BYTES = 4 * 1024 * 1024 * 1024;
 const NANO_CPUS = 2_000_000_000;
 const PIDS_LIMIT = 512;

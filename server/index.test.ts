@@ -7033,6 +7033,19 @@ describe("harness HTTP API", () => {
     expect((await api("PATCH", "/api/config", { vps: { sshAlias: "" } })).status).toBe(200);
   });
 
+  it("rejects the disabled Ruijie sandbox at every public configuration boundary", async () => {
+    const bot = (await api("GET", "/api/bots?messages=0")).body.bots[0];
+    const selected = await api("PATCH", `/api/bots/${bot.id}`, { cloudBackend: "ruijie-sandbox" });
+    expect(selected.status).toBe(409);
+    expect(selected.body.error).toMatch(/temporarily unavailable/i);
+
+    const configured = await api("PUT", "/api/config", {
+      ruijieSandbox: { managerUrl: "http://127.0.0.1:1", requestJson: "{}" },
+    });
+    expect(configured.status).toBe(409);
+    expect(configured.body.error).toMatch(/temporarily unavailable/i);
+  });
+
   it("validates a Composio project key, creates a Session, and keeps externally stored secrets off disk", async () => {
     const oldKey = await api("PUT", "/api/config", { composio: { apiKey: "old_key" } });
     expect(oldKey.status).toBe(400);

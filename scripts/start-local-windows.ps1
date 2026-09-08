@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $logRoot = Join-Path $env:LOCALAPPDATA 'OpenMausBot-Dev\logs'
 $electron = Join-Path $repoRoot 'node_modules\electron\dist\electron.exe'
+$developmentServerPort = 38799
 # Source builds intentionally require an explicit trusted control plane before
 # sending SSO tokens or provisioning the secure phone tunnel. This branded
 # development shortcut targets the same production service as packaged builds.
@@ -13,6 +14,9 @@ $env:OMB_CONTROL_PLANE_URL = 'https://accounts.openmausbot.com'
 # the same userData path regardless of that code page.
 $ruijieAppName = ([string][char]0x9510) + ([char]0x6377) + 'Bot'
 $env:OMB_USER_DATA = Join-Path $env:APPDATA $ruijieAppName
+$env:OMB_DATA_DIR = Join-Path $env:USERPROFILE '.openmausbot'
+$env:OMB_PORT = [string]$developmentServerPort
+$env:OMB_LOCAL_VM_PROFILE = 'development'
 # A source server is not Electron's utility child and must discover the
 # development bridge from the descriptor above.
 $env:OMB_DESKTOP_PARENT = $null
@@ -118,16 +122,16 @@ function Invoke-Launcher {
   # another checkout or an older source revision. Cold launches own these two
   # development ports, restart known OpenMausBot services, and use absolute
   # script paths so ownership is visible in process diagnostics.
-  Stop-LocalDevelopmentService 8799
+  Stop-LocalDevelopmentService $developmentServerPort
   Stop-LocalDevelopmentService 5199
   Start-LocalService 'dev:server' 'server'
   Start-LocalService 'dev' 'vite'
 
   $deadline = (Get-Date).AddSeconds(45)
-  while ((Get-Date) -lt $deadline -and (-not (Test-LocalPort 8799) -or -not (Test-LocalPort 5199))) {
+  while ((Get-Date) -lt $deadline -and (-not (Test-LocalPort $developmentServerPort) -or -not (Test-LocalPort 5199))) {
     Start-Sleep -Milliseconds 250
   }
-  if (-not (Test-LocalPort 8799) -or -not (Test-LocalPort 5199)) {
+  if (-not (Test-LocalPort $developmentServerPort) -or -not (Test-LocalPort 5199)) {
     throw "Local services did not become ready. See $logRoot"
   }
 

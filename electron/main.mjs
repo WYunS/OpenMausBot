@@ -119,6 +119,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ID = app.isPackaged ? "com.openmausbot.app" : "com.openmausbot.app.localdev.source";
 const APP_TITLE = "锐捷Bot";
 app.setName(APP_TITLE);
+// Keep the installed product independent from this checkout's historical
+// development profile. The visible product name is unchanged.
+if (app.isPackaged) app.setPath("userData", path.join(app.getPath("appData"), "锐捷Bot Installed"));
 // A development build runs from electron.exe, whose default Windows taskbar
 // identity/icon is the Electron atom. Give it the same identity as the
 // installed app before ready, and use the ICO that the desktop shortcut uses.
@@ -128,7 +131,7 @@ if (process.platform === "win32") nativeTheme.themeSource = nativeThemeSourceFor
 // resolve to ::1 and paint a black window
 const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 const DEFAULT_COMPOSIO_BROKER_URL = "https://openmausbot-composio.milindsoni201.workers.dev";
-let SERVER_PORT = 8799;
+let SERVER_PORT = Number(process.env.OMB_PORT || 8799);
 const APP_ICON = process.platform === "win32" && !app.isPackaged
   ? path.join(__dirname, "..", "build", "icon-ruijie-orb-depth.ico")
   : path.join(__dirname, "resources", "app-icon.png");
@@ -313,7 +316,9 @@ function desktopDataDir() {
   // then pass this exact resolved path to the utility child. server/config.ts
   // intentionally treats an empty OMB_DATA_DIR differently, so inheriting it
   // without normalization would lease one directory and write another.
-  return process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".openmausbot");
+  return process.env.OMB_DATA_DIR || (app.isPackaged
+    ? path.join(app.getPath("userData"), "server-data")
+    : path.join(app.getPath("home"), ".openmausbot"));
 }
 
 async function stopUtilityServer(proc, timeoutMs = UTILITY_SERVER_STOP_TIMEOUT_MS) {
@@ -1108,6 +1113,7 @@ async function startServerOn(port) {
     // the server advertises this to remote clients so version skew is visible
     OMB_APP_VERSION: app.getVersion(),
     OMB_USER_DATA: app.getPath("userData"),
+    OMB_LOCAL_VM_PROFILE: "installed",
     ...(secureCredentials.composioApiKey
       ? { COMPOSIO_API_KEY: secureCredentials.composioApiKey }
       : {}),

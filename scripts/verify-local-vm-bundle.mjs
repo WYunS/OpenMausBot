@@ -4,8 +4,10 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { IMAGE, IMAGE_LAYER_VERSION, CUA_DRIVER_VERSION, localVmImageArchiveName } from "../server/container-computer.ts";
+import { validateReleaseManifest } from "./local-vm-release-manifest.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
 const requested = process.argv.filter((value) => value.startsWith("--arch=")).map((value) => value.slice(7));
 const arches = requested.length ? requested : ["x64", "arm64"];
 
@@ -26,6 +28,10 @@ for (const arch of arches) {
   if (actual !== expected) throw new Error(`Local VM archive checksum mismatch: ${archive}`);
   const platformArch = arch === "x64" ? "amd64" : "arm64";
   const manifest = JSON.parse(await readFile(path.join(directory, `manifest-linux-${platformArch}.json`), "utf8"));
+  validateReleaseManifest(manifest, directory);
+  if (manifest.appVersion !== packageJson.version) {
+    throw new Error(`Local VM manifest was built for app ${manifest.appVersion}, not ${packageJson.version}: ${directory}`);
+  }
   if (manifest.image !== IMAGE || manifest.cuaDriverVersion !== CUA_DRIVER_VERSION || manifest.imageLayerVersion !== IMAGE_LAYER_VERSION || manifest.sha256 !== actual) {
     throw new Error(`Local VM manifest does not match runtime constants: ${directory}`);
   }

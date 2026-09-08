@@ -115,6 +115,7 @@ await writeFile(path.join(outputDirectory, `manifest-linux-${platformArch}.json`
   platform,
   archive: path.basename(archive),
   sha256,
+  enterpriseApps: vendorPresence[0] ? ["feishu", "feilian"] : [],
 }, null, 2) + "\n");
 
 console.log(`Built ${platform} OCI archive: ${archive}`);
