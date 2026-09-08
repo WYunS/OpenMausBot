@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { resolveDriverBinary, startCua, stopCua, registerCuaIpc, setCuaStateListener } from "./cua.mjs";
+import { startCua, stopCua, registerCuaIpc, setCuaStateListener } from "./cua.mjs";
 import { createAndroidDeviceController } from "./android-device.mjs";
 import { assemblyAICredential, mintAssemblyAIStreamingToken } from "./assemblyai.mjs";
 import { finishSpeech, startSpeech, stopSpeech } from "./speech.mjs";
@@ -96,7 +96,6 @@ const require = createRequire(import.meta.url);
 const { createDisplayMediaGuard, encodeScreenThumbnail, invokeDisplayMediaCallback, selectCaptureSource } = require(
   "./screen-preview.cjs",
 );
-const { createLocalDesktopInputController } = require("./local-desktop-input.cjs");
 const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.cjs");
 const { DESKTOP_VIEWER_USER_AGENT, desktopViewerUrl, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
 const { createDesktopWorkspaceManager } = require("./desktop-workspace.cjs");
@@ -155,18 +154,6 @@ let pendingPackageInstallUrl = packageUrlFromCommandLine(process.argv);
 let mainWindow = null;
 let unreadCount = 0;
 let unreadOverlayIcon = null;
-let localDesktopInputController = null;
-let localWorkspacePresentation = false;
-
-function applyLocalWorkspacePresentation(win = mainWindow) {
-  if (process.platform !== "win32" || !win || win.isDestroyed()) return;
-  win.setContentProtection(localWorkspacePresentation);
-  // `screen-saver` maps to the durable topmost band on Windows. Reapplying it
-  // after foreground changes prevents a newly launched browser from covering
-  // the in-app desktop console.
-  win.setAlwaysOnTop(localWorkspacePresentation, localWorkspacePresentation ? "screen-saver" : "normal");
-  if (localWorkspacePresentation) win.moveTop();
-}
 
 function windowStateFile() {
   return path.join(app.getPath("userData"), "window-state.json");
@@ -1898,11 +1885,6 @@ function createWindow() {
   hideNativeWindowTitle(win);
   mainWindow = win;
   attachUpdaterWindow(win);
-  for (const eventName of ["show", "restore", "maximize", "focus", "blur"]) {
-    win.on(eventName, () => {
-      if (localWorkspacePresentation) setImmediate(() => applyLocalWorkspacePresentation(win));
-    });
-  }
   void startBrowserSurface(win);
   if (waitsForSkinSync) {
     // A broken renderer or preload must not strand the app as an invisible
@@ -2119,34 +2101,6 @@ ipcMain.handle("screen:frame", localOnly("screen:frame", async () => {
   return source ? encodeScreenThumbnail(source.thumbnail) : null;
 }));
 
-ipcMain.handle("screen:capture-shield", localOnly("screen:capture-shield", (event, enabled) => {
-  const win = BrowserWindow.fromWebContents(event.sender);
-  if (process.platform !== "win32" || !win || win !== mainWindow || win.isDestroyed()) return false;
-  // Windows maps this to WDA_EXCLUDEFROMCAPTURE. The user still sees the
-  // viewer, while desktopCapturer and the local agent see the desktop below
-  // it instead of an endlessly nested copy of OpenMausBot.
-  localWorkspacePresentation = enabled === true;
-  applyLocalWorkspacePresentation(win);
-  return localWorkspacePresentation;
-}));
-
-ipcMain.handle("screen:desktop-input", localOnly("screen:desktop-input", async (event, input) => {
-  const win = BrowserWindow.fromWebContents(event.sender);
-  if (process.platform !== "win32" || !win || win !== mainWindow || win.isDestroyed()) {
-    throw new Error("Interactive local desktop viewing is available only in the Windows app");
-  }
-  if (!localDesktopInputController) {
-    const binary = resolveDriverBinary();
-    if (!binary) throw new Error("CUA Driver is unavailable");
-    localDesktopInputController = createLocalDesktopInputController({
-      binary,
-      hostPid: process.pid,
-      socketPath: `\\\\.\\pipe\\openmausbot-human-${process.pid}`,
-    });
-  }
-  return localDesktopInputController.input(input);
-}));
-
 // Onboarding permission checks. Status reads are free; the mic request
 // pops the real TCC prompt attributed to the app.
 //
@@ -2269,13 +2223,6 @@ ipcMain.handle("desktop:open-external", async (_event, rawUrl) => {
     throw new Error("Only web links can be opened");
   }
   await shell.openExternal(url.toString());
-  return true;
-});
-
-ipcMain.handle("desktop:minimize", (event) => {
-  const win = BrowserWindow.fromWebContents(event.sender);
-  if (!win || win !== mainWindow || win.isDestroyed()) return false;
-  win.minimize();
   return true;
 });
 
@@ -2840,7 +2787,6 @@ app.on("before-quit", (e) => {
   const ownedHelperCleanup = Promise.race([
     Promise.all([
       stopCua().catch(() => {}),
-      localDesktopInputController?.stop().catch(() => {}) ?? Promise.resolve(),
       browserHost?.stop().catch(() => {}) ?? Promise.resolve(),
       // Both listeners reachable from outside the app are owned children.
       // Shut the connector down first, then the sidecar, without changing the
