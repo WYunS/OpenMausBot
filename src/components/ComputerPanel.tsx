@@ -62,7 +62,12 @@ import {
 import { approvalModeFor } from "../../shared/approval-mode";
 import { activeLocale, t } from "@/lib/i18n";
 import type { LocaleKey } from "@/locales";
-import { ensureLocalVmReady, localVmLaunchAction } from "@/lib/local-vm-bootstrap";
+import {
+  ensureLocalVmReady,
+  localVmLaunchAction,
+  localVmSelectionStartsBootstrap,
+  localVmSetupAvailable,
+} from "@/lib/local-vm-bootstrap";
 
 class LocalizedPanelError extends Error {
   constructor(
@@ -1397,7 +1402,7 @@ export function ComputerPanel({
                 </button>
               )}
               {phase === "vm-unavailable" && (
-                vmStatus?.mode === "per-bot" && (Boolean(window.ogb?.localVmBootstrap) || (vmStatus.image && vmStatus.create_supported)) ? (
+                vmStatus && localVmSetupAvailable(vmStatus, Boolean(window.ogb?.localVmBootstrap)) ? (
                   <div>
                   <button
                     onClick={() => void runVmAction(vmNeedsReplacement ? "vm-recreate" : "vm-create")}
@@ -1690,6 +1695,14 @@ export function ComputerPanel({
                   // a browser-only bot must actually have its browser: flip
                   // the per-bot switch on with the destination
                   else if (mode === "browser") updateComputerSelection({ computer: mode, browser: true });
+                  else if (mode === "vm") {
+                    const startBootstrap = localVmSelectionStartsBootstrap(
+                      bot.computer,
+                      Boolean(window.ogb?.localVmBootstrap),
+                    );
+                    updateComputerSelection({ computer: mode });
+                    if (startBootstrap) void runVmAction("vm-create");
+                  }
                   else updateComputerSelection({ computer: mode });
                 }}
                 type="button"

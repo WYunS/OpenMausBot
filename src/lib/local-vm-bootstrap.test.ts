@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { ensureLocalVmReady, localVmLaunchAction, type LocalVmBootstrapBridge } from "./local-vm-bootstrap";
+import {
+  ensureLocalVmReady,
+  localVmLaunchAction,
+  localVmSelectionStartsBootstrap,
+  localVmSetupAvailable,
+  type LocalVmBootstrapBridge,
+} from "./local-vm-bootstrap";
 
 const state = (status: LocalVmBootstrapState["status"]): LocalVmBootstrapState => ({
   status,
@@ -67,5 +73,29 @@ describe("localVmLaunchAction", () => {
   it("replaces only an existing incompatible VM", () => {
     expect(localVmLaunchAction({ ...safe, container: "stopped", imageMatches: false })).toBe("vm-recreate");
     expect(localVmLaunchAction({ ...safe, container: "missing", imageMatches: false })).toBe("vm-create");
+  });
+});
+
+describe("localVmSetupAvailable", () => {
+  it("offers one-click recovery for a shared VM when the desktop bootstrap is available", () => {
+    expect(localVmSetupAvailable({
+      mode: "shared",
+      image: false,
+      create_supported: false,
+    }, true)).toBe(true);
+  });
+
+  it("keeps the server-only fallback limited to creatable per-bot VMs", () => {
+    expect(localVmSetupAvailable({ mode: "per-bot", image: true, create_supported: true }, false)).toBe(true);
+    expect(localVmSetupAvailable({ mode: "shared", image: true, create_supported: true }, false)).toBe(false);
+  });
+});
+
+describe("localVmSelectionStartsBootstrap", () => {
+  it("starts the desktop bootstrap on the first Local VM selection only", () => {
+    expect(localVmSelectionStartsBootstrap(undefined, true)).toBe(true);
+    expect(localVmSelectionStartsBootstrap("local", true)).toBe(true);
+    expect(localVmSelectionStartsBootstrap("vm", true)).toBe(false);
+    expect(localVmSelectionStartsBootstrap(undefined, false)).toBe(false);
   });
 });

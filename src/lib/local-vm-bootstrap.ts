@@ -8,6 +8,24 @@ export type LocalVmBootstrapOutcome =
   | { kind: "cancelled" }
   | { kind: "reboot-required"; state: LocalVmBootstrapState };
 
+/** The Electron bootstrap can repair both shared and per-bot Local VMs. The
+ * server-only fallback can create only a per-bot container from a known image. */
+export function localVmSetupAvailable(
+  status: { mode: "shared" | "per-bot"; image?: boolean; create_supported?: boolean },
+  hasDesktopBootstrap: boolean,
+): boolean {
+  return hasDesktopBootstrap || (
+    status.mode === "per-bot" && Boolean(status.image && status.create_supported)
+  );
+}
+
+export function localVmSelectionStartsBootstrap(
+  currentComputer: string | null | undefined,
+  hasDesktopBootstrap: boolean,
+): boolean {
+  return currentComputer !== "vm" && hasDesktopBootstrap;
+}
+
 export function localVmLaunchAction(status: {
   container: "running" | "stopped" | "missing";
   imageMatches: boolean;
