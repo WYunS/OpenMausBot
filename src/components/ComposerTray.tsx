@@ -1,10 +1,10 @@
 // The tray under the composer input: the project this bot works in, the
-// tools it has (computer, browser, connected apps, MCP servers), and the
-// computer toggle — the "what can this bot do right now" strip that used
-// to be split between the header and settings. Changing any of it still
+// tools it has (computer, browser, connected apps, MCP servers) — the
+// "what can this bot do right now" strip. The computer toggle stays in
+// the header beside the call button. Changing any of it still
 // happens in bot settings; the tray shows and links.
 import { useEffect, useState } from "react";
-import { Folder, Monitor, Wrench } from "lucide-react";
+import { Folder, Wrench } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
@@ -164,23 +164,10 @@ function ToolsChip({ bot }: { bot: Bot }) {
 }
 
 export function ComposerTray({ bot }: { bot: Bot }) {
-  const { state, dispatch } = useStore();
   return (
     <>
       <ProjectChip bot={bot} />
       <ToolsChip bot={bot} />
-      <button
-        type="button"
-        onClick={() => dispatch({ type: "toggleComputer" })}
-        aria-pressed={state.computerOpen}
-        className={cn(
-          "flex size-8 shrink-0 items-center justify-center rounded-full hover:bg-raised-hover",
-          state.computerOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
-        )}
-        title={t("chat.computer")}
-      >
-        <Monitor size={17} />
-      </button>
     </>
   );
 }

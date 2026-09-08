@@ -11,6 +11,7 @@ import {
   Crown,
   ListTree,
   MessageSquareReply,
+  Monitor,
   Pencil,
   Pin,
   PinOff,
@@ -1185,8 +1186,17 @@ export function ChatView({ bot }: { bot: Bot }) {
           <UsageChip bot={bot} />
           {!remoteClient && <ModelPicker bot={bot} />}
           <CallButton bot={bot} />
-          {/* the working folder and the computer toggle moved into the
-              composer tray, next to the tools the bot has */}
+          <button
+            onClick={() => dispatch({ type: "toggleComputer" })}
+            className={cn(
+              "rounded-md p-1.5 hover:bg-raised",
+              state.computerOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
+            )}
+            title={t("chat.computer")}
+          >
+            <Monitor size={18} />
+          </button>
+          {/* the working folder chip moved into the composer tray */}
           {!remoteClient && <button
             onClick={() => dispatch({ type: "toggleInspector" })}
             aria-label={t("chat.inspector")}
