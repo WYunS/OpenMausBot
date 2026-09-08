@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { readComputerPanelView, writeComputerPanelView } from "./computer-panel-view";
+import { computerPreviewIntervalMs, readComputerPanelView, writeComputerPanelView } from "./computer-panel-view";
 
 describe("computer panel view persistence", () => {
+  it("refreshes local desktops promptly without using an aggressive idle loop", () => {
+    expect(computerPreviewIntervalMs(true)).toBe(2_000);
+    expect(computerPreviewIntervalMs(false)).toBe(8_000);
+  });
+
   it("restores the browser for the same bot after the expanded workspace closes", () => {
     const values = new Map<string, string>();
     const storage = {

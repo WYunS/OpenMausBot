@@ -34,7 +34,7 @@ describe("local computer MCP proxy", () => {
     expect(publishFrame).toHaveBeenCalledWith({ png: "iVBORw0KGgo=", mime: "image/png" });
   });
 
-  it("keeps the controlled app in the background and hides bring_to_front", () => {
+  it("preserves normal foreground controls instead of forcing demo background mode", () => {
     const toDriver: string[] = [];
     const toClient: string[] = [];
     const proxy = createLocalComputerProxyInterceptor({
@@ -57,11 +57,11 @@ describe("local computer MCP proxy", () => {
     }));
 
     expect(JSON.parse(toClient[0]!).result.tools.map((tool: { name: string }) => tool.name)).toEqual([
-      "click", "get_window_state",
+      "click", "bring_to_front", "get_window_state",
     ]);
-    expect(JSON.parse(toDriver[1]!).params.arguments.delivery_mode).toBe("background");
-    expect(JSON.parse(toClient[1]!).result.isError).toBe(true);
-    expect(toDriver).toHaveLength(2);
+    expect(JSON.parse(toDriver[1]!).params.arguments.delivery_mode).toBe("foreground");
+    expect(JSON.parse(toDriver[2]!).params.name).toBe("bring_to_front");
+    expect(toDriver).toHaveLength(3);
   });
 
   it("coalesces follow-up screenshots after a mutating action", () => {
@@ -78,7 +78,7 @@ describe("local computer MCP proxy", () => {
       jsonrpc: "2.0", id: 9, method: "tools/call",
       params: { name: "click", arguments: { pid: 22, window_id: 33, x: 10, y: 20 } },
     }));
-    expect(JSON.parse(toDriver[0]!).params.arguments.delivery_mode).toBe("background");
+    expect(JSON.parse(toDriver[0]!).params.arguments.delivery_mode).toBeUndefined();
     proxy.fromDriver(frame({ jsonrpc: "2.0", id: 9, result: { content: [{ type: "text", text: "ok" }] } }));
     for (const callback of scheduled) callback();
 
@@ -155,9 +155,13 @@ describe("local computer MCP proxy", () => {
       jsonrpc: "2.0", id: 12,
       result: { structuredContent: { windows: [{ pid: 44, window_id: 55 }] }, content: [] },
     }));
+    expect(JSON.parse(toDriver[1]!).params).toEqual({
+      name: "bring_to_front",
+      arguments: { pid: 44, window_id: 55 },
+    });
     for (const callback of scheduled) callback();
 
-    expect(toDriver.slice(1).map((line) => JSON.parse(line).params.arguments)).toEqual([
+    expect(toDriver.slice(2).map((line) => JSON.parse(line).params.arguments)).toEqual([
       { pid: 44, window_id: 55, max_depth: 1, max_elements: 10 },
     ]);
   });

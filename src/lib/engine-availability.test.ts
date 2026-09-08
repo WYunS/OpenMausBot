@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { engineSelectable, engineSelectableNow, mergeRuijieHarnessSnapshot, prioritizeEngines } from "./engine-availability";
 
 describe("user-controlled engine availability", () => {
-  it("defaults Ruijie Harness and Codex on while allowing every adapter to be enabled", () => {
+  it("defaults only Ruijie Harness on while allowing every adapter to be enabled", () => {
     expect(engineSelectable("ruijieHarness")).toBe(true);
-    expect(engineSelectable("codex")).toBe(true);
+    expect(engineSelectable("codex")).toBe(false);
     expect(engineSelectable("claudeAgent")).toBe(false);
     expect(engineSelectable("antigravityAgent")).toBe(false);
     expect(engineSelectable("claudeAgent", true)).toBe(true);
@@ -13,7 +13,7 @@ describe("user-controlled engine availability", () => {
   it("greys out Harness until the installed app reports the same signed-in account", () => {
     expect(engineSelectableNow({ driverKind: "ruijieHarness", snapshot: { state: "unavailable" } })).toBe(false);
     expect(engineSelectableNow({ driverKind: "ruijieHarness", snapshot: { state: "available" } })).toBe(true);
-    expect(engineSelectableNow({ driverKind: "codex", snapshot: { state: "available" } })).toBe(true);
+    expect(engineSelectableNow({ driverKind: "codex", snapshot: { state: "available" } })).toBe(false);
     expect(engineSelectableNow({ driverKind: "claudeAgent", enabled: false, snapshot: { state: "available" } })).toBe(false);
     expect(engineSelectableNow({ driverKind: "claudeAgent", enabled: true, snapshot: { state: "available" } })).toBe(true);
   });

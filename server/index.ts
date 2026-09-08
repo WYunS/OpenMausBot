@@ -1017,8 +1017,7 @@ async function defaultSelection() {
   // assigning a different provider to a newly created bot.
   const pick = described.find((d) => d.driverKind === "ruijieHarness") ?? available[0];
   const v4Flash = pick?.driverKind === "ruijieHarness"
-    ? pick.models.options.find((model) => model.id === "deepseek-official::deepseek-v4-flash")
-      ?? pick.models.options.find((model) => model.id.endsWith("::deepseek-v4-flash"))
+    ? pick.models.options.find((model) => model.id === "deepseek-vision::deepseek-v4-flash")
     : undefined;
   return { instanceId: pick?.instanceId ?? "", model: v4Flash?.id ?? pick?.models.default ?? "" };
 }

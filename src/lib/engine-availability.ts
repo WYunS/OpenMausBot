@@ -1,5 +1,5 @@
 /** Product defaults for fleet rows that predate the user-controlled switch. */
-const DEFAULT_ENABLED_DRIVERS = new Set(["ruijieHarness", "codex"]);
+const DEFAULT_ENABLED_DRIVERS = new Set(["ruijieHarness"]);
 
 export function engineSelectable(driverKind: string, enabled = DEFAULT_ENABLED_DRIVERS.has(driverKind)): boolean {
   return enabled;

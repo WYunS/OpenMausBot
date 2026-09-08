@@ -1,5 +1,9 @@
 export type ComputerPanelView = "computer" | "android" | "browser";
 
+export function computerPreviewIntervalMs(busy?: boolean): number {
+  return busy ? 2_000 : 8_000;
+}
+
 const STORAGE_PREFIX = "omb-computer-panel-view";
 
 function storageKey(botId: string): string {

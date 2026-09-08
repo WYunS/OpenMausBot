@@ -801,7 +801,7 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     hermes: { driver: "hermesAgent" },
     pi: { driver: "piAgent" },
   };
-  const DEFAULT_ENABLED_INSTANCE_IDS = new Set(["ruijieHarness", "codex"]);
+  const DEFAULT_ENABLED_INSTANCE_IDS = new Set(["ruijieHarness"]);
   const PRODUCT_FLEET_INSTANCE_IDS = new Set(Object.keys(DEFAULT_FLEET));
   const CUSTOM_ONLY = {
     qwen: { driver: "qwenAgent" },

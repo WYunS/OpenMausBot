@@ -33,14 +33,16 @@ import {
 export { defaultRuijieBridgePath } from "./ruijie-harness-local.ts";
 
 const DRIVER_KIND = "ruijieHarness";
-const DEFAULT_MODEL = "deepseek-official::deepseek-v4-flash";
+const DEFAULT_MODEL = "deepseek-vision::deepseek-v4-flash";
+const VISIBLE_MODEL_PROVIDERS = new Set(["deepseek-vision", "anthropic"]);
 const DEFAULT_MODELS: ModelCatalog = {
   default: DEFAULT_MODEL,
   options: [
-    { id: DEFAULT_MODEL, label: "DeepSeek-V4-Flash", provider: "deepseek-official" },
-    { id: "gpt::gpt-5.6-luna", label: "GPT-5.6-Luna", provider: "gpt" },
-    { id: "deepseek-vision::deepseek-v4-flash", label: "DeepSeek-V4-Flash", provider: "deepseek-vision" },
+    { id: DEFAULT_MODEL, label: "DeepSeek-V4-Flash", provider: "deepseek-vision" },
     { id: "deepseek-vision::deepseek-v4-pro", label: "DeepSeek-V4-Pro", provider: "deepseek-vision" },
+    { id: "anthropic::claude-fable-5", label: "Claude Fable 5", provider: "anthropic" },
+    { id: "anthropic::claude-opus-5", label: "Claude Opus 5", provider: "anthropic" },
+    { id: "anthropic::claude-sonnet-5", label: "Claude Sonnet 5", provider: "anthropic" },
   ],
 };
 
@@ -385,7 +387,7 @@ function toModelCatalog(value: unknown, current: ModelCatalog): ModelCatalog {
     if (!group || typeof group !== "object") continue;
     const provider = (group as { id?: unknown }).id;
     const models = (group as { models?: unknown }).models;
-    if (typeof provider !== "string" || !Array.isArray(models)) continue;
+    if (typeof provider !== "string" || !VISIBLE_MODEL_PROVIDERS.has(provider) || !Array.isArray(models)) continue;
     for (const model of models) {
       if (!model || typeof model !== "object") continue;
       const id = (model as { id?: unknown }).id;

@@ -783,6 +783,9 @@ describe("Cua integration", () => {
 
     expect(image).toBe(`data:image/png;base64,${png.toString("base64")}`);
     expect(fake.calls).toContain(screenshotCall);
+    expect(fake.calls).not.toContain(healthProbe);
+    expect(fake.calls).not.toContain(readinessProbe);
+    expect(fake.calls).not.toContain(readinessRead);
     expect(fake.calls.some((call) => /xdotool|scrot|vnc/i.test(call))).toBe(false);
   });
 

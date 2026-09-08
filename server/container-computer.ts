@@ -1223,7 +1223,7 @@ export async function containerComputerFrame(
   const status =
     cacheable && cached && cached.expiresAt > now
       ? cached.status
-      : await containerComputerStatus(runner, platform, target);
+      : await containerComputerStatus(runner, platform, target, { desktopProbe: "quick" });
   if (!status.ready || !status.runtime) {
     if (cacheable) screenshotStatusCache.delete(target.key);
     throw Object.assign(new Error(status.problem ?? "The Local VM is not ready"), { status: 409 });

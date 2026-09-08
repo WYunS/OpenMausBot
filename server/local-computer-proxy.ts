@@ -1,6 +1,6 @@
 // Windows host-computer MCP bridge. It keeps the CUA protocol transparent,
 // but observes raw screenshots before Harness projects them for a text-only
-// model and enforces the product's background-only presentation contract.
+// model. Controlled apps keep the native desktop's normal foreground behavior.
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -13,9 +13,6 @@ type Timer = (callback: () => void, delayMs: number) => unknown;
 const MUTATING_TOOLS = new Set([
   "click", "double_click", "right_click", "drag", "invoke", "press_key", "hotkey", "scroll", "set_value", "type_text",
   "launch_app", "close_window", "maximize_window", "minimize_window", "restore_window",
-]);
-const BACKGROUND_DELIVERY_TOOLS = new Set([
-  "click", "double_click", "right_click", "drag", "type_text", "press_key", "hotkey", "scroll", "browser_dialog",
 ]);
 const IMAGE_TYPES = new Set<Frame["mime"]>(["image/png", "image/jpeg", "image/webp"]);
 
@@ -58,7 +55,6 @@ export function createLocalComputerProxyInterceptor(options: {
   schedule?: Timer;
 }) {
   const pending = new Map<string | number, { name: string; args: Record<string, unknown> }>();
-  const listRequests = new Set<string | number>();
   const synthetic = new Set<string>();
   const schedule = options.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   let observation = 0;
@@ -71,6 +67,14 @@ export function createLocalComputerProxyInterceptor(options: {
     const pid = Number(args.pid);
     const windowId = Number(args.window_id);
     if (Number.isSafeInteger(pid) && Number.isSafeInteger(windowId)) lastTarget = { pid, window_id: windowId };
+  };
+  const bringTargetToFront = (target: { pid: number; window_id: number }) => {
+    const id = `omb-front-${process.pid}-${++observation}`;
+    synthetic.add(id);
+    options.toDriver(JSON.stringify({
+      jsonrpc: "2.0", id, method: "tools/call",
+      params: { name: "bring_to_front", arguments: target },
+    }));
   };
   const requestObservation = (generation: number) => {
     if (!lastTarget || generation !== observationGeneration) return;
@@ -102,9 +106,6 @@ export function createLocalComputerProxyInterceptor(options: {
     fromClient(line: string) {
       let message: any;
       try { message = JSON.parse(line); } catch { options.toDriver(line); return; }
-      if (message?.method === "tools/list" && (typeof message.id === "string" || typeof message.id === "number")) {
-        listRequests.add(message.id);
-      }
       if (message?.method !== "tools/call") { options.toDriver(line); return; }
       // Real work outranks preview refreshes. Any not-yet-dispatched frame
       // from the previous action is stale as soon as the model chooses its
@@ -116,17 +117,6 @@ export function createLocalComputerProxyInterceptor(options: {
       const args = message.params?.arguments && typeof message.params.arguments === "object"
         ? { ...message.params.arguments }
         : {};
-      if (name === "bring_to_front") {
-        options.toClient(JSON.stringify({
-          jsonrpc: "2.0", id: id ?? null,
-          result: {
-            isError: true,
-            content: [{ type: "text", text: "OpenMausBot keeps the controlled window in the background so the demonstration stays visible in the app." }],
-          },
-        }));
-        return;
-      }
-      if (BACKGROUND_DELIVERY_TOOLS.has(name)) args.delivery_mode = "background";
       rememberTarget(args);
       const forward = () => {
         if (typeof id === "string" || typeof id === "number") pending.set(id, { name, args });
@@ -153,14 +143,13 @@ export function createLocalComputerProxyInterceptor(options: {
         }
         return;
       }
-      if (listRequests.delete(id) && Array.isArray(message?.result?.tools)) {
-        message.result.tools = message.result.tools.filter((tool: any) => tool?.name !== "bring_to_front");
-        line = JSON.stringify(message);
-      }
       const call = pending.get(id);
       if (call) pending.delete(id);
       const opened = call?.name === "launch_app" ? launchedTarget(message?.result) : null;
-      if (opened) lastTarget = opened;
+      if (opened) {
+        lastTarget = opened;
+        bringTargetToFront(opened);
+      }
       const image = rawImage(message?.result);
       if (image) void options.publishFrame(image);
       options.toClient(line);

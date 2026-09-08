@@ -54,6 +54,7 @@ import {
   shouldPollCloudPreview,
 } from "@/lib/local-computer";
 import {
+  computerPreviewIntervalMs,
   readComputerPanelView,
   writeComputerPanelView,
   type ComputerPanelView,
@@ -899,7 +900,7 @@ export function ComputerPanel({
       }
     };
     void shoot();
-    const timer = window.setInterval(() => void shoot(), bot.busy ? 3000 : 30_000);
+    const timer = window.setInterval(() => void shoot(), computerPreviewIntervalMs(bot.busy));
     return () => {
       alive = false;
       window.clearInterval(timer);
@@ -911,21 +912,26 @@ export function ComputerPanel({
   // no reliable pre-grant flow on macOS 15+), so repeated empty frames mean
   // the user denied — surface the Settings repair path instead of spinning.
   const [localMisses, setLocalMisses] = useState(0);
+  const localInFlight = useRef(false);
   useEffect(() => {
     if (panelView !== "computer" || phase !== "local" || !window.ogb || isLinux || !pageVisible) return;
     let alive = true;
     setLocalMisses(0);
     const shoot = async () => {
+      if (localInFlight.current) return;
+      localInFlight.current = true;
       try {
         const url = await window.ogb!.screenFrame();
         if (alive && url) setLocalFrame(url);
         else if (alive) setLocalMisses((n) => n + 1);
       } catch {
         if (alive) setLocalMisses((n) => n + 1);
+      } finally {
+        localInFlight.current = false;
       }
     };
     void shoot();
-    const timer = setInterval(shoot, bot.busy ? 3000 : 30_000);
+    const timer = setInterval(shoot, computerPreviewIntervalMs(bot.busy));
     return () => {
       alive = false;
       clearInterval(timer);

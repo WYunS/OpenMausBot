@@ -529,10 +529,10 @@ describe("Instance CLI override", () => {
 });
 
 describe("Instance enabled switch", () => {
-  it("defaults the product fleet off except for Harness and Codex", () => {
+  it("defaults the product fleet off except for Harness", () => {
     const map = instanceConfigs({});
     expect(map.ruijieHarness.enabled).toBe(true);
-    expect(map.codex.enabled).toBe(true);
+    expect(map.codex.enabled).toBe(false);
     expect(map.claude.enabled).toBe(false);
     expect(map.grok.enabled).toBe(false);
   });

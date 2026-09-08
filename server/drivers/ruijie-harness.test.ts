@@ -72,7 +72,21 @@ describe("Ruijie Harness driver", () => {
       let value: unknown = {};
       if (url.pathname.endsWith("host.describe")) value = { version: "0.0.1" };
       if (url.pathname.endsWith("llm.models")) value = {
-        groups: [{ id: "gpt", name: "GPT", models: [{ id: "gpt-5.6-luna", name: "GPT-5.6-Luna" }] }],
+        groups: [
+          { id: "deepseek-official", name: "DeepSeek", models: [
+            { id: "deepseek-v4-flash", name: "DeepSeek-V4-Flash" },
+            { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro" },
+          ] },
+          { id: "anthropic", name: "Claude", models: [
+            { id: "claude-fable-5", name: "Claude Fable 5" },
+            { id: "claude-opus-5", name: "Claude Opus 5" },
+            { id: "claude-sonnet-5", name: "Claude Sonnet 5" },
+          ] },
+          { id: "deepseek-vision", name: "DeepSeek Vision", models: [
+            { id: "deepseek-v4-flash", name: "DeepSeek-V4-Flash" },
+            { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro" },
+          ] },
+        ],
         failures: [],
       };
       if (url.pathname.endsWith("agentPreset.list")) value = {
@@ -153,8 +167,14 @@ describe("Ruijie Harness driver", () => {
 
     await expect(instance.snapshot()).resolves.toMatchObject({ state: "available" });
     expect(instance.models).toEqual({
-      default: "gpt::gpt-5.6-luna",
-      options: [{ id: "gpt::gpt-5.6-luna", label: "GPT-5.6-Luna", provider: "gpt" }],
+      default: "deepseek-vision::deepseek-v4-flash",
+      options: [
+        { id: "anthropic::claude-fable-5", label: "Claude Fable 5", provider: "anthropic" },
+        { id: "anthropic::claude-opus-5", label: "Claude Opus 5", provider: "anthropic" },
+        { id: "anthropic::claude-sonnet-5", label: "Claude Sonnet 5", provider: "anthropic" },
+        { id: "deepseek-vision::deepseek-v4-flash", label: "DeepSeek-V4-Flash", provider: "deepseek-vision" },
+        { id: "deepseek-vision::deepseek-v4-pro", label: "DeepSeek-V4-Pro", provider: "deepseek-vision" },
+      ],
     });
     expect(calls.map((call) => call.method)).toContain("llm.models");
   });
