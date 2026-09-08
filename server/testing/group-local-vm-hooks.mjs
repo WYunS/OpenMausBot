@@ -16,7 +16,11 @@ registerHooks({
       import { SHARED_LOCAL_VM_TARGET } from ${JSON.stringify(actual)};
       import { readFileSync, writeFileSync } from 'node:fs';
       const file = ${JSON.stringify(state)};
-      const read = () => JSON.parse(readFileSync(file, 'utf8'));
+      let lastState = {};
+      const read = () => {
+        try { lastState = JSON.parse(readFileSync(file, 'utf8')); } catch {}
+        return lastState;
+      };
       export async function containerRuntimeStatus() { return { runtime: 'podman', daemonUp: true }; }
       export async function containerComputerExists() { return !read().noContainers; }
       export async function containerComputerStatus(_run, _platform, target = SHARED_LOCAL_VM_TARGET) {

@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createScreenFrameSource, type ScreenCapture } from "./screen-frame-source.ts";
+import {
+  createScreenFrameSource,
+  SCREEN_PREVIEW_INTERVAL_MS,
+  SCREEN_PREVIEW_MIN_GAP_MS,
+  type ScreenCapture,
+} from "./screen-frame-source.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -24,6 +29,11 @@ function fixture(captures?: { computer?: ScreenCapture; browser?: ScreenCapture 
 }
 
 describe("screen frame source", () => {
+  it("keeps an active desktop preview within a two-second refresh budget", () => {
+    expect(SCREEN_PREVIEW_INTERVAL_MS).toBeLessThanOrEqual(2000);
+    expect(SCREEN_PREVIEW_MIN_GAP_MS).toBeLessThanOrEqual(1000);
+  });
+
   it("throttles previews on one surface, but takes a fresh settled frame", async () => {
     const { source, computer, advance } = fixture();
     await source.capture();

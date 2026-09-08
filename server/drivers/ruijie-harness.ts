@@ -61,9 +61,28 @@ interface PendingTurn {
   providerTurn?: number;
   interrupted: boolean;
   settled: boolean;
+  requiresComputerAction: boolean;
+  computerToolSucceeded: boolean;
+  computerRetryCount: number;
   toolNames: Map<string, string>;
   usageByStep: Map<number, { input: number; output: number; cachedInput?: number }>;
 }
+
+const COMPUTER_ACTION_REQUEST = /^(?:(?:请|麻烦|你)?(?:帮我|给我|去)?|我(?:想让|要)你)?\s*(?:打开|启动|访问|浏览|搜索|搜一下|查找|找一下|点击|双击|右击|输入|填写|键入|按下|滚动|拖动|下载|上传|保存|安装|运行|执行|关闭|切换|截图|查看(?:桌面|屏幕|窗口|应用))|^(?:(?:please|can you|could you|would you|go ahead and)\s+)?(?:open|launch|visit|browse|search|click|type|fill|press|scroll|drag|download|upload|save|install|run|execute|close|switch|take (?:a )?screenshot)\b/i;
+
+export function computerActionRequested(text: string): boolean {
+  return COMPUTER_ACTION_REQUEST.test(text);
+}
+
+function mountedComputerTool(name: string | undefined): boolean {
+  if (!name) return false;
+  const normalized = name.toLowerCase();
+  return normalized.includes("openmaus_") ||
+    /(?:^|__)(?:start_session|click|double_click|right_click|drag|scroll|type_text|press_key|hotkey|move_cursor|get_window_state|get_desktop_state|get_accessibility_tree|list_windows|list_apps|launch_app|bring_to_front|check_permissions|get_screen_size|zoom|screenshot|computer_exec|computer_batch|open_url|browser_(?:state|snapshot|click|fill))$/.test(normalized);
+}
+
+const COMPUTER_RETRY_PROMPT =
+  "You have not used the selected computer yet. The selected computer is the work surface; this Harness chat is only the control surface. Use the mounted OpenMaus computer tools now, starting with get_desktop_state, perform the requested action, inspect the resulting screen, and only then report the result. Do not claim completion without a successful computer tool result.";
 
 interface PendingRequest {
   kind: "approval" | "question";
@@ -507,7 +526,11 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
       if (pending.providerTurn !== undefined && providerTurn !== undefined && providerTurn !== pending.providerTurn) return;
       if (event.type === "assistant/chunk") {
         const chunk = data?.chunk as Record<string, unknown> | undefined;
-        if (chunk?.type === "text-delta" && typeof chunk.text === "string") {
+        if (
+          chunk?.type === "text-delta" &&
+          typeof chunk.text === "string" &&
+          (!pending.requiresComputerAction || pending.computerToolSucceeded)
+        ) {
           emit({ type: "content.delta", threadId, turnId: pending.turnId, streamKind: "assistant_text", delta: chunk.text });
         }
         if (chunk?.type === "usage") {
@@ -516,7 +539,9 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
         }
       } else if (event.type === "assistant/message") {
         const text = textOfAssistantMessage(data);
-        if (text) emit({ type: "item.completed", threadId, turnId: pending.turnId, itemType: "assistant_text", text });
+        if (text && (!pending.requiresComputerAction || pending.computerToolSucceeded)) {
+          emit({ type: "item.completed", threadId, turnId: pending.turnId, itemType: "assistant_text", text });
+        }
         const usage = usageOf(data?.usage);
         if (usage) pending.usageByStep.set(typeof data?.step === "number" ? data.step : 0, usage);
       } else if (event.type === "tool/call") {
@@ -535,7 +560,9 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
               : undefined;
         const toolName = itemId ? pending.toolNames.get(itemId) : undefined;
         if (itemId) pending.toolNames.delete(itemId);
-        emit({ type: "item.completed", threadId, turnId: pending.turnId, itemId, itemType: "tool", ok: data?.error === undefined });
+        const toolSucceeded = data?.error === undefined;
+        if (toolSucceeded && mountedComputerTool(toolName)) pending.computerToolSucceeded = true;
+        emit({ type: "item.completed", threadId, turnId: pending.turnId, itemId, itemType: "tool", ok: toolSucceeded });
         const image = /(?:^|__)get_(?:window|desktop)_state$/.test(toolName ?? "")
           ? toolResultImageAttachment(data)
           : null;
@@ -557,6 +584,37 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
         }
       } else if (event.type === "turn/end") {
         const result = reasonOfTurnEnd(data);
+        if (
+          result.ok &&
+          pending.requiresComputerAction &&
+          !pending.computerToolSucceeded &&
+          !pending.interrupted
+        ) {
+          if (pending.computerRetryCount === 0) {
+            pending.computerRetryCount += 1;
+            pending.providerTurn = undefined;
+            pending.toolNames.clear();
+            void rpc(endpoint, "session.prompt", {
+              sessionId: pending.sessionId,
+              mode: "queue",
+              content: [{ type: "text", text: COMPUTER_RETRY_PROMPT }],
+              clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            }, pending.abort.signal).catch((cause: unknown) => {
+              if (!pending.interrupted) {
+                settle(threadId, pending, false, "request_error", cause instanceof Error ? cause.message : String(cause));
+              }
+            });
+            return;
+          }
+          settle(
+            threadId,
+            pending,
+            false,
+            "computer_not_used",
+            "锐捷 Harness 未在所选电脑上执行操作，已阻止它把纯文字回复当成完成。请重试，或切换模型后再试。",
+          );
+          return;
+        }
         settle(threadId, pending, pending.interrupted ? false : result.ok, pending.interrupted ? "interrupted" : result.stopReason, result.message);
       }
     };
@@ -626,6 +684,9 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
           abort: new AbortController(),
           interrupted: false,
           settled: false,
+          requiresComputerAction: Boolean(integration) && computerActionRequested(turn.text),
+          computerToolSucceeded: false,
+          computerRetryCount: 0,
           toolNames: new Map(),
           usageByStep: new Map(),
         };

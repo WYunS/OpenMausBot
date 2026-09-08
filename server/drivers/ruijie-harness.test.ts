@@ -2,8 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RuijieHarnessDriver, defaultRuijieBridgePath, toolResultImageAttachment } from "./ruijie-harness.ts";
+import {
+  computerActionRequested,
+  RuijieHarnessDriver,
+  defaultRuijieBridgePath,
+  toolResultImageAttachment,
+} from "./ruijie-harness.ts";
 import type { RuntimeEvent } from "../contracts.ts";
+import { computerPrompt } from "../system-prompt.ts";
 
 class FakeSocket extends EventTarget {
   static readonly CONNECTING = 0;
@@ -110,6 +116,13 @@ describe("Ruijie Harness driver", () => {
     vi.unstubAllGlobals();
   });
 
+  it("only requires computer evidence for action requests", () => {
+    expect(computerActionRequested("打开浏览器并搜索今天的 AI 新闻")).toBe(true);
+    expect(computerActionRequested("Search the web for today's AI news")).toBe(true);
+    expect(computerActionRequested("解释量子纠缠的基本原理")).toBe(false);
+    expect(computerActionRequested("What is open source software?")).toBe(false);
+  });
+
   it("uses the shared app-data discovery location on Windows", () => {
     expect(defaultRuijieBridgePath("win32", { APPDATA: "C:\\Users\\test\\AppData\\Roaming" }, "C:\\Users\\test"))
       .toBe("C:\\Users\\test\\AppData\\Roaming\\锐捷 Harness\\openmaus-bridge.json");
@@ -186,6 +199,118 @@ describe("Ruijie Harness driver", () => {
       expect.objectContaining({ type: "item.completed", itemType: "assistant_text", text: "完成" }),
       expect.objectContaining({ type: "turn.completed", ok: true, stopReason: "completed" }),
     ]));
+  });
+
+  it("does not report success when a selected computer turn never calls a computer tool", async () => {
+    const dshHome = await mkdtemp(join(tmpdir(), "openmaus-rjh-test-"));
+    try {
+      const instance = await RuijieHarnessDriver.create({
+        instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
+        config: { endpoint: "http://127.0.0.1:49724", expectedAccountEmail: "wangyunshang@ruijie.com.cn", dshHome },
+      });
+      const events: RuntimeEvent[] = [];
+      instance.adapter.onEvent((event) => events.push(event));
+      const started = await instance.adapter.sendTurn({
+        threadId: "thread-computer-claim",
+        text: "打开浏览器并搜索今天的 AI 新闻",
+        system: computerPrompt("vm-shared"),
+        integrations: {
+          localComputer: {
+            command: "C:\\OpenMaus\\cua-driver.exe",
+            args: ["mcp", "--direct"],
+            env: { OMB_CONTROL_TOKEN: "secret" },
+            scope: "local-computer",
+          },
+        },
+      });
+
+      const socket = FakeSocket.instances[0]!;
+      socket.frame({ type: "session/event", sessionId: "session-fixture", event: { type: "turn/start", data: { turn: 1 } } });
+      socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+        type: "assistant/message", data: { turn: 1, message: { content: [{ type: "text", text: "已经在浏览器中搜索完成。" }] } },
+      } });
+      socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+        type: "turn/end", data: { turn: 1, reason: { kind: "completed" } },
+      } });
+
+      await vi.waitFor(() => expect(calls.filter((call) => call.method === "session.prompt")).toHaveLength(2));
+      socket.frame({ type: "session/event", sessionId: "session-fixture", event: { type: "turn/start", data: { turn: 2 } } });
+      socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+        type: "assistant/message", data: { turn: 2, message: { content: [{ type: "text", text: "确实已经完成。" }] } },
+      } });
+      socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+        type: "turn/end", data: { turn: 2, reason: { kind: "completed" } },
+      } });
+
+      await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+        type: "turn.completed",
+        threadId: "thread-computer-claim",
+        turnId: started.turnId,
+        ok: false,
+        stopReason: "computer_not_used",
+      })));
+      expect(events.some((event) => event.type === "item.completed" && event.itemType === "assistant_text")).toBe(false);
+    } finally {
+      await rm(dshHome, { recursive: true, force: true });
+    }
+  });
+
+  it("retries a computer action once and only publishes the tool-backed answer", async () => {
+    const dshHome = await mkdtemp(join(tmpdir(), "openmaus-rjh-test-"));
+    try {
+      const instance = await RuijieHarnessDriver.create({
+        instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
+        config: { endpoint: "http://127.0.0.1:49724", expectedAccountEmail: "wangyunshang@ruijie.com.cn", dshHome },
+      });
+      const events: RuntimeEvent[] = [];
+      instance.adapter.onEvent((event) => events.push(event));
+      const started = await instance.adapter.sendTurn({
+        threadId: "thread-computer-retry-action",
+        text: "打开浏览器并搜索今天的 AI 新闻",
+        system: computerPrompt("vm-shared"),
+        integrations: {
+          localComputer: {
+            command: "C:\\OpenMaus\\cua-driver.exe",
+            args: ["mcp", "--direct"],
+            env: { OMB_CONTROL_TOKEN: "secret" },
+            scope: "local-computer",
+          },
+        },
+      });
+
+      const socket = FakeSocket.instances[0]!;
+      socket.frame({ type: "session/event", sessionId: "session-fixture", event: { type: "turn/start", data: { turn: 1 } } });
+      socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+        type: "assistant/message", data: { turn: 1, message: { content: [{ type: "text", text: "假的完成说明" }] } },
+      } });
+      socket.frame({ type: "session/event", sessionId: "session-fixture", event: { type: "turn/end", data: { turn: 1, reason: { kind: "completed" } } } });
+      await vi.waitFor(() => expect(calls.filter((call) => call.method === "session.prompt")).toHaveLength(2));
+
+      const callId = "call-computer";
+      socket.frame({ type: "session/event", sessionId: "session-fixture", event: { type: "turn/start", data: { turn: 2 } } });
+      socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+        type: "tool/call", data: { turn: 2, callId, name: "mcp__openmaus_fixture__get_desktop_state" },
+      } });
+      socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+        type: "tool/result", data: { turn: 2, callId, message: { toolCallId: callId, content: [] } },
+      } });
+      socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+        type: "assistant/message", data: { turn: 2, message: { content: [{ type: "text", text: "真实工具执行后的结果" }] } },
+      } });
+      socket.frame({ type: "session/event", sessionId: "session-fixture", event: { type: "turn/end", data: { turn: 2, reason: { kind: "completed" } } } });
+
+      await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+        type: "turn.completed", threadId: "thread-computer-retry-action", turnId: started.turnId, ok: true,
+      })));
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "item.completed", itemType: "assistant_text", text: "真实工具执行后的结果",
+      }));
+      expect(events).not.toContainEqual(expect.objectContaining({
+        type: "item.completed", itemType: "assistant_text", text: "假的完成说明",
+      }));
+    } finally {
+      await rm(dshHome, { recursive: true, force: true });
+    }
   });
 
   it("reports each Harness turn's provider token usage without double-counting streamed samples", async () => {

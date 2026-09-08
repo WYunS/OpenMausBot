@@ -293,7 +293,12 @@ import {
   browserSessionId,
   describeBrowserEngine,
 } from "./browser-engine.ts";
-import { createScreenFrameSource, type ScreenCapture } from "./screen-frame-source.ts";
+import {
+  createScreenFrameSource,
+  SCREEN_PREVIEW_INTERVAL_MS,
+  SCREEN_PREVIEW_MIN_GAP_MS,
+  type ScreenCapture,
+} from "./screen-frame-source.ts";
 import { screenFrameHash, screenSurfaceForTool, screenTouchingTool, settledFrameIsNews } from "./screen-frame-gate.ts";
 import { RoutineRequestService } from "./routine-requests.ts";
 import { buildBotOverview, type BotOverview, connectedAppsFacts } from "./bot-overview.ts";
@@ -3863,12 +3868,8 @@ const screenPollers = new Map<
 >();
 
 /** The preview shares the box's single command endpoint with the agent's
- * own actions, so every frame we take is latency stolen from the work the
- * user is waiting on. Hence: a slow interval, a floor between captures,
- * and never two in flight. */
-const SCREEN_POLL_MS = 6000;
-const SCREEN_MIN_GAP_MS = 3000;
-
+ * own actions, so captures remain serialized and rate-limited. The cadence
+ * is still short enough for the small live preview to follow visible work. */
 /** `screenIsTheWork` starts the turn already counting as screen usage: a
  * boxAgent's whole session runs ON the box, so every tool it calls acts on
  * that screen even though none of them is named like a computer tool. Its
@@ -3889,13 +3890,14 @@ function startScreenPoller(
       revision: computerControlRevision.get(botId) ?? 0,
     }),
     onFrame: (frame) => broadcast({ kind: "screen", botId, ...frame }),
-    minGapMs: SCREEN_MIN_GAP_MS,
+    minGapMs: SCREEN_PREVIEW_MIN_GAP_MS,
   }), {
     timer: null as ReturnType<typeof setInterval> | null,
     touched: screenIsTheWork,
   });
-  entry.timer = setInterval(() => void entry.capture(), SCREEN_POLL_MS);
+  entry.timer = setInterval(() => void entry.capture(), SCREEN_PREVIEW_INTERVAL_MS);
   screenPollers.set(botId, entry);
+  void entry.capture();
 }
 
 /** Event-driven refresh: capture NOW (the bot just acted on its screen)

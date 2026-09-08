@@ -3,6 +3,9 @@ import { captureOutsideHumanControl, type PrivateScreenFrame } from "./private-s
 export type ScreenCapture = () => Promise<{ png: string; format: string }>;
 type Surface = "browser" | "computer";
 
+export const SCREEN_PREVIEW_INTERVAL_MS = 1500;
+export const SCREEN_PREVIEW_MIN_GAP_MS = 500;
+
 /** One serialized preview source. A cached or in-flight desktop frame must
  * never become the browser's settled picture after the bot switches surfaces. */
 export function createScreenFrameSource(input: {
