@@ -1,0 +1,71 @@
+import { describe, expect, it, vi } from "vitest";
+import { ensureLocalVmReady, localVmLaunchAction, type LocalVmBootstrapBridge } from "./local-vm-bootstrap";
+
+const state = (status: LocalVmBootstrapState["status"]): LocalVmBootstrapState => ({
+  status,
+  stage: status === "ready" ? "ready" : "confirmation",
+  message: status,
+  progress: status === "ready" ? 100 : 0,
+  target: {},
+  needsConfirmation: status === "confirmation-required",
+  rebootRequired: false,
+  updatedAt: new Date(0).toISOString(),
+});
+
+function bridge(needsConfirmation: boolean, results: LocalVmBootstrapState[]): LocalVmBootstrapBridge {
+  return {
+    inspect: vi.fn(async (): Promise<LocalVmBootstrapInspection> => ({
+      platform: "win32" as const,
+      arch: "x64",
+      supported: true,
+      needsConfirmation,
+      reason: needsConfirmation ? "runtime-missing" as const : "existing-vm" as const,
+      status: {},
+      bootstrap: state("idle"),
+    })),
+    start: vi.fn(async () => results.shift() ?? state("ready")),
+  };
+}
+
+describe("ensureLocalVmReady", () => {
+  it("starts an existing VM without prompting", async () => {
+    const native = bridge(false, [state("ready")]);
+    const confirm = vi.fn(() => true);
+    await expect(ensureLocalVmReady(native, { botId: "b" }, confirm)).resolves.toMatchObject({ kind: "ready" });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(native.start).toHaveBeenCalledWith({ target: { botId: "b" }, confirmed: false });
+  });
+
+  it("does nothing when first-time setup is declined", async () => {
+    const native = bridge(true, [state("ready")]);
+    await expect(ensureLocalVmReady(native, {}, () => false)).resolves.toEqual({ kind: "cancelled" });
+    expect(native.start).not.toHaveBeenCalled();
+  });
+
+  it("asks after silently waking a runtime that reveals missing setup", async () => {
+    const native = bridge(false, [state("confirmation-required"), state("ready")]);
+    const confirm = vi.fn(() => true);
+    await expect(ensureLocalVmReady(native, {}, confirm)).resolves.toMatchObject({ kind: "ready" });
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(native.start).toHaveBeenNthCalledWith(2, { target: {}, confirmed: true });
+  });
+});
+
+describe("localVmLaunchAction", () => {
+  const safe = {
+    imageMatches: true,
+    managed: true,
+    network: "loopback" as const,
+    security: "hardened" as const,
+    persistence: "durable" as const,
+  };
+
+  it("starts a stopped compatible VM without replacing it", () => {
+    expect(localVmLaunchAction({ ...safe, container: "stopped" })).toBe("vm-create");
+  });
+
+  it("replaces only an existing incompatible VM", () => {
+    expect(localVmLaunchAction({ ...safe, container: "stopped", imageMatches: false })).toBe("vm-recreate");
+    expect(localVmLaunchAction({ ...safe, container: "missing", imageMatches: false })).toBe("vm-create");
+  });
+});

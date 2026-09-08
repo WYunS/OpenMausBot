@@ -185,6 +185,18 @@ const bridge = {
       return () => ipcRenderer.removeListener("desktop-workspace:state", handler);
     },
   },
+  /** Installs/starts the host runtime and then delegates image/container
+   * lifecycle to the local server. Never exposed to a remote environment. */
+  localVmBootstrap: {
+    inspect: (target) => ipcRenderer.invoke("local-vm-bootstrap:status", target),
+    start: (input) => ipcRenderer.invoke("local-vm-bootstrap:start", input),
+    cancel: () => ipcRenderer.invoke("local-vm-bootstrap:cancel"),
+    onState: (cb) => {
+      const handler = (_event, state) => cb(state);
+      ipcRenderer.on("local-vm-bootstrap:state", handler);
+      return () => ipcRenderer.removeListener("local-vm-bootstrap:state", handler);
+    },
+  },
   /** Native folder picker for a bot's working folder; null when cancelled. */
   pickFolder: (current) => ipcRenderer.invoke("desktop:pick-folder", current),
   /** Writes the redacted diagnostics report to a user-chosen file; resolves

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { arch as hostArch } from "node:os";
 import path from "node:path";
@@ -21,11 +21,38 @@ const packageArch = platformArch === "amd64" ? "x64" : "arm64";
 const outputDirectory = path.join(root, "vm-image", "dist", packageArch);
 const archive = path.join(outputDirectory, constants.localVmImageArchiveName(platformArch === "amd64" ? "x64" : "arm64"));
 await mkdir(outputDirectory, { recursive: true });
+
+function fileSha256(file) {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const input = createReadStream(file);
+    input.on("error", reject);
+    input.on("data", (chunk) => hash.update(chunk));
+    input.on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+const vendorDirectory = path.join(root, "vm-image", "vendor");
+const feishuPackage = path.join(vendorDirectory, `feishu-${platformArch}.deb`);
+const feilianPackage = path.join(vendorDirectory, `feilian-${platformArch}.deb`);
+const vendorPresence = [existsSync(feishuPackage), existsSync(feilianPackage)];
+if (vendorPresence[0] !== vendorPresence[1]) {
+  throw new Error(`Both Feishu and Feilian ${platformArch} packages are required; one is missing from vm-image/vendor`);
+}
+if (process.env.OPENMAUSBOT_REQUIRE_ENTERPRISE_APPS === "1" && !vendorPresence[0]) {
+  throw new Error(`Enterprise apps are required but vm-image/vendor has no reviewed ${platformArch} packages`);
+}
+const enterpriseArgs = vendorPresence[0] ? [
+  "--build-arg", "REQUIRE_ENTERPRISE_APPS=1",
+  "--build-arg", `FEISHU_DEB_SHA256=${await fileSha256(feishuPackage)}`,
+  "--build-arg", `FEILIAN_DEB_SHA256=${await fileSha256(feilianPackage)}`,
+] : [];
 const mirrorArgs = [
   process.env.OPENMAUSBOT_APT_DEBIAN_MIRROR ? ["--build-arg", `APT_DEBIAN_MIRROR=${process.env.OPENMAUSBOT_APT_DEBIAN_MIRROR}`] : [],
   process.env.OPENMAUSBOT_APT_SECURITY_MIRROR ? ["--build-arg", `APT_SECURITY_MIRROR=${process.env.OPENMAUSBOT_APT_SECURITY_MIRROR}`] : [],
   process.env.OPENMAUSBOT_CUA_WHEEL_AMD64_URL ? ["--build-arg", `CUA_WHEEL_AMD64_URL=${process.env.OPENMAUSBOT_CUA_WHEEL_AMD64_URL}`] : [],
   process.env.OPENMAUSBOT_CUA_WHEEL_ARM64_URL ? ["--build-arg", `CUA_WHEEL_ARM64_URL=${process.env.OPENMAUSBOT_CUA_WHEEL_ARM64_URL}`] : [],
+  enterpriseArgs,
 ].flat();
 
 function run(command, args) {
@@ -76,13 +103,7 @@ if (runtime === "docker") {
   await run("podman", ["save", "--format", "oci-archive", "-o", archive, constants.IMAGE]);
 }
 
-const sha256 = await new Promise((resolve, reject) => {
-  const hash = createHash("sha256");
-  const input = createReadStream(archive);
-  input.on("error", reject);
-  input.on("data", (chunk) => hash.update(chunk));
-  input.on("end", () => resolve(hash.digest("hex")));
-});
+const sha256 = await fileSha256(archive);
 await writeFile(`${archive}.sha256`, `${sha256}  ${path.basename(archive)}\n`);
 await writeFile(path.join(outputDirectory, `manifest-linux-${platformArch}.json`), JSON.stringify({
   schemaVersion: 1,

@@ -154,6 +154,27 @@ type SkillRecordingPayload = {
     message?: string;
   };
 
+  type LocalVmBootstrapTarget = { botId?: string };
+  type LocalVmBootstrapState = {
+    status: "idle" | "interrupted" | "confirmation-required" | "running" | "ready" | "error" | "cancelled" | "reboot-required";
+    stage: "idle" | "confirmation" | "preflight" | "runtime-install" | "runtime-init" | "runtime-start" | "image" | "vm-start" | "ready" | "error" | "cancelled" | "reboot-required";
+    message: string;
+    progress: number;
+    target: LocalVmBootstrapTarget | null;
+    needsConfirmation: boolean;
+    rebootRequired: boolean;
+    updatedAt: string;
+  };
+  type LocalVmBootstrapInspection = {
+    platform: NodeJS.Platform;
+    arch: string;
+    supported: boolean;
+    needsConfirmation: boolean;
+    reason: "runtime-missing" | "runtime-stopped" | "image-missing" | "vm-missing" | "existing-vm";
+    status: Record<string, unknown>;
+    bootstrap: LocalVmBootstrapState;
+  };
+
   interface Window {
     ogb?: {
       platform: NodeJS.Platform;
@@ -283,6 +304,12 @@ type SkillRecordingPayload = {
         setInteractive(contextId: string | null): Promise<boolean>;
         close(contextId?: string): Promise<boolean>;
         onState(cb: (state: DesktopWorkspaceState) => void): () => void;
+      };
+      localVmBootstrap?: {
+        inspect(target: LocalVmBootstrapTarget): Promise<LocalVmBootstrapInspection>;
+        start(input: { target: LocalVmBootstrapTarget; confirmed: boolean; prepareOnly?: boolean }): Promise<LocalVmBootstrapState>;
+        cancel(): Promise<boolean>;
+        onState(cb: (state: LocalVmBootstrapState) => void): () => void;
       };
       /** Native folder picker; resolves null when the user cancels. */
       pickFolder?(current?: string): Promise<string | null>;

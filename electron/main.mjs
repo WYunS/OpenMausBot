@@ -101,6 +101,7 @@ const { DESKTOP_VIEWER_USER_AGENT, desktopViewerUrl, sameDesktopViewerOrigin } =
 const { createDesktopWorkspaceManager } = require("./desktop-workspace.cjs");
 const { createTrustedApprovalModeCoordinator } = require("./approval-trusted-mode.cjs");
 const { DESKTOP_MUTATION_HEADER, desktopServerHeaders } = require("./desktop-server-auth.cjs");
+const { createLocalVmBootstrap } = require("./local-vm-bootstrap.cjs");
 const { createBrowserSurfaceManager } = require("./browser-surface.cjs");
 const { browserProfilePartition } = require("./browser-snapshot.cjs");
 const { createBrowserHost } = require("./browser-host.cjs");
@@ -154,6 +155,7 @@ let pendingPackageInstallUrl = packageUrlFromCommandLine(process.argv);
 let mainWindow = null;
 let unreadCount = 0;
 let unreadOverlayIcon = null;
+let localVmBootstrap = null;
 
 function windowStateFile() {
   return path.join(app.getPath("userData"), "window-state.json");
@@ -1501,6 +1503,37 @@ function publishBrowserConnection() {
   if (serverProc) syncBrowserConnection(serverProc);
 }
 
+function ensureLocalVmBootstrap() {
+  if (localVmBootstrap) return localVmBootstrap;
+  localVmBootstrap = createLocalVmBootstrap({
+    platform: process.platform,
+    arch: process.arch,
+    userDataPath: app.getPath("userData"),
+    request: async (requestPath, method, bootstrapSignal) => {
+      const response = await fetch(`http://127.0.0.1:${SERVER_PORT}${requestPath}`, {
+        method,
+        headers: desktopServerHeaders(
+          method === "POST" ? { "content-type": "application/json" } : {},
+          { packaged: app.isPackaged, token: desktopMutationToken },
+        ),
+        ...(method === "POST" ? { body: "{}" } : {}),
+        signal: bootstrapSignal
+          ? AbortSignal.any([bootstrapSignal, AbortSignal.timeout(method === "POST" ? 30 * 60_000 : 10_000)])
+          : AbortSignal.timeout(method === "POST" ? 30 * 60_000 : 10_000),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body?.error ?? `Local VM request failed (${response.status})`);
+      return body;
+    },
+    emit: (state) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) window.webContents.send("local-vm-bootstrap:state", state);
+      }
+    },
+  });
+  return localVmBootstrap;
+}
+
 async function clearBrowserPartition(partition) {
   await clearBrowserPartitionSession(session.fromPartition(partition));
 }
@@ -2442,6 +2475,16 @@ ipcMain.handle("desktop:capabilities", async (event) =>
     localConnection: await cuaReady,
   }),
 );
+
+ipcMain.handle("local-vm-bootstrap:status", localOnly("local-vm-bootstrap:status", (_event, target) =>
+  ensureLocalVmBootstrap().inspect(target ?? {}),
+));
+ipcMain.handle("local-vm-bootstrap:start", localOnly("local-vm-bootstrap:start", (_event, input) =>
+  ensureLocalVmBootstrap().start(input ?? {}),
+));
+ipcMain.handle("local-vm-bootstrap:cancel", localOnly("local-vm-bootstrap:cancel", () =>
+  ensureLocalVmBootstrap().cancel(),
+));
 
 ipcMain.handle("assemblyai:status", localOnly("assemblyai:status", () => ({
   configured: Boolean(assemblyAICredential(secureCredentials)),
