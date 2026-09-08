@@ -49,8 +49,8 @@ beforeAll(async () => {
   mkdirSync(data); mkdirSync(join(ui, "assets"), { recursive: true });
   writeFileSync(join(ui, "index.html"), "<title>Isolated VM routing</title>");
   writeFileSync(join(ui, "assets", "test.css"), "body{}");
-  writeFileSync(join(data, "config.json"), JSON.stringify({ instances: { claude: {
-    driver: "claudeAgent", config: { cli: join(ROOT, "server/testing/fake-claude-cli.ts") },
+  writeFileSync(join(data, "config.json"), JSON.stringify({ instances: { verification: {
+    driver: "claudeAgent", enabled: true, config: { cli: join(ROOT, "server/testing/fake-claude-cli.ts") },
     environment: { FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_DUMP: dumpFile, FAKE_CLAUDE_SLOW_FINISH_GATE: finishFile },
   } } }));
   const port = await freePortBlock([0, 1]);
@@ -87,7 +87,11 @@ async function room() {
   vmState(); rmSync(dumpFile, { force: true }); rmSync(finishFile, { force: true });
   const bots = [];
   for (const name of ["VM lead", "VM worker"]) {
-    const { bot } = await api("POST", "/api/bots", { name });
+    const { bot } = await api("POST", "/api/bots", {
+      name,
+      modelSelection: { instanceId: "verification", model: "claude-sonnet-5" },
+      requireAvailableModel: true,
+    });
     await api("PATCH", `/api/bots/${bot.id}`, { computer: "vm" });
     bots.push(bot);
   }
@@ -100,6 +104,27 @@ const send = (id: string) => api("POST", `/api/groups/${id}/messages`, { text: "
 const stop = (id: string) => api("POST", `/api/groups/${id}/interrupt`, {});
 
 describe("Group Local VM ownership on the real isolated server", () => {
+  it("queues a second room on the shared desktop until the first turn releases it", async () => {
+    const first = await room();
+    const second = await room();
+
+    await send(first.group.id);
+    await dump();
+    rmSync(dumpFile, { force: true });
+
+    await send(second.group.id);
+    await until(() => api("GET", "/api/bots?messages=0"), state =>
+      state.bots.find((bot: any) => bot.id === second.bots[0].id)?.busy === true,
+    );
+    await new Promise(r => setTimeout(r, 250));
+    expect(existsSync(dumpFile)).toBe(false);
+
+    writeFileSync(finishFile, "finish");
+    expect(computer(await dump())).toBeTruthy();
+    await idle(first.bots[0].id);
+    await idle(second.bots[0].id);
+  });
+
   it("releases a failed readiness claim so the bot and room can run again", async () => {
     const { bots, group } = await room();
     vmState({ failed: true });

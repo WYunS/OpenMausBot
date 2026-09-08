@@ -42,7 +42,15 @@ const api = async (method: string, path: string, body?: unknown): Promise<{ stat
     headers: body ? { "content-type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
-  return { status: response.status, body: await response.json() };
+  const responseBody: any = await response.json();
+  if (response.ok && method === "POST" && path === "/api/bots" && responseBody?.bot?.id) {
+    await fetch(`${base}/api/bots/${responseBody.bot.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ computer: "off" }),
+    });
+  }
+  return { status: response.status, body: responseBody };
 };
 
 const fixture = (displayName: string, environment: Record<string, string>) => ({

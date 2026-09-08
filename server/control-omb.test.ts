@@ -125,6 +125,12 @@ describe("control-omb isolated verification loop", () => {
 
       const created = await runControlOmb(["new-bot", "--name", "Verification Probe"], { env }) as any;
       const botId = created.bot.id as string;
+      const disabledComputer = await fetch(`${session.info.url}/api/bots/${botId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ computer: "off" }),
+      });
+      expect(disabledComputer.ok).toBe(true);
       await runControlOmb(["send", "--bot", botId, "--text", "hello from the verification test"], { env });
       const settled = await runControlOmb(["wait", "--bot", botId, "--timeout", "20"], { env }) as any;
       expect(settled.status).toBe("settled");

@@ -123,6 +123,7 @@ import {
   customMcpServers,
 } from "./config.ts";
 import { ComputerControl } from "./computer-control.ts";
+import { ComputerTurnQueue, type ComputerTurnLease } from "./computer-turn-queue.ts";
 import { MAX_REMOTE_COMMAND_LENGTH } from "./remote-computer.ts";
 import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts";
 import { describeSpawnFailure, execCli } from "./procs.ts";
@@ -2420,6 +2421,9 @@ const watchdog = new TurnWatchdog({
       if (stalledVmTarget && localVmThreadTargets.get(turn.threadId) === stalledVmTarget) {
         releaseLocalVmThread(turn.threadId);
       }
+      // Host and pooled-sandbox turns also own a desktop queue slot even
+      // though they have no Local VM lease to release.
+      releaseComputerTurnClaim(turn.threadId);
       const group = store.groupByThread(turn.threadId);
       const speaker = groupSpeakers.get(turn.threadId);
       if (group && group.busyBotId === turn.botId && speaker?.botId === turn.botId) {
@@ -2611,6 +2615,8 @@ let routines: RoutineManager | null = null;
 let calendarCalls: CalendarCallManager | null = null;
 const localVmOwnerBusy = (botId: string) => store.bot(botId)?.busy === true;
 const localVmLeases = new LocalVmLeasePool(30 * 60_000);
+const computerTurnQueue = new ComputerTurnQueue();
+const computerTurnClaims = new Map<string, { ownerId: string; lease: ComputerTurnLease }>();
 const localVmLifecycleBusy = new Set<string>();
 const localVmThreadTargets = new Map<string, LocalVmTarget>();
 const localVmActiveThreads = new Map<string, string>();
@@ -2803,12 +2809,49 @@ function localVmIdleFor(target: LocalVmTarget): LocalVmIdleTimer {
   return idle;
 }
 
-function releaseLocalVmThread(threadId: string): void {
+async function waitForComputerTurn(
+  targetKey: string,
+  threadId: string,
+  ownerId: string,
+  valid: () => boolean,
+): Promise<boolean> {
+  const lease = await computerTurnQueue.acquire(targetKey, ownerId, valid);
+  if (!lease) return false;
+  if (!valid()) {
+    lease.release();
+    return false;
+  }
+  const existing = computerTurnClaims.get(threadId);
+  if (existing) {
+    lease.release();
+    throw new Error("this conversation already owns a computer turn");
+  }
+  computerTurnClaims.set(threadId, { ownerId, lease });
+  return true;
+}
+
+function releaseComputerTurnClaim(threadId: string, ownerId?: string): void {
+  const claim = computerTurnClaims.get(threadId);
+  if (!claim || (ownerId !== undefined && claim.ownerId !== ownerId)) return;
+  computerTurnClaims.delete(threadId);
+  claim.lease.release();
+}
+
+function releaseAllComputerTurnClaims(): void {
+  for (const [threadId, claim] of computerTurnClaims) {
+    computerTurnClaims.delete(threadId);
+    claim.lease.release();
+  }
+}
+
+function releaseLocalVmThread(threadId: string, ownerId?: string): void {
   const target = localVmThreadTargets.get(threadId);
-  if (!target) return;
-  localVmLeaseFor(target).release(threadId);
-  if (localVmActiveThreads.get(target.key) === threadId) localVmActiveThreads.delete(target.key);
-  localVmThreadTargets.delete(threadId);
+  if (target) {
+    localVmLeaseFor(target).release(threadId);
+    if (localVmActiveThreads.get(target.key) === threadId) localVmActiveThreads.delete(target.key);
+    localVmThreadTargets.delete(threadId);
+  }
+  releaseComputerTurnClaim(threadId, ownerId);
 }
 
 // A running VM may have survived an app/server restart. Start its idle
@@ -4249,6 +4292,14 @@ async function startTurn(
         if (localVmImageBusy || localVmModeChangeBusy || localVmLifecycleBusy.has(localVmTarget.key)) {
           throw new Error("this Local VM is being started, stopped, or replaced — wait for setup to finish");
         }
+        if (!await waitForComputerTurn(
+          `local-vm:${localVmTarget.key}`,
+          threadId,
+          dispatchClaimId,
+          () => directTurnClaimIsCurrent(bot.id, dispatchClaimId, threadId),
+        )) {
+          throw new DirectTurnSetupCancelled("turn stopped while waiting for the Local VM");
+        }
         // Claim before the first await. The lifecycle route performs its
         // matching check synchronously, so neither side can enter while the
         // other is between inspection and mutation.
@@ -4293,6 +4344,14 @@ async function startTurn(
         })) {
           throw new Error("this model engine cannot control this computer — choose Claude or an ACP engine, or select another destination");
         }
+        if (!await waitForComputerTurn(
+          "local-computer",
+          threadId,
+          dispatchClaimId,
+          () => directTurnClaimIsCurrent(bot.id, dispatchClaimId, threadId),
+        )) {
+          throw new DirectTurnSetupCancelled("turn stopped while waiting for this computer");
+        }
         const cua = readCuaConnection();
         if (!cua) throw new Error("CUA Driver is not ready for this computer — check permissions and restart OpenMausBot");
         integrations.localComputer = observedLocalComputer(cua, bot.id, threadId, dispatchClaimId);
@@ -4334,6 +4393,14 @@ async function startTurn(
       if (wants === "cloud" && cloudBackend === "ruijie-sandbox") {
         if (!mountsLocalComputer) {
           throw new Error("this model engine cannot use the Ruijie sandbox computer — choose an engine with computer tools");
+        }
+        if (!await waitForComputerTurn(
+          "ruijie-sandbox",
+          threadId,
+          dispatchClaimId,
+          () => directTurnClaimIsCurrent(bot.id, dispatchClaimId, threadId),
+        )) {
+          throw new DirectTurnSetupCancelled("turn stopped while waiting for the Ruijie sandbox");
         }
         await ruijieSandbox.readyRuijieSandboxForTurn(cfg);
         const joined = await ruijieSandbox.joinRuijieSandbox(cfg);
@@ -4410,8 +4477,23 @@ async function startTurn(
       ) {
         const cua = readCuaConnection();
         if (cua) {
-          integrations.localComputer = observedLocalComputer(cua, bot.id, threadId, dispatchClaimId);
-          computerKind = "local";
+          if (!await waitForComputerTurn(
+            "local-computer",
+            threadId,
+            dispatchClaimId,
+            () => directTurnClaimIsCurrent(bot.id, dispatchClaimId, threadId),
+          )) {
+            throw new DirectTurnSetupCancelled("turn stopped while waiting for this computer");
+          }
+          const currentCua = readCuaConnection();
+          if (currentCua) {
+            integrations.localComputer = observedLocalComputer(currentCua, bot.id, threadId, dispatchClaimId);
+            computerKind = "local";
+          } else {
+            // Auto mode may continue without a computer if the desktop driver
+            // disappears while this turn is waiting behind another user.
+            releaseComputerTurnClaim(threadId, dispatchClaimId);
+          }
         }
       }
       if (
@@ -4626,7 +4708,7 @@ async function startTurn(
       revokeInternalCapabilityGeneration(threadId, dispatchClaimId);
       const ownsLatestGeneration = directTurnGenerationByBot.get(bot.id) === dispatchClaimId;
       if (ownsLatestGeneration) {
-        releaseLocalVmThread(threadId);
+        releaseLocalVmThread(threadId, dispatchClaimId);
         if (activeVpsThreads.get(bot.id) === threadId) activeVpsThreads.delete(bot.id);
         watchdog.settle(threadId);
         turnUsage.delete(threadId);
@@ -5356,7 +5438,11 @@ async function runGroupMemberTurn(
   let roomSpeaker: { botId: string; name: string; color: string } | undefined;
   let providerDispatched = false;
   const releaseRoomVmLease = () => {
-    if (roomVmTarget && localVmThreadTargets.get(threadId) === roomVmTarget) releaseLocalVmThread(threadId);
+    if (roomVmTarget && localVmThreadTargets.get(threadId) === roomVmTarget) {
+      releaseLocalVmThread(threadId, internalGeneration);
+    } else {
+      releaseComputerTurnClaim(threadId, internalGeneration);
+    }
     roomVmTarget = null;
   };
   try {
@@ -5567,13 +5653,23 @@ async function runGroupMemberTurn(
     }
     // A distinct identity fences cleanup even in shared mode on the same room thread.
     const target = { ...localVmTargetForBot(readyBot.id) };
+    roomVmTarget = target;
     if (localVmImageBusy || localVmModeChangeBusy || localVmLifecycleBusy.has(target.key)) {
       throw new Error("this Local VM is being started, stopped, or replaced");
+    }
+    if (!await waitForComputerTurn(
+      `local-vm:${target.key}`,
+      threadId,
+      internalGeneration,
+      () => !isCancelled?.() &&
+        activeInternalGenerationByThread.get(threadId) === internalGeneration &&
+        store.bot(readyBot.id)?.busy === true,
+    )) {
+      return false;
     }
     if (!localVmLeaseFor(target).claim(threadId, readyBot.id, localVmOwnerBusy)) {
       throw new Error("this Local VM is already being used by another turn");
     }
-    roomVmTarget = target;
     localVmThreadTargets.set(threadId, target);
     localVmActiveThreads.set(target.key, threadId);
     localVmIdleFor(target).touch();
@@ -7557,6 +7653,7 @@ async function reloadProviders() {
   // one synchronous step before the first teardown await, including room/task
   // threads that are not a bot's default DM.
   revokeAllInternalCapabilities();
+  releaseAllComputerTurnClaims();
   bus.detachAll();
   await registry.disposeAll();
   await registry.load(instanceConfigs(cfg));

@@ -31,6 +31,9 @@ export type ComputerPromptKind = "vm-private" | "vm-shared" | "box" | "box-agent
 const PROTECTED_INPUT_GUARD =
   " At a sign-in, password, MFA, CAPTCHA, or other protected-input step, stop and ask the user to complete it on the visible computer. Never type their password or ask them to paste a password or one-time code into chat.";
 
+const SELECTED_COMPUTER_GUARD =
+  " This selected computer is the work surface for the turn. The OpenMausBot or provider chat pane is only the control surface, not the place to carry out the task. When the user asks to open, search, click, type, or otherwise operate software, use the mounted computer tools on this selected computer and verify the result there instead of only describing what the user could do.";
+
 const COMPUTER_PARAGRAPH: Record<ComputerPromptKind, string> = {
   "vm-private":
     " You have your own isolated Cua sandbox: a Linux desktop in a container reserved for this bot. Only /home/cua/workspace is durable; save downloads, repositories, working files, and browser profiles there because everything else inside the VM is disposable. No other host folder is mounted. Use the computer tools for desktop, accessibility, window, and shell work. Inspect the desktop state before acting, prefer accessibility targets over raw coordinates, and work carefully.",
@@ -52,7 +55,7 @@ const COMPUTER_PARAGRAPH: Record<ComputerPromptKind, string> = {
  * guard still applies — exactly the shape the inline code had. */
 export function computerPrompt(kind: ComputerPromptKind | null): string {
   if (!kind) return "";
-  return COMPUTER_PARAGRAPH[kind] + PROTECTED_INPUT_GUARD;
+  return COMPUTER_PARAGRAPH[kind] + SELECTED_COMPUTER_GUARD + PROTECTED_INPUT_GUARD;
 }
 
 export const COMPOSIO_PROMPT =
