@@ -1,7 +1,7 @@
 import { createElement, type Dispatch } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { StoreProvider, useStore, type Action, type BotAnnouncement } from "./store";
+import { initialState, StoreProvider, useStore, type Action, type BotAnnouncement } from "./store";
 
 const bot: BotAnnouncement = {
   id: "bot", threadId: "thread", name: "Fixture", title: "", description: "",
@@ -27,13 +27,40 @@ function mount(request: typeof fetch) {
   function Capture() { dispatch = useStore().dispatch; return null; }
   renderToStaticMarkup(createElement(StoreProvider, null, createElement(Capture)));
   return {
+    profile: () => dispatch({ type: "updateBot", botId: "bot", patch: { title: "Updated" } }),
     update: () => dispatch({ type: "updateTask", botId: "bot", threadId: "thread", patch: { approvalMode: "auto" } }),
     send: () => dispatch({ type: "send", botId: "bot", threadId: "thread", text: "Continue" }),
   };
 }
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => { initialState.bots = []; vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("thread setting save recovery", () => {
+  it("does not revive a failed send that was waiting on a slower profile save", async () => {
+    initialState.bots = [{ ...bot, messages: [] }];
+    const profileSave = deferred();
+    const reconciled = deferred();
+    const requests = vi.fn<typeof fetch>(async (path) => {
+      if (path === "/api/bots/bot") return profileSave.promise;
+      if (path === "/api/bots/bot/tasks/thread") return response({ error: "Save failed" }, 500);
+      if (path === "/api/bots") return reconciled.promise;
+      return response({});
+    });
+    const controls = mount(requests);
+    controls.profile();
+    controls.update();
+    controls.send();
+    await flush();
+    expect(requests.mock.calls.some(([path]) => path === "/api/bots/bot")).toBe(true);
+    reconciled.resolve(response({ bots: [bot] }));
+    await flush();
+    profileSave.resolve(response({ bot }));
+    await flush();
+    expect(requests.mock.calls.some(([path]) => path === "/api/bots/bot/messages")).toBe(false);
+    controls.send();
+    await flush();
+    expect(requests).toHaveBeenLastCalledWith("/api/bots/bot/messages", expect.objectContaining({ method: "POST" }));
+  });
+
   it("blocks an immediate send, then permits a new send after authoritative reconciliation", async () => {
     const reconcile = deferred();
     const requests = vi.fn<typeof fetch>(async (path) => {

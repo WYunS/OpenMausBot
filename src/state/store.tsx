@@ -1962,7 +1962,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
 
     const waitForExecutionSettings = async (expectedBots: Bot[], threadId?: string) => {
-      await Promise.all(expectedBots.map(async (expected) => {
+      // Capture this send's task save before waiting on slower profile saves.
+      // Reconciliation may clear a failed lane meanwhile; that must not turn
+      // an already-waiting send into work under reverted settings.
+      const taskWrite = threadId ? taskWrites.get(threadId)?.promise : undefined;
+      await Promise.all([taskWrite, ...expectedBots.map(async (expected) => {
         const persisted = await botPatchQueue.flush(expected.id);
         if (!persisted) return;
         const expectedSelection = expected.modelSelection;
@@ -1974,7 +1978,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         ) {
           throw new Error("The approval level or model could not be saved, so this work was not started");
         }
-      }));
+      })]);
       if (threadId) await taskWrites.get(threadId)?.promise;
     };
 
