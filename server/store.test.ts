@@ -29,6 +29,7 @@ describe("Store", () => {
     expect(messages[1].kind).toBe("options");
     expect(messages[1].card?.options.length).toBeGreaterThan(1);
     expect(bot.modelSelection).toEqual(selection());
+    expect(bot.computer).toBe("local");
   });
 
   it("dismisses the onboarding quiz when the user talks, and leaves live asks", () => {
@@ -120,6 +121,17 @@ describe("Store", () => {
       costUsd: null,
       turns: 4,
     });
+  });
+
+  it("replaces a task total idempotently when a provider supplies an authoritative history", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.addTaskUsage(bot.id, bot.threadId, { input: 1, output: 1, costUsd: null });
+    const authoritative = { input: 300, output: 30, cachedInput: 220, costUsd: null, turns: 2 };
+
+    expect(store.replaceTaskUsage(bot.id, bot.threadId, authoritative)).toEqual(authoritative);
+    expect(store.replaceTaskUsage(bot.id, bot.threadId, authoritative)).toEqual(authoritative);
+    expect(new Store(selection).taskByThread(bot.id, bot.threadId)?.usage).toEqual(authoritative);
   });
 
   it("chain-inserts a late turn artifact after its anchor without stealing the leaf", () => {
@@ -707,11 +719,34 @@ describe("Store change stream", () => {
     const first = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "a" });
     const events = record(store);
     store.patchMessage(bot.threadId, first.id, { text: "a2" });
-    store.branchMessage(bot.threadId, first.id, "b");
+    const branched = store.branchMessage(bot.threadId, first.id, "b");
     store.setActiveLeaf(bot.threadId, first.id);
     store.toggleReaction(bot.threadId, first.id, "👍", "user");
-    expect(events.map((e) => e.type)).toEqual(["message.patch", "message", "thread", "message.patch"]);
-    expect(events[2]).toMatchObject({ type: "thread", threadId: bot.threadId, activeLeafId: expect.any(String) });
+    expect(events.map((e) => e.type)).toEqual(["message.patch", "message", "thread", "thread", "message.patch"]);
+    expect(events[2]).toMatchObject({ type: "thread", threadId: bot.threadId, activeLeafId: branched?.id });
+    expect(events[3]).toMatchObject({ type: "thread", threadId: bot.threadId, activeLeafId: first.id });
+  });
+
+  it("announces the retry branch so live clients leave the prior error behind", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const prompt = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "use the computer" });
+    store.appendMessage(bot.threadId, {
+      role: "bot",
+      kind: "activity",
+      tool: { name: "error: computer unavailable", ok: false },
+    });
+    const events = record(store);
+
+    const retry = store.branchMessage(bot.threadId, prompt.id, prompt.text!);
+
+    expect(events).toEqual([
+      { type: "message", threadId: bot.threadId, message: retry },
+      { type: "thread", threadId: bot.threadId, activeLeafId: retry?.id },
+    ]);
+    expect(store.activePath(bot.threadId).map((message) => message.id)).not.toContain(
+      store.messagesFor(bot.threadId).find((message) => message.tool?.ok === false)?.id,
+    );
   });
 
   it("announces screen frames whose pixels are pruned", () => {

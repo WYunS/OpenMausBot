@@ -3,6 +3,20 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $logRoot = Join-Path $env:LOCALAPPDATA 'OpenMausBot-Dev\logs'
 $electron = Join-Path $repoRoot 'node_modules\electron\dist\electron.exe'
+# Source builds intentionally require an explicit trusted control plane before
+# sending SSO tokens or provisioning the secure phone tunnel. This branded
+# development shortcut targets the same production service as packaged builds.
+$env:OMB_CONTROL_PLANE_URL = 'https://accounts.openmausbot.com'
+# Windows PowerShell 5.1 can decode a UTF-8-without-BOM script using the
+# machine's legacy code page. Construct the localized directory name from
+# Unicode code points so Electron and the standalone server always resolve
+# the same userData path regardless of that code page.
+$ruijieAppName = ([string][char]0x9510) + ([char]0x6377) + 'Bot'
+$env:OMB_USER_DATA = Join-Path $env:APPDATA $ruijieAppName
+# A source server is not Electron's utility child and must discover the
+# development bridge from the descriptor above.
+$env:OMB_DESKTOP_PARENT = $null
+$env:OMB_BROWSER_CONNECTION = $null
 
 function Test-LocalPort([int]$Port) {
   $client = [Net.Sockets.TcpClient]::new()
@@ -66,6 +80,7 @@ function Start-DesktopApp {
 }
 
 function Show-LaunchFailure([string]$Message) {
+  $appName = ([string][char]0x9510) + ([char]0x6377) + 'Bot'
   $errorLog = Join-Path $logRoot 'launcher-error.log'
   $details = "$(Get-Date -Format o) $Message"
   try {
@@ -75,9 +90,9 @@ function Show-LaunchFailure([string]$Message) {
   try {
     $shell = New-Object -ComObject WScript.Shell
     [void]$shell.Popup(
-      "OpenMausBot could not start.`n`n$Message`n`nDetails: $errorLog",
+      "$appName could not start.`n`n$Message`n`nDetails: $errorLog",
       0,
-      'OpenMausBot',
+      $appName,
       16
     )
   } catch {}
@@ -93,21 +108,9 @@ function Invoke-Launcher {
     $_.CommandLine -notlike '*--type=*'
   } | Select-Object -First 1
   if ($alreadyRunning) {
-    # Restore immediately instead of running the full desktop command again.
-    try {
-      Add-Type -AssemblyName UIAutomationClient
-      $process = Get-Process -Id $alreadyRunning.ProcessId -ErrorAction Stop
-      if ($process.MainWindowHandle -eq 0) { throw 'The running process has no window yet.' }
-      $window = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
-      $pattern = $window.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
-      $pattern.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
-      $shell = New-Object -ComObject WScript.Shell
-      [void]$shell.AppActivate([int]$alreadyRunning.ProcessId)
-    } catch {
-      # Electron's single-instance event restores the window when direct UI
-      # activation is unavailable during startup.
-      [void](Start-DesktopApp)
-    }
+    # Let Electron's single-instance event restore, maximize and focus the
+    # existing window. The short-lived second process exits normally.
+    [void](Start-DesktopApp)
     return
   }
 
@@ -140,9 +143,20 @@ function Invoke-Launcher {
   }
 }
 
+$launcherMutex = [Threading.Mutex]::new($false, 'Local\RuijieBotDevLauncher')
+$launcherLockTaken = $false
 try {
+  try {
+    $launcherLockTaken = $launcherMutex.WaitOne([TimeSpan]::FromSeconds(60))
+  } catch [Threading.AbandonedMutexException] {
+    $launcherLockTaken = $true
+  }
+  if (-not $launcherLockTaken) { throw 'Another startup is still in progress.' }
   Invoke-Launcher
 } catch {
   Show-LaunchFailure $_.Exception.Message
   exit 1
+} finally {
+  if ($launcherLockTaken) { $launcherMutex.ReleaseMutex() }
+  $launcherMutex.Dispose()
 }

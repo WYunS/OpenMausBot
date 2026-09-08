@@ -113,6 +113,16 @@ export function browserSurfacePresentation(input: {
   return "ready";
 }
 
+export function shouldPlaceBrowserSurface(
+  presentation: BrowserSurfacePresentation,
+  surface: BrowserSurfaceState | null,
+  retrying = false,
+): boolean {
+  if (presentation === "failed") return false;
+  if (retrying || presentation === "connecting" || presentation === "ready") return true;
+  return Boolean(surface?.open && surface.url && surface.url !== "about:blank");
+}
+
 export function shouldClearBrowserSurfaceFailure(
   presentation: BrowserSurfacePresentation,
   next: BrowserSurfaceState,
@@ -296,9 +306,10 @@ export function BrowserPanel({
     retrying,
   });
   // A connecting surface must be laid out once so Electron can create (or
-  // restore) the selected profile. Empty/loading/failed states remain hidden
-  // so the renderer's useful status is not covered by about:blank.
-  const shouldPlaceNativeSurface = presentation === "connecting" || presentation === "ready" || retrying;
+  // restore) the selected profile. Once navigation has a real URL, keep the
+  // native page visible while it loads instead of covering a usable result
+  // with a renderer spinner if the final loading=false event arrives late.
+  const shouldPlaceNativeSurface = shouldPlaceBrowserSurface(presentation, activeSurface, retrying);
   // A profile switch changes the native session underneath this panel. Keep
   // that transition serialized with address-bar navigation, history changes,
   // and takeover handoff so an old page cannot finish in a hidden profile (or

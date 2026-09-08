@@ -119,6 +119,13 @@ export function resolveDriverBinary() {
     );
     if (fs.existsSync(bundled)) return bundled;
   }
+  // Source checkouts stage the pinned Windows driver here. Resolve it
+  // directly as well as accepting CUA_DRIVER_PATH so a developer restart of
+  // Electron cannot silently turn off “This computer”.
+  if (process.platform === "win32") {
+    const staged = path.join(__dirname, "..", "dist-native", "cua-win32-x64", "cua-driver.exe");
+    if (fs.existsSync(staged)) return staged;
+  }
   if (fs.existsSync(INSTALLED_DRIVER)) return INSTALLED_DRIVER;
   return null;
 }

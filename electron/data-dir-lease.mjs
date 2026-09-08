@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,7 @@ const CHILD_LEASE_ENV = "OPENMAUSBOT_INTERNAL_DATA_DIR_LEASE";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_PID = 0x7fffffff;
 const MAX_REAPER_GENERATIONS = 128;
+const PROCESS_START_TOLERANCE_MS = 10_000;
 
 export class DataDirLeaseError extends Error {
   name = "DataDirLeaseError";
@@ -91,6 +93,36 @@ function processIsAlive(pid) {
   }
 }
 
+function windowsProcessStartedAt(pid) {
+  if (process.platform !== "win32") return null;
+  const windowsDirectory = process.env.SystemRoot ?? process.env.WINDIR;
+  if (!windowsDirectory || /[\r\n\0]/.test(windowsDirectory)) return null;
+  const powershell = join(windowsDirectory, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const command = "$p=Get-CimInstance Win32_Process -Filter 'ProcessId = " + pid
+    + "' -ErrorAction Stop; if ($null -ne $p) { ([DateTimeOffset]$p.CreationDate).ToUnixTimeMilliseconds() }";
+  const result = spawnSync(
+    powershell,
+    ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+    { encoding: "utf8", windowsHide: true, timeout: 3_000 },
+  );
+  if (result.error || result.status !== 0) return null;
+  const startedAt = Number(String(result.stdout).trim());
+  return Number.isFinite(startedAt) && startedAt > 0 ? startedAt : null;
+}
+
+/**
+ * A pid alone is not a process identity: Windows commonly reuses it after a
+ * reboot or service restart. Compare the current process creation time with
+ * the lease publication time before treating a matching pid as the owner.
+ * If inspection is unavailable, fail closed and retain the prior behaviour.
+ */
+function leaseOwnerIsAlive(owner) {
+  if (!processIsAlive(owner.pid)) return false;
+  const startedAt = windowsProcessStartedAt(owner.pid);
+  if (startedAt !== null && startedAt > owner.createdAt + PROCESS_START_TOLERANCE_MS) return false;
+  return true;
+}
+
 function unlinkExact(path, message) {
   try {
     unlinkSync(path);
@@ -159,7 +191,7 @@ function claimReaperAuthority(leasePath, expected) {
         `A stale OpenMausBot data-directory lease is being recovered on another machine. Recovery record: ${JSON.stringify(reaperPath)}.`,
       );
     }
-    if (processIsAlive(current.pid)) return false;
+    if (leaseOwnerIsAlive(current)) return false;
     reaperPath = successorReaperPath(leasePath, expected.token, current.token);
   }
   throw leaseError("OpenMausBot could not recover the stale data-directory lease after repeated interrupted attempts.");
@@ -174,7 +206,7 @@ function retireDeadOwner(leasePath, expected) {
       `The stale OpenMausBot data-directory lease changed ownership to another machine. Lease record: ${JSON.stringify(leasePath)}.`,
     );
   }
-  if (processIsAlive(current.pid)) return false;
+  if (leaseOwnerIsAlive(current)) return false;
   unlinkExact(leasePath, "OpenMausBot could not retire the stale data-directory lease.");
   return true;
 }
@@ -219,7 +251,7 @@ function assertNoLiveDelegatedChild(dataDir) {
       `This OpenMausBot data directory still has a delegated server on another machine. Delegated server lease: ${JSON.stringify(childLeasePath)}.`,
     );
   }
-  if (processIsAlive(child.pid)) {
+  if (leaseOwnerIsAlive(child)) {
     throw leaseError(
       `OpenMausBot's previous server process ${child.pid} is still shutting down. Try again shortly.`,
     );
@@ -262,7 +294,7 @@ function validateChildDelegation(dataDir, encoded) {
     && owner.pid === capability.pid
     && owner.token === capability.token
     && owner.host === hostname()
-    && processIsAlive(owner.pid));
+    && leaseOwnerIsAlive(owner));
   if (!matchesLiveParent(readOwner(parentLeasePath))) {
     throw invalid();
   }
@@ -325,7 +357,7 @@ function acquireDataDirLeaseInternal(dataDir, options = {}) {
           `This OpenMausBot data directory is already owned by a process on another machine. Lease record: ${JSON.stringify(leasePath)}.`,
         );
       }
-      if (processIsAlive(current.pid)) {
+      if (leaseOwnerIsAlive(current)) {
         throw leaseError(
           `OpenMausBot is already using this data directory (process ${current.pid}). Close the other instance first.`,
         );

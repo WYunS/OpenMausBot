@@ -38,12 +38,14 @@ const OPERATIONS = new Set([
   "read",
   "screenshot",
 ]);
+const DESKTOP_OPERATIONS = new Set(["screenshot", "click", "type", "press", "scroll"]);
 const BOT_ROUTE = /^\/v1\/bots\/([A-Za-z0-9_-]{1,120})\/([a-z]+)$/;
+const DESKTOP_ROUTE = /^\/v1\/desktop\/([A-Za-z0-9_-]{1,120})\/([a-z]+)$/;
 const BOT_ID = /^[A-Za-z0-9_-]{1,120}$/;
 // Empty = per-bot, "guest" = throwaway, mixed case = an exact read-only
 // partition identity migrated from #567. Never normalize this value.
 const PROFILE_PARTITION_ID = /^[A-Za-z0-9_-]{0,40}$/;
-const CAPABILITY_ROUTE = /^\/v1\/capabilities\/(register|revoke|clear)$/;
+const CAPABILITY_ROUTE = /^\/v1\/capabilities\/(register|desktop|revoke|clear)$/;
 
 function isLoopback(address) {
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
@@ -141,6 +143,38 @@ async function perform(manager, botId, operation, body) {
   }
 }
 
+async function performDesktop(manager, scope, operation, body) {
+  const desktop = scope.desktop;
+  if (!desktop) throw new Error("this turn has no remote desktop capability");
+  await manager.ensureOpen({
+    contextId: desktop.contextId,
+    url: desktop.url,
+    title: "Ruijie sandbox",
+    bounds: { x: 0, y: 0, width: 1280, height: 720 },
+  });
+  await manager.setAgentInput(desktop.contextId);
+  if (operation === "screenshot") return manager.capture(desktop.contextId);
+  if (operation === "click") {
+    return manager.act(desktop.contextId, "click", {
+      x: body.x,
+      y: body.y,
+      button: body.button,
+      double: body.double === true,
+    });
+  }
+  if (operation === "type") return manager.act(desktop.contextId, "type", { text: body.text });
+  if (operation === "press") return manager.act(desktop.contextId, "key", { key: body.keys });
+  if (operation === "scroll") {
+    const clicks = Math.min(Math.max(Math.round(Number(body.clicks) || 3), 1), 20);
+    return manager.act(desktop.contextId, "scroll", {
+      x: body.x,
+      y: body.y,
+      deltaY: (body.direction === "up" ? 1 : -1) * clicks * 120,
+    });
+  }
+  throw new Error(`unknown desktop operation: ${operation}`);
+}
+
 /** Agents never need query strings or fragments back from the browser host;
  * both routinely carry session and OAuth tokens. The renderer talks to the
  * manager directly and retains the real address. */
@@ -172,8 +206,9 @@ function sanitizeHostResult(result, operation) {
  * @param {() => number} [options.now] injectable monotonic wall clock for
  *   deterministic capability-expiry tests
  */
-function createBrowserHost({ manager, token = randomBytes(32).toString("hex"), now = Date.now }) {
+function createBrowserHost({ manager, desktopManager = () => null, token = randomBytes(32).toString("hex"), now = Date.now }) {
   const currentManager = manager?.constructor === Function ? manager : () => manager;
+  const currentDesktopManager = desktopManager?.constructor === Function ? desktopManager : () => desktopManager;
   if (!manager) throw new Error("The browser surface manager is required");
   if (!/^[0-9a-f]{64}$/.test(token)) throw new Error("The browser host token must be 64 hex characters");
   let server = null;
@@ -225,6 +260,21 @@ function createBrowserHost({ manager, token = randomBytes(32).toString("hex"), n
     if (!/^[0-9a-f]{64}$/.test(capability) || tokenMatches(capability, token)) {
       return json(res, 400, { error: "a valid opaque capability token is required" });
     }
+    if (operation === "desktop") {
+      const scope = capabilities.get(capability);
+      const botId = isString(body.botId) ? String(body.botId) : "";
+      const contextId = isString(body.contextId) ? String(body.contextId) : "";
+      const desktopUrl = isString(body.url) ? String(body.url) : "";
+      if (!scope || scope.botId !== botId) return json(res, 404, { error: "that turn capability is not active" });
+      if (contextId !== `ruijie-preview:${botId}` || desktopUrl.length < 1 || desktopUrl.length > 8_192) {
+        return json(res, 400, { error: "a valid scoped Ruijie desktop is required" });
+      }
+      // URL validation, private-network admission and credential handling stay
+      // inside desktop-workspace. The host retains the URL only in memory and
+      // never returns it through the scoped API.
+      scope.desktop = { contextId, url: desktopUrl };
+      return json(res, 200, { ok: true, expiresAt: scope.expiresAt });
+    }
     if (operation === "revoke") {
       dropCapabilities((_, candidate) => candidate === capability);
       return json(res, 200, { ok: true });
@@ -273,6 +323,45 @@ function createBrowserHost({ manager, token = randomBytes(32).toString("hex"), n
       return json(res, 200, { ok: true, views: surface ? surface.size() : 0, window: Boolean(surface) });
     }
     const match = BOT_ROUTE.exec(path);
+    const desktopMatch = DESKTOP_ROUTE.exec(path);
+    if (desktopMatch && req.method === "POST") {
+      const [, botId, operation] = desktopMatch;
+      if (!DESKTOP_OPERATIONS.has(operation)) return json(res, 404, { error: "unknown desktop operation" });
+      let body;
+      try {
+        body = await readJson(req);
+      } catch (error) {
+        return json(res, 400, { error: error?.message ?? "invalid request" });
+      }
+      pruneCapabilities();
+      const capability = capabilities.get(receivedToken);
+      if (!capability || capability.botId !== botId || !capability.desktop) {
+        return json(res, 401, { error: "unauthorized" });
+      }
+      const beforeLease = surface?.controlLease?.(botId, capability.profile)
+        ?? { held: surface?.isHumanControlled?.(botId, capability.profile) === true, epoch: 0, agentEpoch: 0 };
+      if (beforeLease.held) {
+        return json(res, 409, { error: "Computer control is currently held by the user — wait until they hand it back" });
+      }
+      const desktop = currentDesktopManager();
+      if (!desktop) return json(res, 503, { error: "the OpenMausBot window is closed — open it to use the computer" });
+      try {
+        const result = await performDesktop(desktop, capability, operation, body);
+        const afterLease = surface?.controlLease?.(botId, capability.profile) ?? beforeLease;
+        if (afterLease.held || afterLease.epoch !== beforeLease.epoch) {
+          return json(res, 409, { error: "Computer control changed while the request was running — retry after the user hands it back" });
+        }
+        if (capabilities.get(receivedToken) !== capability || capability.expiresAt <= now()) {
+          if (capability.expiresAt <= now()) pruneCapabilities();
+          return json(res, 409, { error: "The computer action was cancelled because its turn ended" });
+        }
+        return json(res, 200, result ?? {});
+      } catch (error) {
+        const message = error?.message ?? String(error);
+        const status = /invalid|outside|empty|too long|unsupported|required|not open/i.test(message) ? 400 : 500;
+        return json(res, status, { error: message });
+      }
+    }
     if (!match || req.method !== "POST") return json(res, 404, { error: "not found" });
     const [, botId, operation] = match;
     if (!OPERATIONS.has(operation)) return json(res, 404, { error: "unknown browser operation" });

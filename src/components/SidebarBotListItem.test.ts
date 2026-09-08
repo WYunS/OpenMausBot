@@ -8,7 +8,7 @@ vi.mock("./DesktopCapabilities", () => ({
   useDesktopCapabilities: () => ({}),
 }));
 
-import { BotDeleteMenuItem, BotListItem } from "./Sidebar";
+import { ArchivedBotsButton, BotActionConfirmDialog, BotDeleteMenuItem, BotListItem } from "./Sidebar";
 
 const bot = (overrides: Partial<Bot> = {}): Bot => ({
   id: "atlas",
@@ -72,5 +72,62 @@ describe("bot deletion feedback", () => {
 
     expect(markup).toContain(">Delete</button>");
     expect(markup).not.toContain('disabled=""');
+  });
+});
+
+describe("bot action confirmation", () => {
+  it("explains that archiving keeps the conversation and can be reversed", () => {
+    const markup = renderToStaticMarkup(createElement(BotActionConfirmDialog, {
+      bot: bot(),
+      action: "archive",
+      busy: false,
+      onCancel: vi.fn(),
+      onConfirm: vi.fn(),
+    }));
+
+    expect(markup).toContain("Archive Atlas?");
+    expect(markup).toContain("conversation is kept");
+    expect(markup).toContain("Archived bots");
+    expect(markup).toContain(">Archive</button>");
+  });
+
+  it("makes permanent deletion and conversation loss explicit", () => {
+    const markup = renderToStaticMarkup(createElement(BotActionConfirmDialog, {
+      bot: bot(),
+      action: "delete",
+      busy: false,
+      onCancel: vi.fn(),
+      onConfirm: vi.fn(),
+    }));
+
+    expect(markup).toContain("Delete Atlas permanently?");
+    expect(markup).toContain("conversation history");
+    expect(markup).toContain(">Delete permanently</button>");
+  });
+});
+
+describe("archived bots navigation", () => {
+  it("keeps a visible archived-bots entry with its count", () => {
+    const markup = renderToStaticMarkup(createElement(ArchivedBotsButton, {
+      count: 2,
+      density: "comfortable",
+      onClick: vi.fn(),
+    }));
+
+    expect(markup).toContain("Archived bots");
+    expect(markup).toContain(">2</span>");
+  });
+
+  it("keeps the entry enabled and visually consistent when the archive is empty", () => {
+    const markup = renderToStaticMarkup(createElement(ArchivedBotsButton, {
+      count: 0,
+      density: "comfortable",
+      onClick: vi.fn(),
+    }));
+
+    expect(markup).toContain("Archived bots");
+    expect(markup).not.toContain('disabled=""');
+    expect(markup).not.toContain("opacity-45");
+    expect(markup).toContain("hover:bg-raised/60");
   });
 });

@@ -1,4 +1,4 @@
-const { desktopViewerUrl, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
+const { DESKTOP_VIEWER_USER_AGENT, desktopViewerUrl, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
 
 const MAX_WORKSPACE_VIEWS = 2;
 const CONTEXT_ID = /^[A-Za-z0-9:_-]{1,120}$/;
@@ -13,9 +13,9 @@ function isLoopbackHostname(hostname) {
  * parameters alongside its short-lived password, so preserve every other
  * field and change only that capability bit.
  */
-function desktopWorkspaceUrl(rawUrl, interactive = false) {
+function desktopWorkspaceUrl(rawUrl, interactive = false, allowPrivateNetwork = false) {
   const url = desktopViewerUrl(rawUrl);
-  if (!isLoopbackHostname(url.hostname)) {
+  if (!allowPrivateNetwork && !isLoopbackHostname(url.hostname)) {
     throw new Error("Local VM desktops must use a loopback address");
   }
   const fragment = new URLSearchParams(url.hash.slice(1));
@@ -63,6 +63,40 @@ function normalizeDesktopWorkspaceBounds(rawBounds, contentSize) {
   height = Math.max(1, Math.min(height, ownerHeight - y));
   return { x, y, width, height };
 }
+
+function desktopInputPoint(value, limit, label) {
+  const number = Math.round(Number(value));
+  if (!Number.isFinite(number) || number < 0 || number >= limit) {
+    throw new Error(`${label} is outside the desktop frame`);
+  }
+  return number;
+}
+
+function desktopKeyEvent(value) {
+  const raw = String(value ?? "").trim();
+  if (!/^[A-Za-z0-9_+ -]{1,80}$/.test(raw)) throw new Error("Desktop key is invalid");
+  const parts = raw.split("+").map((part) => part.trim()).filter(Boolean);
+  const key = parts.pop();
+  if (!key) throw new Error("Desktop key is invalid");
+  const aliases = new Map([
+    ["return", "Enter"],
+    ["esc", "Escape"],
+    ["space", "Space"],
+    ["pgup", "PageUp"],
+    ["pgdn", "PageDown"],
+  ]);
+  const modifiers = parts.map((part) => {
+    const normalized = part.toLowerCase();
+    if (normalized === "ctrl" || normalized === "control") return "control";
+    if (normalized === "alt") return "alt";
+    if (normalized === "shift") return "shift";
+    if (["cmd", "command", "meta", "super"].includes(normalized)) return "meta";
+    throw new Error("Desktop key modifier is invalid");
+  });
+  return { keyCode: aliases.get(key.toLowerCase()) ?? key, modifiers };
+}
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function createDesktopWorkspaceManager({ owner, createView, notify, partitionPrefix }) {
   if (!owner || owner.isDestroyed?.()) throw new Error("The OpenMausBot window is unavailable");
@@ -136,7 +170,7 @@ function createDesktopWorkspaceManager({ owner, createView, notify, partitionPre
   const loadMode = async (entry, interactive) => {
     try {
       const current = entry.view.webContents.getURL();
-      const next = desktopWorkspaceUrl(current, interactive);
+      const next = desktopWorkspaceUrl(current, interactive, entry.remotePreview);
       entry.interactive = interactive;
       emit(stateFor(entry, "opening"));
       await entry.view.webContents.loadURL(next.toString());
@@ -150,17 +184,49 @@ function createDesktopWorkspaceManager({ owner, createView, notify, partitionPre
   };
 
   return {
+    async ensureOpen(input) {
+      if (Object.prototype.toString.call(input) !== "[object Object]") {
+        throw new Error("Desktop workspace input is invalid");
+      }
+      const contextId = desktopWorkspaceContextId(input.contextId);
+      const existing = entries.get(contextId);
+      if (existing) {
+        const requested = desktopWorkspaceUrl(input.url, false, existing.remotePreview);
+        if (existing.identity === desktopWorkspaceIdentity(requested)) {
+          return stateFor(existing, "ready");
+        }
+        removeEntry(existing);
+      }
+      if (contextId.startsWith("ruijie-preview:")) {
+        // The provider pool exposes one active VNC desktop at a time. A task
+        // may start after the user viewed another bot's card, so replace that
+        // stale hidden preview instead of rejecting the task's first frame.
+        for (const entry of [...entries.values()]) {
+          if (entry.remotePreview) removeEntry(entry);
+        }
+      }
+      return this.open(input);
+    },
+
     async open(input) {
       if (Object.prototype.toString.call(input) !== "[object Object]") {
         throw new Error("Desktop workspace input is invalid");
       }
       const contextId = desktopWorkspaceContextId(input.contextId);
       if (entries.has(contextId)) throw new Error("That desktop workspace slot is already open");
-      if (entries.size >= MAX_WORKSPACE_VIEWS) {
+      const remotePreview = contextId.startsWith("ruijie-preview:");
+      const localEntries = [...entries.values()].filter((entry) => !entry.remotePreview).length;
+      const remoteEntries = [...entries.values()].filter((entry) => entry.remotePreview).length;
+      if ((!remotePreview && localEntries >= MAX_WORKSPACE_VIEWS) || (remotePreview && remoteEntries >= 1)) {
         throw new Error("Only two Local VM desktops can be open together");
       }
 
-      const url = desktopWorkspaceUrl(input.url, false);
+      // Ruijie's proxy does not reliably survive a second noVNC page load
+      // that flips view_only. Its native view is never shown in the preview
+      // card and renderer IPC exposes no action method, so connect this hidden
+      // page input-capable from the start; the loopback capability and the
+      // server's Take Control lease remain the actual input gates.
+      const url = desktopWorkspaceUrl(input.url, remotePreview, remotePreview);
       const identity = desktopWorkspaceIdentity(url);
       if ([...entries.values()].some((entry) => entry.identity === identity)) {
         throw new Error("That Local VM desktop is already open");
@@ -174,17 +240,22 @@ function createDesktopWorkspaceManager({ owner, createView, notify, partitionPre
           sandbox: true,
           webSecurity: true,
           allowRunningInsecureContent: false,
+          backgroundThrottling: false,
+          offscreen: remotePreview,
           // No persist: prefix: each pane receives a private in-memory session.
           partition,
         },
       });
-      const entry = { contextId, view, identity, interactive: false };
+      const entry = { contextId, view, identity, interactive: remotePreview, remotePreview };
       entries.set(contextId, entry);
       secureView(entry, url.origin);
+      view.webContents.setUserAgent(DESKTOP_VIEWER_USER_AGENT);
       view.setBounds(bounds);
       // The renderer explicitly lays the view out after the DOM rectangle is
       // stable. Keeping it hidden here also prevents a native view from
       // flashing above a modal during setup.
+      // Ruijie previews use Chromium's offscreen renderer, so they continue
+      // painting while the native view stays hidden behind the preview image.
       view.setVisible(false);
       owner.contentView.addChildView(view);
       emit(stateFor(entry, "opening"));
@@ -221,6 +292,78 @@ function createDesktopWorkspaceManager({ owner, createView, notify, partitionPre
         entry.view.setVisible(item.visible === true);
       }
       return true;
+    },
+
+    async capture(rawContextId) {
+      const contextId = desktopWorkspaceContextId(rawContextId);
+      const entry = entries.get(contextId);
+      if (!entry) throw new Error("That desktop workspace slot is not open");
+      let image = null;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        image = await entry.view.webContents.capturePage();
+        if (image && !image.isEmpty?.()) break;
+        if (attempt < 19) await wait(500);
+      }
+      if (!image || image.isEmpty?.()) throw new Error("The desktop preview has no frame yet");
+      const size = image.getSize();
+      const normalized = size.width > 960 ? image.resize({ width: 960 }) : image;
+      const frameSize = normalized.getSize();
+      entry.lastFrameSize = frameSize;
+      return {
+        png: normalized.toPNG().toString("base64"),
+        mime: "image/png",
+      };
+    },
+
+    async setAgentInput(rawContextId) {
+      const contextId = desktopWorkspaceContextId(rawContextId);
+      const entry = entries.get(contextId);
+      if (!entry || !entry.remotePreview) throw new Error("That remote desktop is not open");
+      if (!entry.interactive) await loadMode(entry, true);
+      return true;
+    },
+
+    async act(rawContextId, action, input = {}) {
+      const contextId = desktopWorkspaceContextId(rawContextId);
+      const entry = entries.get(contextId);
+      if (!entry || !entry.remotePreview) throw new Error("That remote desktop is not open");
+      const contents = entry.view.webContents;
+      const bounds = entry.view.getBounds();
+      const frameSize = entry.lastFrameSize ?? { width: bounds.width, height: bounds.height };
+      const scalePoint = (value, axis) => {
+        const frameLimit = axis === "x" ? frameSize.width : frameSize.height;
+        const viewLimit = axis === "x" ? bounds.width : bounds.height;
+        return Math.min(viewLimit - 1, Math.round(desktopInputPoint(value, frameLimit, axis) * viewLimit / frameLimit));
+      };
+      if (action === "click") {
+        const x = scalePoint(input.x, "x");
+        const y = scalePoint(input.y, "y");
+        const button = input.button === "right" ? "right" : "left";
+        const count = input.double === true ? 2 : 1;
+        contents.sendInputEvent({ type: "mouseMove", x, y });
+        for (let index = 1; index <= count; index += 1) {
+          contents.sendInputEvent({ type: "mouseDown", x, y, button, clickCount: index });
+          contents.sendInputEvent({ type: "mouseUp", x, y, button, clickCount: index });
+        }
+      } else if (action === "type") {
+        const text = String(input.text ?? "");
+        if (!text || text.length > 20_000) throw new Error("Desktop text is empty or too long");
+        for (const character of text) contents.sendInputEvent({ type: "char", keyCode: character });
+      } else if (action === "key") {
+        const { keyCode, modifiers } = desktopKeyEvent(input.key);
+        contents.sendInputEvent({ type: "keyDown", keyCode, modifiers });
+        contents.sendInputEvent({ type: "keyUp", keyCode, modifiers });
+      } else if (action === "scroll") {
+        const x = input.x == null ? Math.floor(bounds.width / 2) : scalePoint(input.x, "x");
+        const y = input.y == null ? Math.floor(bounds.height / 2) : scalePoint(input.y, "y");
+        const deltaY = Math.max(-1200, Math.min(1200, Math.round(Number(input.deltaY) || 0)));
+        if (!deltaY) throw new Error("Desktop scroll amount is required");
+        contents.sendInputEvent({ type: "mouseWheel", x, y, deltaY });
+      } else {
+        throw new Error("Desktop action is unsupported");
+      }
+      await wait(Math.min(Math.max(Number(input.settleMs) || 350, 0), 3000));
+      return this.capture(contextId);
     },
 
     setInteractive(rawContextId) {

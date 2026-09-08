@@ -20,6 +20,12 @@ test("development services start from absolute paths in this checkout", async ()
   assert.match(source, /Join-Path \$repoRoot 'node_modules\\vite\\bin\\vite\.js'/);
   assert.match(source, /Stop-LocalDevelopmentService 8799/);
   assert.match(source, /Stop-LocalDevelopmentService 5199/);
+  assert.match(source, /\$env:OMB_CONTROL_PLANE_URL\s*=\s*'https:\/\/accounts\.openmausbot\.com'/);
+  assert.match(source, /\[char\]0x9510/);
+  assert.match(source, /\[char\]0x6377/);
+  assert.match(source, /\$env:OMB_USER_DATA\s*=\s*Join-Path \$env:APPDATA \$ruijieAppName/);
+  assert.match(source, /\$env:OMB_DESKTOP_PARENT\s*=\s*\$null/);
+  assert.doesNotMatch(source, /\$env:OMB_USER_DATA\s*=.*'锐捷Bot'/);
 });
 
 test("a second desktop launch reaches Electron so it can restore the existing window", async () => {
@@ -27,9 +33,16 @@ test("a second desktop launch reaches Electron so it can restore the existing wi
   assert.doesNotMatch(source, /if \(\$alreadyRunning\) \{ exit 0 \}/);
   assert.match(
     source,
-    /if \(\$alreadyRunning\) \{[\s\S]*SetWindowVisualState[\s\S]*AppActivate[\s\S]*return[\s\S]*\}/,
+    /if \(\$alreadyRunning\) \{[\s\S]*Start-DesktopApp[\s\S]*return[\s\S]*\}/,
   );
   assert.match(source, /Start-DesktopApp/);
+});
+
+test("concurrent shortcut launches are serialized before checking for an existing window", async () => {
+  const source = await readFile(launcher, "utf8");
+  assert.match(source, /Threading\.Mutex/);
+  assert.match(source, /WaitOne/);
+  assert.match(source, /Invoke-Launcher[\s\S]*ReleaseMutex/);
 });
 
 test("a cold shortcut launch starts Electron directly and verifies that it stays alive", async () => {
@@ -64,5 +77,7 @@ test("the development shortcut uses a branded native launcher", async () => {
   const mainAppId = mainSource.match(/app\.isPackaged\s*\?\s*"com\.openmausbot\.app"\s*:\s*"([^"]+)"/)?.[1];
   assert.equal(installerAppId, "com.openmausbot.app.localdev.source");
   assert.equal(mainAppId, installerAppId);
+  assert.match(mainSource, /title:\s*"锐捷Bot"/);
+  assert.match(mainSource, /nativeTheme\.themeSource\s*=\s*nativeThemeSourceForSkin\(skin\)/);
   assert.match(installerSource, /set-windows-shortcut-app-id\.ps1/);
 });

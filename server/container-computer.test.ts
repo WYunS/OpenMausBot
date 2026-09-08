@@ -1,3 +1,8 @@
+import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -27,9 +32,11 @@ import {
   containerRunArgs,
   localVmRecreatableOnDemand,
   managedImageDockerfile,
+  localVmImageArchiveName,
   resolveManagedBaseImage,
   perBotLocalVmTarget,
   podmanSecurityIsHardened,
+  prepareManagedImage,
   SHARED_LOCAL_VM_TARGET,
   setupCommands,
   type CommandRunner,
@@ -106,7 +113,7 @@ function readyInspect(overrides: Record<string, unknown> = {}) {
         NanoCpus: 2_000_000_000,
         PidsLimit: 512,
         CapDrop: ["ALL"],
-        CapAdd: ["CAP_SETUID", "CAP_SETGID"],
+        CapAdd: ["CAP_SETUID", "CAP_SETGID", "CAP_SYS_CHROOT"],
         Privileged: false,
         IpcMode: "private",
         CgroupnsMode: "private",
@@ -173,8 +180,8 @@ describe("containerComputerStatus", () => {
       UTSMode: "private",
       CgroupnsMode: null,
     };
-    detail.EffectiveCaps = ["CAP_SETGID", "CAP_SETUID"];
-    detail.BoundingCaps = ["CAP_SETGID", "CAP_SETUID"];
+    detail.EffectiveCaps = ["CAP_SETGID", "CAP_SETUID", "CAP_SYS_CHROOT"];
+    detail.BoundingCaps = ["CAP_SETGID", "CAP_SETUID", "CAP_SYS_CHROOT"];
     const targetDriverExec =
       `podman exec -u cua -e HOME=/home/cua -e DISPLAY=:1 -e CUA_DRIVER_INSTALL_CHANNEL=python_package ` +
       `-e CUA_DRIVER_RS_TELEMETRY_ENABLED=0 ${target.containerName} ${CUA_EXECUTABLE}`;
@@ -230,13 +237,13 @@ describe("containerComputerStatus", () => {
     };
     expect(podmanSecurityIsHardened(
       config,
-      ["CAP_SETGID", "CAP_SETUID"],
-      ["CAP_SETGID", "CAP_SETUID"],
+      ["CAP_SETGID", "CAP_SETUID", "CAP_SYS_CHROOT"],
+      ["CAP_SETGID", "CAP_SETUID", "CAP_SYS_CHROOT"],
     )).toBe(true);
     expect(podmanSecurityIsHardened(
       config,
-      ["CAP_NET_RAW", "CAP_SETGID", "CAP_SETUID"],
-      ["CAP_SETGID", "CAP_SETUID"],
+      ["CAP_NET_RAW", "CAP_SETGID", "CAP_SETUID", "CAP_SYS_CHROOT"],
+      ["CAP_SETGID", "CAP_SETUID", "CAP_SYS_CHROOT"],
     )).toBe(false);
   });
 
@@ -367,7 +374,7 @@ describe("containerComputerStatus", () => {
           NanoCpus: 2_000_000_000,
           PidsLimit: 512,
           CapDrop: ["ALL"],
-          CapAdd: ["CAP_SETUID", "CAP_SETGID"],
+          CapAdd: ["CAP_SETUID", "CAP_SETGID", "CAP_SYS_CHROOT"],
           PortBindings: { "6901/tcp": [{ HostIp: "0.0.0.0" }] },
         },
       }),
@@ -468,6 +475,29 @@ describe("containerComputerStatus", () => {
       driver_version: "0.20.0",
     });
     expect(status.viewer_url).toContain("#autoconnect=true&resize=scale&password=secret123");
+  });
+
+  it("uses one lightweight Cua liveness probe for UI status refreshes", async () => {
+    const fake = runner({
+      "/usr/bin/which docker": "docker\n",
+      "/usr/bin/which podman": new Error("missing"),
+      "docker info --format {{.ServerVersion}}": "29\n",
+      [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
+      [`docker inspect ${CONTAINER}`]: readyInspect(),
+      [statusProbe]: "running\n",
+    });
+
+    const status = await containerComputerStatus(fake.run, "linux", undefined, {
+      desktopProbe: "quick",
+    });
+
+    expect(status.ready).toBe(true);
+    expect(status.desktopReady).toBe(true);
+    expect(fake.calls).toContain(statusProbe);
+    expect(fake.calls).not.toContain(versionProbe);
+    expect(fake.calls).not.toContain(healthProbe);
+    expect(fake.calls).not.toContain(readinessProbe);
+    expect(fake.calls).not.toContain(readinessRead);
   });
 
   it("reports the bounded desktop startup error instead of waiting forever", async () => {
@@ -616,7 +646,45 @@ describe("Cua integration", () => {
   it("installs a Chinese-capable font and refreshes the font cache", () => {
     const dockerfile = managedImageDockerfile();
     expect(dockerfile).toContain("fonts-noto-cjk");
+    expect(dockerfile).toContain("fonts-noto-color-emoji");
+    expect(dockerfile).toContain("locale-gen zh_CN.UTF-8");
+    expect(dockerfile).toContain("ibus-libpinyin");
+    expect(dockerfile).toContain("GTK_IM_MODULE=ibus");
+    expect(dockerfile).toContain("--reinstall --no-install-recommends");
+    expect(dockerfile).toContain("xfce4-panel.mo");
+    expect(dockerfile).toContain("thunar.mo");
     expect(dockerfile).toContain("fc-cache -f");
+  });
+
+  it("uses architecture-specific immutable offline archive names", () => {
+    expect(localVmImageArchiveName("x64")).toBe(
+      `openmausbot-cua-local-vm-driver-${CUA_DRIVER_VERSION}-v${IMAGE_LAYER_VERSION}-linux-amd64.oci.tar`,
+    );
+    expect(localVmImageArchiveName("arm64")).toBe(
+      `openmausbot-cua-local-vm-driver-${CUA_DRIVER_VERSION}-v${IMAGE_LAYER_VERSION}-linux-arm64.oci.tar`,
+    );
+  });
+
+  it("checksum-verifies and imports a packaged OCI archive before using it", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "omb-image-import-"));
+    const archive = join(directory, localVmImageArchiveName());
+    const contents = Buffer.from("test OCI archive fixture");
+    await writeFile(archive, contents);
+    await writeFile(`${archive}.sha256`, `${createHash("sha256").update(contents).digest("hex")}  fixture\n`);
+    const previous = process.env.OPENMAUSBOT_LOCAL_VM_IMAGE_ARCHIVE;
+    process.env.OPENMAUSBOT_LOCAL_VM_IMAGE_ARCHIVE = archive;
+    const fake = runner({
+      [`podman load -i ${archive}`]: "Loaded image\n",
+      [`podman image inspect ${IMAGE}`]: preparedImageInspect(),
+    });
+    try {
+      await prepareManagedImage("podman", fake.run);
+      expect(fake.calls).toEqual([`podman load -i ${archive}`, `podman image inspect ${IMAGE}`]);
+    } finally {
+      if (previous === undefined) delete process.env.OPENMAUSBOT_LOCAL_VM_IMAGE_ARCHIVE;
+      else process.env.OPENMAUSBOT_LOCAL_VM_IMAGE_ARCHIVE = previous;
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("reuses the pinned base by content digest when Docker Hub is unreachable", async () => {
@@ -809,12 +877,12 @@ describe("setupCommands", () => {
     expect(setupCommands("docker", "linux").start).toBeNull();
   });
 
-  it("limits resources and retains only the sandbox supervisor's identity-switch caps", () => {
+  it("limits resources and retains only the supervisor and Firefox sandbox caps", () => {
     const command = setupCommands("docker", "linux").run!;
     expect(command).toContain("--memory 4g --memory-swap 4g");
     expect(command).toContain("--cpus 2 --pids-limit 512");
     expect(command).toContain("--ipc private --cgroupns private");
-    expect(command).toContain("--cap-drop ALL --cap-add SETUID --cap-add SETGID");
+    expect(command).toContain("--cap-drop ALL --cap-add SETUID --cap-add SETGID --cap-add SYS_CHROOT");
     expect(command).toContain(`--label ${MANAGED_LABEL}=1`);
     expect(command).toContain(`--label ${DRIVER_LABEL}=${CUA_DRIVER_VERSION}`);
     expect(command).toContain(`--label ${WORKSPACE_LABEL}=1`);

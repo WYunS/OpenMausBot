@@ -18,7 +18,8 @@ pnpm control:omb models --url http://127.0.0.1:PORT
 ```
 
 `doctor.ok` is true only when the endpoint is OpenMausBot and at least one
-engine is available. The isolated fixture should expose `claude`.
+engine is available. The isolated fixture should expose `verification`, backed
+by the fake Claude driver.
 
 ## Gotchas
 

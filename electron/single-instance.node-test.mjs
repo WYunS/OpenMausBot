@@ -3,14 +3,16 @@ import test from "node:test";
 
 import { activateExistingWindow } from "./single-instance.mjs";
 
-function fakeWindow({ destroyed = false, minimized = false, focused = false } = {}) {
+function fakeWindow({ destroyed = false, minimized = false, focused = false, maximized = false } = {}) {
   const calls = [];
   return {
     calls,
     isDestroyed: () => destroyed,
     isMinimized: () => minimized,
+    isMaximized: () => maximized,
     isFocused: () => focused,
     restore: () => calls.push("restore"),
+    maximize: () => calls.push("maximize"),
     show: () => calls.push("show"),
     focus: () => calls.push("focus"),
   };
@@ -19,13 +21,13 @@ function fakeWindow({ destroyed = false, minimized = false, focused = false } = 
 test("shows and focuses the only living window", () => {
   const win = fakeWindow();
   assert.equal(activateExistingWindow([win]), true);
-  assert.deepEqual(win.calls, ["show", "focus"]);
+  assert.deepEqual(win.calls, ["maximize", "show", "focus"]);
 });
 
 test("restores a minimized window before showing it", () => {
   const win = fakeWindow({ minimized: true });
   assert.equal(activateExistingWindow([win]), true);
-  assert.deepEqual(win.calls, ["restore", "show", "focus"]);
+  assert.deepEqual(win.calls, ["restore", "maximize", "show", "focus"]);
 });
 
 test("skips destroyed windows without touching them", () => {
@@ -33,7 +35,7 @@ test("skips destroyed windows without touching them", () => {
   const alive = fakeWindow();
   assert.equal(activateExistingWindow([dead, alive]), true);
   assert.deepEqual(dead.calls, []);
-  assert.deepEqual(alive.calls, ["show", "focus"]);
+  assert.deepEqual(alive.calls, ["maximize", "show", "focus"]);
 });
 
 test("prefers the focused window among several", () => {
@@ -41,7 +43,7 @@ test("prefers the focused window among several", () => {
   const second = fakeWindow({ focused: true });
   assert.equal(activateExistingWindow([first, second]), true);
   assert.deepEqual(first.calls, []);
-  assert.deepEqual(second.calls, ["show", "focus"]);
+  assert.deepEqual(second.calls, ["maximize", "show", "focus"]);
 });
 
 test("reports failure when no window can be activated", () => {

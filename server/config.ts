@@ -47,6 +47,12 @@ const vpsConfigSchema = z.object({
     message: "must be a simple SSH config alias",
   }).optional(),
 });
+const ruijieSandboxConfigSchema = z.object({
+  managerUrl: optionalText,
+  /** Full provider POST /submit template. It can contain gateway credentials,
+   * so the packaged desktop migrates it to the OS-encrypted credential store. */
+  requestJson: optionalText,
+});
 const roomConfigSchema = z.object({
   turnTimeoutMinutes: z
     .number()
@@ -242,6 +248,7 @@ const appConfigSchema = z.object({
   composio: z.object({ apiKey: optionalText, userId: optionalText, sessionId: optionalText }).optional(),
   box: z.object({ token: optionalText }).optional(),
   vps: vpsConfigSchema.optional(),
+  ruijieSandbox: ruijieSandboxConfigSchema.optional(),
   /** Optional OpenCode key; persisted write-only and passed only to its child. */
   opencodeGo: z.object({ apiKey: optionalText }).optional(),
   /** Voice credentials and the selected voice id. `provider` picks the
@@ -281,6 +288,9 @@ export interface AppConfig {
   box?: { token?: string };
   /** A named host from the user's SSH config. Authentication stays with SSH. */
   vps?: { sshAlias?: string };
+  /** Ruijie sandbox-manager connection. requestJson is write-only in the UI
+   * because provider templates can carry model and gateway credentials. */
+  ruijieSandbox?: { managerUrl?: string; requestJson?: string };
   opencodeGo?: { apiKey?: string };
   tts?: { key?: string; voice?: string; provider?: "elevenlabs" | "system" };
   imageGen?: { key?: string };
@@ -474,6 +484,10 @@ export function loadConfig(): AppConfig {
   if (process.env.COMPOSIO_API_KEY !== undefined) cfg.composio.apiKey = process.env.COMPOSIO_API_KEY;
   cfg.box = { ...cfg.box };
   if (process.env.BOX_TOKEN !== undefined) cfg.box.token = process.env.BOX_TOKEN;
+  cfg.ruijieSandbox = { ...cfg.ruijieSandbox };
+  if (process.env.OMB_RUIJIE_SANDBOX_REQUEST_JSON !== undefined) {
+    cfg.ruijieSandbox.requestJson = process.env.OMB_RUIJIE_SANDBOX_REQUEST_JSON;
+  }
   cfg.opencodeGo = { ...cfg.opencodeGo };
   if (process.env.OPENCODE_API_KEY !== undefined) cfg.opencodeGo.apiKey = process.env.OPENCODE_API_KEY;
   cfg.tts = { ...cfg.tts };
@@ -496,6 +510,7 @@ export function syncCredentialEnv(patch: Partial<AppConfig>): void {
     [patch.openaiCompat?.key, "OPENAI_COMPAT_API_KEY"],
     [patch.composio?.apiKey, "COMPOSIO_API_KEY"],
     [patch.box?.token, "BOX_TOKEN"],
+    [patch.ruijieSandbox?.requestJson, "OMB_RUIJIE_SANDBOX_REQUEST_JSON"],
     [patch.opencodeGo?.apiKey, "OPENCODE_API_KEY"],
     [patch.tts?.key, "OMB_TTS_KEY"],
     [patch.imageGen?.key, "OMB_OPENAI_IMAGE_KEY"],
@@ -582,7 +597,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   // back after we have successfully recognized the legacy list.
   const storedProfiles = storedBrowserProfilesSchema.safeParse(disk.browserProfiles);
   if (storedProfiles.success) disk.browserProfiles = storedProfiles.data;
-  for (const key of ["xai", "openaiCompat", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "rooms", "localVm", "features"] as const) {
+  for (const key of ["xai", "openaiCompat", "composio", "box", "ruijieSandbox", "opencodeGo", "tts", "imageGen", "profile", "rooms", "localVm", "features"] as const) {
     const section = checkedPatch[key];
     if (!section) continue;
     const current = jsonObjectSchema.safeParse(disk[key]);

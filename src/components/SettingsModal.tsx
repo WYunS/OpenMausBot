@@ -8,7 +8,7 @@ import { api, useStore, type AppSettingsSection, type ConfigStatus } from "@/sta
 import { analyticsEnabled, setAnalyticsEnabled } from "@/lib/analytics";
 import { builtInBrowserEnabled, showToolCallsEnabled, skillRecorderEnabled } from "@/lib/feature-flags";
 import { localeChoices } from "@/locales";
-import { ApiKeyRow, VpsConnection } from "./ApiKeys";
+import { ApiKeyRow, RuijieSandboxConnection, VpsConnection } from "./ApiKeys";
 import { useUpdaterState } from "@/lib/updater";
 import { EnginesSettings } from "./EnginesSettings";
 import { LocalComputerSection } from "./LocalComputerSection";
@@ -680,6 +680,7 @@ export function SettingsModal() {
                   <TranscriptionSettings />
                   <ApiKeyRow section="box" />
                   <VpsConnection />
+                  <RuijieSandboxConnection />
                   <ApiKeyRow section="opencodeGo" />
                   <details className="rounded-lg border border-hairline/40 bg-inset px-3 py-2">
                     <summary className="cursor-pointer text-[13px] text-ink-secondary">Self-host connected apps</summary>

@@ -87,6 +87,7 @@ import {
   type LocalVmTarget,
   type Runtime,
 } from "./container-computer.ts";
+import { LocalVmStatusCache } from "./local-vm-status-cache.ts";
 import {
   ensureDirs,
   instanceConfigs,
@@ -170,6 +171,7 @@ import {
 } from "./send-idempotency.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
+import { reconcileRuijieHarnessUsage } from "./usage-reconciliation.ts";
 import { cancelPeerApprovalsFor, cancelPeerApprovalsForThread, dismissStalePeerCards, requestPeerApproval, resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { peerProvenanceNote, withPeerProvenance } from "./peer-provenance.ts";
 import { decideRoomPost, emptyRoomPostBudget, type RoomPostAttempt, type RoomPostBudget } from "./room-post-budget.ts";
@@ -237,10 +239,12 @@ import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
 import { RepeatDetector, callKey } from "./repeat-detector.ts";
 import { redactSecretsInText } from "./redact.ts";
 import * as vps from "./vps-computer.ts";
+import * as ruijieSandbox from "./ruijie-sandbox.ts";
 import { RoutineManager, type RoutineRun, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
 import { CalendarCallManager, type CalendarCall } from "./calendar-calls.ts";
 import {
   BUILT_IN_BROWSER_SYSTEM_PROMPT,
+  attachRuijieDesktopCapability,
   applyDesktopBrowserConnectionMessage,
   availableBrowserConnection,
   browserScreenshot,
@@ -959,6 +963,24 @@ const store = new Store(() => bootSelection);
 const sendSequencer = new SendSequencer();
 bootSelection = await defaultSelection();
 store.seedIfEmpty();
+
+let ruijieUsageReconciliation: Promise<void> | null = null;
+async function reconcileHistoricalRuijieUsage(): Promise<void> {
+  if (ruijieUsageReconciliation) return ruijieUsageReconciliation;
+  ruijieUsageReconciliation = (async () => {
+    const replacements = await reconcileRuijieHarnessUsage(
+      store.bots,
+      EVENTS_DIR,
+      async (instanceId, sessionId) => registry.get(instanceId)?.readSessionUsage?.(sessionId) ?? null,
+    );
+    for (const replacement of replacements) {
+      store.replaceTaskUsage(replacement.botId, replacement.threadId, replacement.usage);
+    }
+  })().finally(() => {
+    ruijieUsageReconciliation = null;
+  });
+  return ruijieUsageReconciliation;
+}
 // A committed profile cleanup means both its config deletion and bot-reference
 // cleanup were intended to be durable. Reconcile stale secondary references
 // before Electron can ACK and remove the journal: a crash between those writes
@@ -1959,7 +1981,7 @@ const activeVpsThreads = new Map<string, string>();
 const boxLifecycleBusyBots = new Set<string>();
 const orphanBoxLifecycleBusyIds = new Set<string>();
 const boxInventoryRequestsBusyIds = new Set<string>();
-type RemoteComputerProvider = "box" | "vps";
+type RemoteComputerProvider = "box" | "vps" | "ruijie-sandbox";
 const computerProviderConfigTransitions = new Set<RemoteComputerProvider>();
 // A restore mutates and cleans a project work tree. Claim the bot across the
 // entire async Git operation so a turn cannot start in that folder midway.
@@ -1996,9 +2018,9 @@ function botHasActiveTurn(botId: string): boolean {
 }
 
 function providerTransitionMessage(provider: RemoteComputerProvider): string {
-  return provider === "box"
-    ? "Box account settings are being updated — wait for them to finish"
-    : "VPS connection settings are being updated — wait for them to finish";
+  if (provider === "box") return "Box account settings are being updated — wait for them to finish";
+  if (provider === "vps") return "VPS connection settings are being updated — wait for them to finish";
+  return "Ruijie sandbox settings are being updated — wait for them to finish";
 }
 
 /** Work which started first wins. This is intentionally conservative: a
@@ -2009,7 +2031,8 @@ function providerOperationConflict(provider: RemoteComputerProvider): string | n
     return "stop the active VPS turn before changing the SSH config alias";
   }
   if (managedBoxOwners().some((owner) => owner.inUse)) {
-    return `stop active bot work and computer control before changing ${provider === "box" ? "the Box account" : "the VPS connection"}`;
+    const label = provider === "box" ? "the Box account" : provider === "vps" ? "the VPS connection" : "the Ruijie sandbox connection";
+    return `stop active bot work and computer control before changing ${label}`;
   }
   if (boxLifecycleBusyBots.size > 0) {
     return "wait for cloud computer actions to finish before changing provider settings";
@@ -2021,7 +2044,7 @@ function providerOperationConflict(provider: RemoteComputerProvider): string | n
     if (boxCreateRecoverySnapshot().some((entry) => !entry.resolved)) {
       return "finish reconciling pending cloud computer creation before changing the Box account";
     }
-  } else if (vps.vpsLifecycleBusy()) {
+  } else if (provider === "vps" && vps.vpsLifecycleBusy()) {
     return "wait for VPS computer actions to finish before changing the SSH config alias";
   }
   return null;
@@ -2030,7 +2053,11 @@ function providerOperationConflict(provider: RemoteComputerProvider): string | n
 function turnProvider(bot: NonNullable<ReturnType<typeof store.bot>>, runOn?: RoutineRunOn): RemoteComputerProvider | null {
   if (runOn === "cloud" || registry.get(bot.modelSelection.instanceId)?.driverKind === "boxAgent") return "box";
   if (bot.computer !== undefined && bot.computer !== "cloud") return null;
-  return bot.cloudBackend === "vps" ? "vps" : "box";
+  return bot.cloudBackend === "vps"
+    ? "vps"
+    : bot.cloudBackend === "ruijie-sandbox"
+      ? "ruijie-sandbox"
+      : "box";
 }
 
 function providerTransitionForTurn(
@@ -2094,6 +2121,18 @@ function claimManagedVpsMutation(containerName: string): () => void {
 function localVmTargetForBot(botId: string): LocalVmTarget {
   return localVmMode(cfg) === "per-bot" ? perBotLocalVmTarget(botId) : SHARED_LOCAL_VM_TARGET;
 }
+
+// UI polling does not need the expensive screenshot/health audit used before
+// an agent turn. Cache one lightweight, verified liveness snapshot per target;
+// stale values return immediately while one background refresh is deduplicated.
+const localVmUiStatuses = new LocalVmStatusCache(
+  (target: LocalVmTarget) => containerComputerStatus(
+    undefined,
+    undefined,
+    target,
+    { desktopProbe: "quick" },
+  ),
+);
 
 function localVmLeaseFor(target: LocalVmTarget): LocalVmLease {
   return localVmLeases.forTarget(target.key);
@@ -2168,7 +2207,7 @@ async function localVmInventoryPayload() {
   }
   const existing = await discoverExistingPerBotLocalVms(store.bots, runtime.runtime);
   const statuses = await Promise.all(existing.map(({ target }) =>
-    containerComputerStatus(undefined, undefined, target),
+    localVmUiStatuses.get(target),
   ));
   const instances = existing.flatMap(({ bot, target }, index) => {
     const status = statuses[index];
@@ -3483,7 +3522,7 @@ async function startTurn(
       if (dwebUrl) integrations.dweb = { url: dwebUrl };
       // Cloud routines always use Box/BoxAgent. The per-bot backend applies
       // only to ordinary turns that mount a computer into the local agent.
-      const cloudBackend = opts?.runOn === "cloud" || bot.cloudBackend !== "vps" ? "box" : "vps";
+      const cloudBackend = opts?.runOn === "cloud" ? "box" : (bot.cloudBackend ?? "box");
       const mountsComputerMcp = instance.adapter.capabilities.computerMcp === true;
       const mountsCloudComputer = mountsComputerMcp || instance.driverKind === "boxAgent";
       const mountsLocalComputer = instance.adapter.capabilities.localComputerMcp === true;
@@ -3505,8 +3544,9 @@ async function startTurn(
       }
       const wants = plan.computer;
       let previewCapture: (() => Promise<{ png: string; format: string }>) | null = null;
-      let computerKind: "box" | "vps" | "vm" | "local" | null = null;
+      let computerKind: "box" | "vps" | "ruijie" | "vm" | "local" | null = null;
       let autoVpsProblem: string | null = null;
+      let ruijieDesktopJoinUrl: string | null = null;
 
       // Explicit destinations are strict. In particular, Local VM must never
       // fall through to host CUA and accidentally click on the user's Mac.
@@ -3581,6 +3621,16 @@ async function startTurn(
             autoVpsProblem = remote?.problem ?? "the VPS computer could not be reached";
           }
         }
+      }
+
+      if (wants === "cloud" && cloudBackend === "ruijie-sandbox") {
+        if (!mountsLocalComputer) {
+          throw new Error("this model engine cannot use the Ruijie sandbox computer — choose an engine with computer tools");
+        }
+        await ruijieSandbox.readyRuijieSandboxForTurn(cfg);
+        const joined = await ruijieSandbox.joinRuijieSandbox(cfg);
+        ruijieDesktopJoinUrl = joined.joinUrl;
+        computerKind = "ruijie";
       }
 
       // Cloud is also strict when explicitly selected. Auto (unset) reuses an
@@ -3751,6 +3801,27 @@ async function startTurn(
         }, dispatchClaimId);
         if (browser) integrations.browser = browser.integration;
       }
+      if (ruijieDesktopJoinUrl) {
+        if (!browser) {
+          browser = await browserIntegration(bot.id, liveBot?.browserProfile, threadId, () =>
+            directTurnClaimIsCurrent(bot.id, dispatchClaimId, threadId), dispatchClaimId);
+        }
+        if (!browser) throw new Error("the desktop control bridge is unavailable — restart OpenMausBot");
+        await attachRuijieDesktopCapability(browser.connection, browser.capability, ruijieDesktopJoinUrl);
+        const control = controlIntegration(bot.id);
+        integrations.localComputer = {
+          command: process.execPath,
+          args: [SPAWNED_PROXIES.ruijieComputer],
+          env: {
+            ...AGENTS_NODE_FLAG,
+            OMB_DESKTOP_URL: browser.connection.url,
+            OMB_DESKTOP_TOKEN: browser.capability.token,
+            OMB_BOT_ID: bot.id,
+            OMB_CONTROL_URL: control.url,
+            OMB_CONTROL_TOKEN: control.token,
+          },
+        };
+      }
       // A cancelled adapter can be between accepting sendTurn and revealing
       // its provider turn id. Never overlap a replacement with that ambiguous
       // pre-id window: wait for the old handshake to settle or for its bounded
@@ -3781,6 +3852,8 @@ async function startTurn(
             ? " You have your own cloud computer. In Chrome, prefer browser_snapshot with browser_click/browser_fill for semantic, trusted actions; use screenshot/click/type_text for visual or non-browser UI, open_url for navigation, and computer_exec for Linux tasks. Every action already returns the resulting screen, so don't follow it with screenshot; batch predictable pixel actions with computer_batch."
             : computerKind === "vps"
               ? " You have your own self-hosted remote Linux computer through the official Cua tools. Its filesystem is disposable: everything on it is wiped whenever its container is recreated, so keep long-lived work somewhere durable — push it to a remote, or hand the results back in chat — instead of leaving it only on that computer. Inspect the desktop state before acting, prefer accessibility targets over raw coordinates, and act carefully."
+              : computerKind === "ruijie"
+                ? " You can see and operate a pooled Ruijie Linux sandbox through visual computer tools. Start with get_desktop_state, then use click, type_text, press_key, and scroll; every action returns the resulting screen. The sandbox compute session may be reclaimed when idle, while provider-mounted output storage can persist."
               : computerKind === "local"
               ? " You can act on the user's computer through the computer tools — take a screenshot or read the desktop state first, prefer accessibility actions over raw coordinates, and act carefully. Keep applications in the background so the user can watch inside OpenMausBot; bring_to_front is intentionally unavailable and input must use background delivery. For a web search, do not focus the address bar and type: build the URL-encoded search URL and call launch_app once with urls, then inspect the target window. Fresh get_window_state screenshots and automatic post-action observations are shown in the app."
               : "") +
@@ -6352,7 +6425,7 @@ function stderrOf(err: unknown): string {
 }
 
 async function localVmPayload(target: LocalVmTarget) {
-  const status = await containerComputerStatus(undefined, undefined, target);
+  const status = await localVmUiStatuses.get(target);
   return {
     ...status,
     commands: setupCommands(status.runtime, process.platform, target),
@@ -6445,6 +6518,10 @@ function configStatus() {
     },
     box: { configured: Boolean(cfg.box?.token) },
     vps: { configured: Boolean(vpsSshAlias(cfg)), sshAlias: vpsSshAlias(cfg) ?? "" },
+    ruijieSandbox: {
+      configured: ruijieSandbox.ruijieSandboxConfigured(cfg),
+      managerUrl: cfg.ruijieSandbox?.managerUrl ?? "",
+    },
     opencodeGo: { configured: Boolean(cfg.opencodeGo?.apiKey) },
     // the chosen voice is a setting, not a secret; the key is reported the
     // same configured-or-not way as every other credential
@@ -9165,8 +9242,8 @@ const server = createServer(async (req, res) => {
           patch.browserProfile = requestedProfile;
         } else return json(res, 400, { error: "browserProfile must name an existing browser profile" });
       }
-      if (body.cloudBackend !== undefined && !["box", "vps"].includes(String(body.cloudBackend))) {
-        return json(res, 400, { error: "cloudBackend must be box or vps" });
+      if (body.cloudBackend !== undefined && !["box", "vps", "ruijie-sandbox"].includes(String(body.cloudBackend))) {
+        return json(res, 400, { error: "cloudBackend must be box, vps, or ruijie-sandbox" });
       }
       if (body.autoStartVps !== undefined) {
         if (typeof body.autoStartVps !== "boolean") return json(res, 400, { error: "autoStartVps must be true or false" });
@@ -10192,8 +10269,10 @@ const server = createServer(async (req, res) => {
       }
       if (action === "pull") localVmImageBusy = true;
       else localVmLifecycleBusy.add(SHARED_LOCAL_VM_TARGET.key);
+      localVmUiStatuses.invalidate(SHARED_LOCAL_VM_TARGET);
       try {
         const status = await containerComputerAction(action, undefined, undefined, SHARED_LOCAL_VM_TARGET);
+        localVmUiStatuses.remember(SHARED_LOCAL_VM_TARGET, status);
         if (action === "run" || action === "start") localVmIdleFor(SHARED_LOCAL_VM_TARGET).touch();
         if (action === "stop" || action === "remove") localVmIdleFor(SHARED_LOCAL_VM_TARGET).cancel();
         return json(res, 200, {
@@ -10248,6 +10327,7 @@ const server = createServer(async (req, res) => {
       // before the first await so two requests cannot both pass the limit.
       localVmLifecycleBusy.add(target.key);
       if (action === "run") localVmProvisionBusy = true;
+      localVmUiStatuses.invalidate(target);
       try {
         if (action === "run") {
           const before = await containerComputerStatus(undefined, undefined, target);
@@ -10262,6 +10342,7 @@ const server = createServer(async (req, res) => {
           }
         }
         const status = await containerComputerAction(action, undefined, undefined, target);
+        localVmUiStatuses.remember(target, status);
         if (action === "run") localVmIdleFor(target).touch();
         if (action === "stop" || action === "remove") localVmIdleFor(target).cancel();
         return json(res, 200, {
@@ -10352,7 +10433,13 @@ const server = createServer(async (req, res) => {
       // Windows never pushes PATH changes into a live process, so without
       // this the answer is frozen at boot and "check again" is a no-op.
       resetPathCache();
-      return json(res, 200, { instances: await registry.describe() });
+      const instances = await registry.describe();
+      // describe() has already established whether the local Harness is
+      // available. Reconcile its durable session totals now, without opening
+      // Harness solely for accounting and without ever adding the same
+      // history twice.
+      await reconcileHistoricalRuijieUsage();
+      return json(res, 200, { instances });
     }
 
     const instanceAction = /^\/api\/instances\/([\w.-]+)\/(refresh-models|install|auth\/start|auth\/complete|auth\/cancel)$/.exec(path);
@@ -10648,6 +10735,13 @@ const server = createServer(async (req, res) => {
         }
       }
       if (patch.box?.token !== undefined) patch.box.token = patch.box.token.trim();
+      if (patch.ruijieSandbox?.managerUrl !== undefined) {
+        patch.ruijieSandbox.managerUrl = patch.ruijieSandbox.managerUrl.trim();
+      }
+
+      if (patch.ruijieSandbox?.requestJson !== undefined) {
+        patch.ruijieSandbox.requestJson = patch.ruijieSandbox.requestJson.trim();
+      }
       const currentBoxToken = cfg.box?.token?.trim() ?? "";
       const nextBoxToken = patch.box?.token === undefined ? currentBoxToken : patch.box.token;
       const changingBoxToken = patch.box?.token !== undefined && nextBoxToken !== currentBoxToken;
@@ -10656,9 +10750,14 @@ const server = createServer(async (req, res) => {
         ? currentVpsAlias
         : vpsSshAlias({ ...cfg, vps: patch.vps });
       const changingVpsAlias = patch.vps !== undefined && nextVpsAlias !== currentVpsAlias;
+      const changingRuijieSandbox = patch.ruijieSandbox !== undefined && (
+        (patch.ruijieSandbox.managerUrl !== undefined && patch.ruijieSandbox.managerUrl !== (cfg.ruijieSandbox?.managerUrl ?? "")) ||
+        (patch.ruijieSandbox.requestJson !== undefined && patch.ruijieSandbox.requestJson !== (cfg.ruijieSandbox?.requestJson ?? ""))
+      );
       const transitioningProviders: RemoteComputerProvider[] = [
         ...(changingBoxToken ? ["box" as const] : []),
         ...(changingVpsAlias ? ["vps" as const] : []),
+        ...(changingRuijieSandbox ? ["ruijie-sandbox" as const] : []),
       ];
       providerConfigBusy = true;
       const changingLocalVmMode = patch.localVm?.mode !== undefined && patch.localVm.mode !== localVmMode(cfg);
@@ -11204,6 +11303,8 @@ const server = createServer(async (req, res) => {
       if (!bot) return json(res, 404, { error: "no such bot" });
       return bot.cloudBackend === "vps"
         ? json(res, 200, { backend: "vps", ...(await vps.vpsComputerStatus(cfg, bot.id)) })
+        : bot.cloudBackend === "ruijie-sandbox"
+          ? json(res, 200, { backend: "ruijie-sandbox", ...(await ruijieSandbox.ruijieSandboxStatus(cfg)) })
         : json(res, 200, { backend: "box", ...(await box.boxStatus(cfg, bot.id)) });
     }
     // Who is driving this bot's computer. GET is the panel's initial read;
@@ -11274,12 +11375,33 @@ const server = createServer(async (req, res) => {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
       }
-      const remoteProvider: RemoteComputerProvider = bot.cloudBackend === "vps" ? "vps" : "box";
+      const remoteProvider: RemoteComputerProvider = bot.cloudBackend === "vps"
+        ? "vps"
+        : bot.cloudBackend === "ruijie-sandbox"
+          ? "ruijie-sandbox"
+          : "box";
       if (computerProviderConfigTransitions.has(remoteProvider)) {
         return json(res, 409, { error: providerTransitionMessage(remoteProvider) });
       }
       if (boxLifecycleBusyBots.has(botId)) {
         return json(res, 409, { error: "this bot's cloud computer is being changed — wait for it to finish" });
+      }
+      if (bot.cloudBackend === "ruijie-sandbox") {
+        const releaseComputerLifecycle = claimBotComputerLifecycle(botId);
+        try {
+          if (m[2] === "join") return json(res, 200, await ruijieSandbox.joinRuijieSandbox(cfg));
+          if (m[2] === "provision") return json(res, 200, await ruijieSandbox.provisionRuijieSandbox(cfg));
+          if (m[2] === "sleep" || m[2] === "remove") {
+            if (bot.busy) return json(res, 409, { error: "the sandbox is being used by this bot — interrupt the turn first" });
+            return json(res, 200, await ruijieSandbox.releaseRuijieSandbox(cfg));
+          }
+          if (m[2] === "screenshot") {
+            return json(res, 409, { error: "sandbox screenshot preview needs the programmable VNC bridge; use Take Control for this development build" });
+          }
+          return json(res, 409, { error: "sandbox command execution is not available from the supplied provider interface" });
+        } finally {
+          releaseComputerLifecycle();
+        }
       }
       if (bot.cloudBackend === "vps") {
         const releaseComputerLifecycle = claimBotComputerLifecycle(botId);

@@ -1,13 +1,18 @@
 param(
-  [string]$ShortcutPath = (Join-Path ([Environment]::GetFolderPath('Desktop')) 'OpenMausBot.lnk')
+  [string]$ShortcutPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
+$appName = ([string][char]0x9510) + ([char]0x6377) + 'Bot'
+if (-not $ShortcutPath) {
+  $ShortcutPath = Join-Path ([Environment]::GetFolderPath('Desktop')) "$appName.lnk"
+}
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $source = Join-Path $PSScriptRoot 'OpenMausBot.DevLauncher.cs'
 $launcher = Join-Path $PSScriptRoot 'OpenMausBot.DevLauncher.exe'
-# Keep a versioned filename so Explorer cannot reuse the previous shortcut icon cache.
+# Keep a branded filename so Explorer cannot reuse the stock Electron shortcut
+# icon cached under the generic icon.ico resource path.
 $icon = Join-Path $repoRoot 'build\icon-ruijie-orb-depth.ico'
 $propertyWriter = Join-Path $PSScriptRoot 'set-windows-shortcut-app-id.ps1'
 $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
@@ -32,9 +37,9 @@ $branded = $false
 for ($attempt = 0; $attempt -lt 5 -and -not $branded; $attempt += 1) {
   & $resourceEditor $electronSource `
     --set-icon $icon `
-    --set-version-string ProductName OpenMausBot `
-    --set-version-string FileDescription OpenMausBot `
-    --set-version-string InternalName OpenMausBot `
+    --set-version-string ProductName $appName `
+    --set-version-string FileDescription $appName `
+    --set-version-string InternalName $appName `
     --set-version-string OriginalFilename electron.exe
   $branded = $LASTEXITCODE -eq 0
   if (-not $branded) { Start-Sleep -Milliseconds 300 }
@@ -46,7 +51,7 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $launcher -PathType Lea
   throw 'The OpenMausBot development launcher could not be compiled.'
 }
 
-$startMenuShortcut = Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs\OpenMausBot.lnk'
+$startMenuShortcut = Join-Path ([Environment]::GetFolderPath('StartMenu')) "Programs\$appName.lnk"
 
 foreach ($destination in @($ShortcutPath, $startMenuShortcut)) {
   $shortcutDirectory = Split-Path -Parent $destination
@@ -57,15 +62,23 @@ foreach ($destination in @($ShortcutPath, $startMenuShortcut)) {
   $shortcut.Arguments = ''
   $shortcut.WorkingDirectory = $repoRoot
   $shortcut.IconLocation = "$icon,0"
-  $shortcut.Description = 'OpenMausBot local development'
+  $shortcut.Description = "$appName local development"
   $shortcut.Save()
 
   & $propertyWriter `
     -ShortcutPath $destination `
     -AppId $localDevelopmentAppId `
     -RelaunchCommand ('"' + $launcher + '"') `
-    -RelaunchDisplayName 'OpenMausBot' `
+    -RelaunchDisplayName $appName `
     -RelaunchIcon "$icon,0"
+}
+
+# Ask Explorer to re-read the updated shortcut/icon registration. This keeps
+# the existing user session intact while replacing a cached Electron atom on
+# the taskbar after development-runtime branding changes.
+$iconRefresh = Join-Path $env:WINDIR 'System32\ie4uinit.exe'
+if (Test-Path -LiteralPath $iconRefresh -PathType Leaf) {
+  & $iconRefresh -show
 }
 
 Write-Output $ShortcutPath

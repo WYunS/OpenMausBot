@@ -59,12 +59,14 @@ function managerFixture() {
       this.url = "";
       this.closed = false;
       this.handlers = new Map();
+      this.inputEvents = [];
       this.session = {
         setPermissionCheckHandler: (handler) => { this.permissionCheck = handler; },
         setPermissionRequestHandler: (handler) => { this.permissionRequest = handler; },
       };
     }
     setWindowOpenHandler(handler) { this.windowOpenHandler = handler; }
+    setUserAgent(value) { this.userAgent = value; }
     on(name, handler) { this.handlers.set(name, handler); }
     async loadURL(url) {
       if (this.loadHook) await this.loadHook(url);
@@ -73,6 +75,16 @@ function managerFixture() {
     getURL() { return this.url; }
     isDestroyed() { return this.closed; }
     close() { this.closed = true; }
+    sendInputEvent(event) { this.inputEvents.push(event); }
+    async capturePage() {
+      const image = {
+        isEmpty: () => false,
+        getSize: () => ({ width: 1280, height: 800 }),
+        resize: () => image,
+        toPNG: () => Buffer.from("preview-frame"),
+      };
+      return image;
+    }
   }
   class FakeView {
     constructor(options) {
@@ -83,6 +95,7 @@ function managerFixture() {
       views.push(this);
     }
     setBounds(bounds) { this.bounds = bounds; }
+    getBounds() { return this.bounds; }
     setVisible(visible) { this.visible = visible; }
   }
   const owner = {
@@ -157,6 +170,37 @@ test("manager keeps two isolated watch-only views and rejects duplicates or a th
 
   manager.close("right");
   await assert.rejects(() => open("third", 6080), /already open/);
+});
+
+test("manager captures a private-network Ruijie VNC preview with an ASCII user agent", async () => {
+  const { manager, views } = managerFixture();
+  await manager.open({
+    contextId: "ruijie-preview:bot-a",
+    url: "http://172.24.37.151:11095/sandboxes/id/proxy/6080/vnc.html#password=secret",
+    bounds: { x: 0, y: 0, width: 960, height: 600 },
+  });
+
+  assert.match(views[0].webContents.userAgent, /^[\x20-\x7E]+$/);
+  assert.equal(views[0].webContents.url.includes("view_only=false"), true);
+  await assert.doesNotReject(() => manager.capture("ruijie-preview:bot-a"));
+  assert.deepEqual(await manager.capture("ruijie-preview:bot-a"), {
+    png: Buffer.from("preview-frame").toString("base64"),
+    mime: "image/png",
+  });
+
+  await manager.setAgentInput("ruijie-preview:bot-a");
+  assert.equal(views[0].webContents.url.includes("view_only=false"), true);
+  await manager.act("ruijie-preview:bot-a", "click", { x: 20, y: 30, double: true, settleMs: 0 });
+  assert.deepEqual(views[0].webContents.inputEvents.map((event) => event.type), [
+    "mouseMove", "mouseDown", "mouseUp", "mouseDown", "mouseUp",
+  ]);
+  await manager.act("ruijie-preview:bot-a", "type", { text: "abc", settleMs: 0 });
+  assert.deepEqual(
+    views[0].webContents.inputEvents.slice(-3).map((event) => event.keyCode),
+    ["a", "b", "c"],
+  );
+  await manager.act("ruijie-preview:bot-a", "scroll", { deltaY: 300, settleMs: 0 });
+  assert.equal(views[0].webContents.inputEvents.at(-1).type, "mouseWheel");
 });
 
 test("manager lays out panes and demotes the old pane before promoting the new one", async () => {

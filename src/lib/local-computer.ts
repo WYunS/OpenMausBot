@@ -127,6 +127,7 @@ export function shouldPollCloudPreview(
   },
 ): boolean {
   return computer === "cloud"
+    && cloudBackend !== "ruijie-sandbox"
     && phase === "ready"
     && resolvedBotId === botId
     && resolvedComputer === "cloud"

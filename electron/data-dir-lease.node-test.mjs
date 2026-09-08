@@ -280,6 +280,29 @@ test("a crashed stale-lease reaper can be succeeded without concurrent ownership
   }
 });
 
+test("a reused live pid does not keep a stale lease forever", { skip: process.platform !== "win32" }, () => {
+  const { dataDir } = temporaryDirectory();
+  const leasePath = path.join(dataDir, LEASE_NAME);
+  const staleOwner = {
+    version: 1,
+    pid: process.pid,
+    host: hostname(),
+    token: randomUUID(),
+    // The current test process cannot have created a lease before the Unix
+    // epoch. This models Windows reusing a dead OpenMausBot process id for an
+    // unrelated process after the original owner exited.
+    createdAt: 1,
+  };
+  writeFileSync(leasePath, `${JSON.stringify(staleOwner)}\n`, { mode: 0o600 });
+
+  const replacement = acquireDataDirLease(dataDir);
+  try {
+    assert.equal(replacement.ownerPid, process.pid);
+  } finally {
+    replacement.release();
+  }
+});
+
 test("a foreign-host owner fails closed and identifies the preserved lease record", async () => {
   const { dataDir } = temporaryDirectory();
   const leasePath = path.join(dataDir, LEASE_NAME);

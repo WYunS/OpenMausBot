@@ -32,6 +32,8 @@ type CapabilityControlBody = {
   botId?: string;
   profile?: string;
   expiresAt?: number;
+  contextId?: string;
+  url?: string;
 };
 const capabilityControlResponseSchema = z.object({
   ok: z.literal(true),
@@ -40,7 +42,7 @@ const capabilityControlResponseSchema = z.object({
 
 async function capabilityControl(
   connection: BrowserConnection,
-  operation: "register" | "revoke" | "clear",
+  operation: "register" | "desktop" | "revoke" | "clear",
   body: CapabilityControlBody,
   fetchImpl: typeof fetch,
 ): Promise<z.infer<typeof capabilityControlResponseSchema>> {
@@ -55,6 +57,23 @@ async function capabilityControl(
   });
   if (!response.ok) throw new Error(`browser capability ${operation}: HTTP ${response.status}`);
   return capabilityControlResponseSchema.parse(await response.json());
+}
+
+/** Attach one provider-issued noVNC viewer to an already-scoped turn bearer.
+ * The credential-bearing URL stays between the harness and Electron; the MCP
+ * child receives only the opaque capability token. */
+export async function attachRuijieDesktopCapability(
+  connection: BrowserConnection,
+  capability: BrowserCapability,
+  joinUrl: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  await capabilityControl(connection, "desktop", {
+    token: capability.token,
+    botId: capability.botId,
+    contextId: `ruijie-preview:${capability.botId}`,
+    url: joinUrl,
+  }, fetchImpl);
 }
 
 /** Register the least-privilege bearer sent to exactly one turn's proxy. */

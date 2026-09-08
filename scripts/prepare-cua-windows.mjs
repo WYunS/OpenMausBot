@@ -100,6 +100,18 @@ export async function prepareCuaWindows({
     assertVersion(candidate);
 
     const finalDirectory = join(root, "dist-native", "cua-win32-x64");
+    const finalBinary = join(finalDirectory, "cua-driver.exe");
+    // A running development app can legitimately have this executable open.
+    // Windows then refuses to remove its parent directory even when the
+    // already-staged binary is byte-for-byte identical to the reviewed asset.
+    // Reuse that exact binary instead of making local packaging require the
+    // developer to stop every active computer-use session first.
+    if (existsSync(finalBinary) && sha256(readFileSync(finalBinary)) === sha256(readFileSync(candidate))) {
+      assertWindowsX64(finalBinary);
+      assertVersion(finalBinary);
+      console.log(`CUA Driver ${CUA_WINDOWS_VERSION} already staged for win32-x64`);
+      return;
+    }
     const stagingParent = dirname(finalDirectory);
     mkdirSync(stagingParent, { recursive: true });
     const stagedDirectory = mkdtempSync(join(stagingParent, ".cua-win32-x64-"));

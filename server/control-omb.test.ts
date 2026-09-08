@@ -111,7 +111,7 @@ describe("control-omb isolated verification loop", () => {
     try {
       const doctor = await runControlOmb(["doctor"], { env }) as any;
       expect(doctor.ok).toBe(true);
-      expect(doctor.availableEngines).toEqual(["claude"]);
+      expect(doctor.availableEngines).toEqual(["verification"]);
 
       const created = await runControlOmb(["new-bot", "--name", "Verification Probe"], { env }) as any;
       const botId = created.bot.id as string;

@@ -295,3 +295,89 @@ export function VpsConnection() {
     </div>
   );
 }
+
+/** Ruijie's pooled sandbox-manager connection. The full submit template is
+ * write-only because it can carry model and gateway credentials. */
+export function RuijieSandboxConnection() {
+  const { state, dispatch } = useStore();
+  const [managerUrl, setManagerUrl] = useState("");
+  const [requestJson, setRequestJson] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const configured = Boolean(state.config?.ruijieSandbox?.configured);
+
+  useEffect(() => {
+    setManagerUrl(state.config?.ruijieSandbox?.managerUrl ?? "");
+  }, [state.config?.ruijieSandbox?.managerUrl]);
+
+  const save = async () => {
+    if (saving || !managerUrl.trim() || (!requestJson.trim() && !configured)) return;
+    setSaving(true);
+    setError(null);
+    try {
+      let status: ConfigStatus = await api("/api/config", {
+        method: "PUT",
+        body: JSON.stringify({ ruijieSandbox: { managerUrl: managerUrl.trim() } }),
+      });
+      if (requestJson.trim()) {
+        JSON.parse(requestJson);
+        status = window.ogb?.setCredential
+          ? await window.ogb.setCredential("ruijieSandboxRequestJson", requestJson.trim())
+          : await api("/api/config", {
+              method: "PUT",
+              body: JSON.stringify({ ruijieSandbox: { requestJson: requestJson.trim() } }),
+            });
+      }
+      dispatch({ type: "configStatus", config: status });
+      setManagerUrl(status.ruijieSandbox?.managerUrl ?? managerUrl.trim());
+      setRequestJson("");
+    } catch (e) {
+      setError(e instanceof SyntaxError ? "The sandbox request template is not valid JSON" : e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center gap-2 text-[13px] text-ink-secondary">
+        <span className={cn("size-1.5 rounded-full", configured ? "bg-success" : "bg-raised-hover")} />
+        <span>Ruijie microVM sandbox</span>
+        <span className="rounded bg-control px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ink-secondary">Development</span>
+        {configured && <span className="text-[11px] text-success">Configured</span>}
+      </div>
+      <div className="mb-2 text-[12px] leading-relaxed text-ink-secondary">
+        Creates a pooled Linux desktop through sandbox-manager and opens its VNC session. The request template is stored write-only.
+      </div>
+      <div className="space-y-2">
+        <input
+          type="url"
+          value={managerUrl}
+          onChange={(event) => setManagerUrl(event.target.value)}
+          placeholder="http://manager.internal:12581"
+          aria-label="Ruijie sandbox manager URL"
+          autoComplete="off"
+          className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
+        />
+        <textarea
+          value={requestJson}
+          onChange={(event) => setRequestJson(event.target.value)}
+          placeholder={configured ? "Configured — paste JSON to replace" : "Paste the POST /submit JSON template"}
+          aria-label="Ruijie sandbox request JSON"
+          rows={4}
+          spellCheck={false}
+          className="w-full resize-y rounded-lg border border-hairline/40 bg-inset px-3 py-2 font-mono text-[11px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
+        />
+        <button
+          onClick={() => void save()}
+          disabled={saving || !managerUrl.trim() || (!requestJson.trim() && !configured)}
+          className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-control py-2 text-[13px] text-ink hover:bg-raised-hover disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {saving ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+          Save sandbox connection
+        </button>
+      </div>
+      {error && <div className="mt-1 text-[12px] text-danger">{error}</div>}
+    </div>
+  );
+}

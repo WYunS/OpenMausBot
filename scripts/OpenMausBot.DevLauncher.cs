@@ -4,9 +4,9 @@ using System.IO;
 using System.Reflection;
 using System.Windows.Forms;
 
-[assembly: AssemblyTitle("OpenMausBot")]
-[assembly: AssemblyProduct("OpenMausBot")]
-[assembly: AssemblyDescription("OpenMausBot local development launcher")]
+[assembly: AssemblyTitle("锐捷Bot")]
+[assembly: AssemblyProduct("锐捷Bot")]
+[assembly: AssemblyDescription("锐捷Bot 本地开发启动器")]
 [assembly: AssemblyVersion("1.0.0.0")]
 
 internal static class OpenMausBotDevLauncher
@@ -39,8 +39,8 @@ internal static class OpenMausBotDevLauncher
         catch (Exception error)
         {
             MessageBox.Show(
-                "OpenMausBot could not start.\n\n" + error.Message,
-                "OpenMausBot",
+                "锐捷Bot 无法启动。\n\n" + error.Message,
+                "锐捷Bot",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error
             );

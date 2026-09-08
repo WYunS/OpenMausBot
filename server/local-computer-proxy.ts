@@ -63,6 +63,8 @@ export function createLocalComputerProxyInterceptor(options: {
   const schedule = options.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   let observation = 0;
   let observationGeneration = 0;
+  let observationInFlight: string | null = null;
+  let observationWanted = false;
   let lastTarget: { pid: number; window_id: number } | null = null;
 
   const rememberTarget = (args: Record<string, unknown>) => {
@@ -70,11 +72,17 @@ export function createLocalComputerProxyInterceptor(options: {
     const windowId = Number(args.window_id);
     if (Number.isSafeInteger(pid) && Number.isSafeInteger(windowId)) lastTarget = { pid, window_id: windowId };
   };
-  const requestObservation = () => {
-    if (!lastTarget) return;
+  const requestObservation = (generation: number) => {
+    if (!lastTarget || generation !== observationGeneration) return;
+    if (observationInFlight) {
+      observationWanted = true;
+      return;
+    }
     const send = () => {
+      if (!lastTarget || generation !== observationGeneration || observationInFlight) return;
       const id = `omb-screen-${process.pid}-${++observation}`;
       synthetic.add(id);
+      observationInFlight = id;
       options.toDriver(JSON.stringify({
         jsonrpc: "2.0", id, method: "tools/call",
         params: {
@@ -98,6 +106,11 @@ export function createLocalComputerProxyInterceptor(options: {
         listRequests.add(message.id);
       }
       if (message?.method !== "tools/call") { options.toDriver(line); return; }
+      // Real work outranks preview refreshes. Any not-yet-dispatched frame
+      // from the previous action is stale as soon as the model chooses its
+      // next step; keep at most the one already in flight.
+      observationGeneration += 1;
+      observationWanted = false;
       const id = message.id;
       const name = String(message.params?.name ?? "");
       const args = message.params?.arguments && typeof message.params.arguments === "object"
@@ -131,8 +144,13 @@ export function createLocalComputerProxyInterceptor(options: {
       const id = message?.id;
       if (synthetic.has(id)) {
         synthetic.delete(id);
+        if (observationInFlight === id) observationInFlight = null;
         const image = rawImage(message?.result);
         if (image) void options.publishFrame(image);
+        if (observationWanted) {
+          observationWanted = false;
+          requestObservation(observationGeneration);
+        }
         return;
       }
       if (listRequests.delete(id) && Array.isArray(message?.result?.tools)) {
@@ -150,10 +168,11 @@ export function createLocalComputerProxyInterceptor(options: {
         // Capture the immediate response plus the two common browser paint
         // boundaries. Newer frames replace older ones in the panel.
         const generation = ++observationGeneration;
+        observationWanted = false;
         const start = () => {
           for (const delay of [40, 200, 500, 900, 1_500]) {
             schedule(() => {
-              if (generation === observationGeneration) void requestObservation();
+              if (generation === observationGeneration) void requestObservation(generation);
             }, delay);
           }
         };

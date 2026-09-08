@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, utilityProcess } from "electron";
+import { app, BrowserWindow, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, nativeTheme, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, utilityProcess } from "electron";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -28,7 +28,13 @@ import { migrateWorkspaceCredentials, workspaceCredentialEnv } from "./workspace
 import { activateExistingWindow } from "./single-instance.mjs";
 import { pollServerIdentity } from "./server-boot-probe.mjs";
 import { packageUrlFromCommandLine, packageUrlFromDeepLink } from "./package-link.mjs";
-import { desktopWindowWebPreferences, windowChromeOptions } from "./window-chrome.mjs";
+import {
+  desktopWindowWebPreferences,
+  hideNativeWindowTitle,
+  nativeTitleBarOverlayForSkin,
+  nativeThemeSourceForSkin,
+  windowChromeOptions,
+} from "./window-chrome.mjs";
 import { defaultSaveName, withSavableFile } from "./save-file.mjs";
 import { desktopViewerPermissionAllowed } from "./desktop-viewer-permissions.mjs";
 import {
@@ -82,7 +88,7 @@ const { createDisplayMediaGuard, encodeScreenThumbnail, invokeDisplayMediaCallba
 );
 const { createLocalDesktopInputController } = require("./local-desktop-input.cjs");
 const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.cjs");
-const { desktopViewerUrl, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
+const { DESKTOP_VIEWER_USER_AGENT, desktopViewerUrl, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
 const { createDesktopWorkspaceManager } = require("./desktop-workspace.cjs");
 const { createBrowserSurfaceManager } = require("./browser-surface.cjs");
 const { browserPartition, browserProfilePartition } = require("./browser-snapshot.cjs");
@@ -90,6 +96,7 @@ const { createBrowserHost } = require("./browser-host.cjs");
 const { browserSurfaceSupported } = require("./browser-platform.cjs");
 const { clearBrowserPartitionSession } = require("./browser-partition-cleanup.cjs");
 const {
+  browserConnectionDescriptorMatches,
   postBrowserConnection,
   removeBrowserConnectionDescriptor: removeBrowserConnectionDescriptorFile,
 } = require("./browser-connection-sync.cjs");
@@ -103,17 +110,20 @@ const { MIN_BOUNDS, normalizeUnreadCount, parseWindowState, resolveWindowState }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ID = app.isPackaged ? "com.openmausbot.app" : "com.openmausbot.app.localdev.source";
+const APP_TITLE = "锐捷Bot";
+app.setName(APP_TITLE);
 // A development build runs from electron.exe, whose default Windows taskbar
 // identity/icon is the Electron atom. Give it the same identity as the
 // installed app before ready, and use the ICO that the desktop shortcut uses.
 if (process.platform === "win32") app.setAppUserModelId(APP_ID);
+if (process.platform === "win32") nativeTheme.themeSource = nativeThemeSourceForSkin("midnight");
 // 127.0.0.1 explicitly — vite binds IPv4; a bare "localhost" here can
 // resolve to ::1 and paint a black window
 const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 const DEFAULT_COMPOSIO_BROKER_URL = "https://openmausbot-composio.milindsoni201.workers.dev";
 let SERVER_PORT = 8799;
 const APP_ICON = process.platform === "win32" && !app.isPackaged
-  ? path.join(__dirname, "..", "build", "icon.ico")
+  ? path.join(__dirname, "..", "build", "icon-ruijie-orb-depth.ico")
   : path.join(__dirname, "resources", "app-icon.png");
 let desktopViewerWindow = null;
 let desktopViewerOwner = null;
@@ -125,6 +135,7 @@ let desktopWorkspaceOwner = null;
 // and per-boot token are sent privately to the embedded harness.
 let browserSurface = null;
 let browserHost = null;
+let browserDescriptorRefreshTimer = null;
 const browserSurfaceIsSupported = browserSurfaceSupported(process.platform);
 // Positive server assertions survive renderer reloads and surface recreation.
 // A release is deliberately local-panel-only; see browser-control-sync.cjs.
@@ -844,6 +855,7 @@ function openRuijieSsoWindow(authorizeUrl) {
     minimizable: true,
     fullscreenable: false,
     frame: true,
+    ...windowChromeOptions(process.platform, nativeTheme.shouldUseDarkColors ? "midnight" : "atelier"),
     icon: APP_ICON,
     autoHideMenuBar: true,
     backgroundColor: "#ffffff",
@@ -859,6 +871,22 @@ function openRuijieSsoWindow(authorizeUrl) {
       partition: `openmaus-ruijie-sso-${randomUUID()}`,
     },
   });
+  hideNativeWindowTitle(authWindow);
+  if (process.platform === "win32") {
+    authWindow.webContents.on("dom-ready", () => {
+      void authWindow.webContents.insertCSS(`
+        html { box-sizing: border-box; padding-top: env(titlebar-area-height, 32px); }
+        html::before {
+          content: "";
+          position: fixed;
+          inset: 0 0 auto 0;
+          height: env(titlebar-area-height, 32px);
+          -webkit-app-region: drag;
+          z-index: 2147483647;
+        }
+      `);
+    });
+  }
   const authorizationRecovery = new RuijieAuthorizationRecovery(authorizeUrl);
   ruijieSsoWindow = authWindow;
   authWindow.center();
@@ -1336,6 +1364,12 @@ function openDesktopViewer(owner, rawUrl, rawTitle, contextId) {
   desktopViewerWindow = viewer;
   const viewerOrigin = url.origin;
 
+  // Some internal noVNC reverse proxies encode request headers as ASCII.
+  // Electron's default UA includes the localized application name (for
+  // example "锐捷Bot"), which makes those proxies return HTTP 500 before
+  // noVNC loads. Keep this isolated remote-content window ASCII-only.
+  viewer.webContents.setUserAgent(DESKTOP_VIEWER_USER_AGENT);
+
   // VNC needs rendering, keyboard/mouse input and WebSockets, plus the few
   // permission-gated input capabilities a viewer page asks for: keyboard and
   // pointer capture, the clipboard for paste, full screen. Those go to the
@@ -1466,21 +1500,53 @@ function removeBrowserConnectionDescriptor() {
   }
 }
 
-async function ensureBrowserHost() {
-  if (!browserSurfaceIsSupported) {
+function publishBrowserConnection() {
+  if (!browserHost?.url) return;
+  const connection = browserHost.descriptor();
+  if (app.isPackaged) {
     removeBrowserConnectionDescriptor();
-    throw new Error("The sandboxed built-in browser is not yet available on this platform");
+  } else if (!browserConnectionDescriptorMatches({
+    userData: app.getPath("userData"),
+    connection,
+  })) {
+    browserConnectionStore.persist(connection);
   }
-  if (browserHost?.url) return browserHost;
-  const candidate = createBrowserHost({ manager: () => browserSurface });
+  if (serverProc) syncBrowserConnection(serverProc);
+}
+
+function startBrowserDescriptorRefresh() {
+  if (app.isPackaged || browserDescriptorRefreshTimer) return;
+  browserDescriptorRefreshTimer = setInterval(() => {
+    try {
+      publishBrowserConnection();
+    } catch (error) {
+      slog(`desktop control descriptor refresh failed: ${error?.message ?? error}`);
+    }
+  }, 2_000);
+  browserDescriptorRefreshTimer.unref?.();
+}
+
+async function ensureBrowserHost() {
+  if (browserHost?.url) {
+    publishBrowserConnection();
+    startBrowserDescriptorRefresh();
+    return browserHost;
+  }
+  const candidate = createBrowserHost({
+    manager: () => browserSurface,
+    desktopManager: () => {
+      const owner = mainWindow;
+      return owner && !owner.isDestroyed() ? ensureDesktopWorkspace(owner) : null;
+    },
+  });
   try {
     await candidate.start();
-    if (app.isPackaged) removeBrowserConnectionDescriptor();
-    else browserConnectionStore.persist(candidate.descriptor());
     // Publish only after listen + descriptor handling both succeed. A failed
     // candidate is stopped below so the next window can retry cleanly.
     browserHost = candidate;
-    if (serverProc) syncBrowserConnection(serverProc);
+    publishBrowserConnection();
+    startBrowserDescriptorRefresh();
+    slog(`desktop control host ready at ${candidate.url} (pid ${process.pid})`);
     return candidate;
   } catch (error) {
     await candidate.stop().catch(() => {});
@@ -1490,10 +1556,15 @@ async function ensureBrowserHost() {
 
 async function startBrowserSurface(owner) {
   if (!browserSurfaceIsSupported) {
-    // Never leave a development descriptor behind that could make the server
-    // advertise browser tools while the native surface is deliberately gated.
-    removeBrowserConnectionDescriptor();
-    if (serverProc) syncBrowserConnection(serverProc);
+    // Windows cannot expose the built-in browser surface yet, but the same
+    // authenticated loopback host also owns Ruijie's noVNC computer bridge.
+    // Start the host with a null browser manager so Cloud computer turns can
+    // still reach the Electron-owned remote desktop.
+    try {
+      await ensureBrowserHost();
+    } catch (error) {
+      slog(`desktop control host unavailable: ${error?.message ?? error}`);
+    }
     return;
   }
   let surface = null;
@@ -1769,6 +1840,7 @@ function createWindow() {
     // recolors the native caption-button overlay, otherwise a saved light
     // skin still flashes the Midnight-black block on every cold start.
     show: !waitsForSkinSync,
+    title: "锐捷Bot",
     icon: APP_ICON,
     backgroundColor: "#070707",
     autoHideMenuBar: process.platform !== "darwin",
@@ -1779,6 +1851,7 @@ function createWindow() {
       additionalArguments: [`--omb-local-origin=${rendererOrigin()}`],
     },
   });
+  hideNativeWindowTitle(win);
   mainWindow = win;
   attachUpdaterWindow(win);
   for (const eventName of ["show", "restore", "maximize", "focus", "blur"]) {
@@ -2135,6 +2208,14 @@ ipcMain.handle("desktop:save-file", localOnly("desktop:save-file", async (event,
 // a frameless caption overlay that can cover page controls.
 ipcMain.handle("desktop:skin", (_event, skin) => {
   if (!isKnownSkin(skin)) return false;
+  if (process.platform === "win32") nativeTheme.themeSource = nativeThemeSourceForSkin(skin);
+  if (process.platform === "win32" && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setTitleBarOverlay(nativeTitleBarOverlayForSkin(skin));
+  }
+  if (process.platform === "win32" && ruijieSsoWindow && !ruijieSsoWindow.isDestroyed()) {
+    ruijieSsoWindow.setTitleBarOverlay(nativeTitleBarOverlayForSkin(skin));
+  }
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) mainWindow.show();
   return true;
 });
 
@@ -2178,6 +2259,11 @@ ipcMain.handle("desktop-workspace:layout", localOnly("desktop-workspace:layout",
   const manager = desktopWorkspaceForEvent(event);
   if (!manager) return false;
   return manager.layout(items);
+}));
+ipcMain.handle("desktop-workspace:capture", localOnly("desktop-workspace:capture", (event, contextId) => {
+  const manager = desktopWorkspaceForEvent(event);
+  if (!manager) throw new Error("That desktop preview is not open");
+  return manager.capture(contextId);
 }));
 ipcMain.handle("desktop-workspace:set-interactive", localOnly("desktop-workspace:set-interactive", (event, contextId) => {
   const manager = desktopWorkspaceForEvent(event);
@@ -2351,6 +2437,7 @@ const CREDENTIAL_PATCH = {
   composioApiKey: (value) => ({ composio: { apiKey: value } }),
   xaiApiKey: (value) => ({ xai: { key: value } }),
   boxToken: (value) => ({ box: { token: value } }),
+  ruijieSandboxRequestJson: (value) => ({ ruijieSandbox: { requestJson: value } }),
   opencodeGoApiKey: (value) => ({ opencodeGo: { apiKey: value } }),
   ttsKey: (value) => ({ tts: { key: value } }),
   openaiImageApiKey: (value) => ({ imageGen: { key: value } }),
@@ -2600,6 +2687,10 @@ process.once("SIGTERM", requestSignalQuit);
 
 app.on("before-quit", (e) => {
   desktopShutdownStarted = true;
+  if (browserDescriptorRefreshTimer) {
+    clearInterval(browserDescriptorRefreshTimer);
+    browserDescriptorRefreshTimer = null;
+  }
   if (cuaCleanedUp) return;
   e.preventDefault();
   const stoppingServer = serverProc;

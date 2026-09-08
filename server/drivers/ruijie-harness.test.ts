@@ -81,6 +81,21 @@ describe("Ruijie Harness driver", () => {
       };
       if (url.pathname.endsWith("session.create")) value = { sessionId: "session-fixture" };
       if (url.pathname.endsWith("session.selectModel")) value = { selected: body.payload };
+      if (url.pathname.endsWith("session.history")) value = {
+        events: [],
+        hasMore: false,
+        projections: {
+          asOfSeq: 42,
+          values: {
+            tokenUsage: {
+              uncachedInputTokens: 100,
+              outputTokens: 20,
+              cacheReadTokens: 70,
+              cacheWriteTokens: 30,
+            },
+          },
+        },
+      };
       if (url.pathname.endsWith("session.attachment")) value = {
         attachment: { mediaType: "image/png" },
         data: "cG5nLWZyYW1l",
@@ -117,6 +132,34 @@ describe("Ruijie Harness driver", () => {
     });
   });
 
+  it("synchronizes the model catalog while reporting an available Harness", async () => {
+    const instance = await RuijieHarnessDriver.create({
+      instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
+      config: { endpoint: "http://127.0.0.1:49724", expectedAccountEmail: "wangyunshang@ruijie.com.cn" },
+    });
+
+    await expect(instance.snapshot()).resolves.toMatchObject({ state: "available" });
+    expect(instance.models).toEqual({
+      default: "gpt::gpt-5.6-luna",
+      options: [{ id: "gpt::gpt-5.6-luna", label: "GPT-5.6-Luna", provider: "gpt" }],
+    });
+    expect(calls.map((call) => call.method)).toContain("llm.models");
+  });
+
+  it("reads authoritative cumulative usage from a Harness session projection", async () => {
+    const instance = await RuijieHarnessDriver.create({
+      instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
+      config: { endpoint: "http://127.0.0.1:49724", expectedAccountEmail: "wangyunshang@ruijie.com.cn" },
+    });
+
+    await expect(instance.readSessionUsage?.("session-history")).resolves.toEqual({
+      input: 200,
+      output: 20,
+      cachedInput: 70,
+    });
+    expect(calls.at(-1)).toEqual({ method: "session.history", payload: { sessionId: "session-history", maxMessages: 1 } });
+  });
+
   it("forwards a turn through the live Harness session API and maps its result", async () => {
     const instance = await RuijieHarnessDriver.create({
       instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
@@ -143,6 +186,44 @@ describe("Ruijie Harness driver", () => {
       expect.objectContaining({ type: "item.completed", itemType: "assistant_text", text: "完成" }),
       expect.objectContaining({ type: "turn.completed", ok: true, stopReason: "completed" }),
     ]));
+  });
+
+  it("reports each Harness turn's provider token usage without double-counting streamed samples", async () => {
+    const instance = await RuijieHarnessDriver.create({
+      instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
+      config: { endpoint: "http://127.0.0.1:49724", expectedAccountEmail: "wangyunshang@ruijie.com.cn" },
+    });
+    const events: RuntimeEvent[] = [];
+    instance.adapter.onEvent((event) => events.push(event));
+    await instance.adapter.sendTurn({ threadId: "thread-usage", text: "统计", cwd: "C:\\work" });
+
+    const socket = FakeSocket.instances[0]!;
+    socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+      type: "turn/start", data: { turn: 1 },
+    } });
+    socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+      type: "assistant/chunk", data: { turn: 1, step: 1, chunk: { type: "usage", usage: {
+        inputTokens: 10, outputTokens: 3, cacheReadTokens: 5, cacheWriteTokens: 2,
+      } } },
+    } });
+    socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+      type: "assistant/message", data: { turn: 1, step: 1, message: { role: "assistant", content: [] }, usage: {
+        inputTokens: 11, outputTokens: 4, cacheReadTokens: 5, cacheWriteTokens: 2,
+      } },
+    } });
+    socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+      type: "assistant/message", data: { turn: 1, step: 2, message: { role: "assistant", content: [] }, usage: {
+        inputTokens: 20, outputTokens: 5, cacheReadTokens: 7,
+      } },
+    } });
+    socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+      type: "turn/end", data: { turn: 1, reason: { kind: "completed" } },
+    } });
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "turn.completed",
+      usage: { input: 45, output: 9, cachedInput: 12 },
+    }));
   });
 
   it("emits the target-window screenshot returned by a CUA observation", async () => {
@@ -296,7 +377,7 @@ describe("Ruijie Harness driver", () => {
     }
   });
 
-  it("uses a fresh computer MCP name when retrying a failed session creation", async () => {
+  it("retries one failed computer MCP mount with a fresh name before sending the turn", async () => {
     const dshHome = await mkdtemp(join(tmpdir(), "openmaus-rjh-test-"));
     try {
       const instance = await RuijieHarnessDriver.create({
@@ -320,7 +401,6 @@ describe("Ruijie Harness driver", () => {
       };
 
       sessionCreateFailuresRemaining = 1;
-      await expect(instance.adapter.sendTurn(turn)).rejects.toThrow("preset failed to mount");
       await instance.adapter.sendTurn(turn);
 
       const presets = calls

@@ -7,7 +7,8 @@
 // typing, screenshots, accessibility, or window discovery.
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createReadStream, existsSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -37,7 +38,7 @@ export const BASE_IMAGE_MIRRORS = [`dockerproxy.net/trycua/xfce-cua@${BASE_IMAGE
 // Image and container labels below remain the authoritative compatibility
 // check, not the mutable tag.
 export const IMAGE_REPOSITORY = "localhost/openmausbot/cua-local-vm";
-export const IMAGE_LAYER_VERSION = "5";
+export const IMAGE_LAYER_VERSION = "6";
 export const IMAGE_LAYER_LABEL = "com.openmausbot.image-layer";
 export const IMAGE = `${IMAGE_REPOSITORY}:driver-${CUA_DRIVER_VERSION}-v${IMAGE_LAYER_VERSION}`;
 export const CONTAINER = "openmausbot-computer";
@@ -51,6 +52,11 @@ export const VM_WORKSPACE_GUEST = "/home/cua/workspace";
 export const DISPLAY = ":1";
 export const CUA_SOCKET = "/run/user/1000/openmausbot-cua.sock";
 export const CUA_EXECUTABLE = "/usr/local/libexec/openmausbot/cua-driver";
+
+export function localVmImageArchiveName(arch = process.arch): string {
+  const linuxArch = arch === "arm64" ? "arm64" : arch === "x64" ? "amd64" : arch;
+  return `openmausbot-cua-local-vm-driver-${CUA_DRIVER_VERSION}-v${IMAGE_LAYER_VERSION}-linux-${linuxArch}.oci.tar`;
+}
 
 const RUNTIMES = ["docker", "podman", "container"] as const;
 export type Runtime = (typeof RUNTIMES)[number];
@@ -121,10 +127,28 @@ export function managedImageDockerfile(baseImage = BASE_IMAGE): string {
 USER root
 RUN set -eux; \\
     apt-get update; \\
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends fontconfig fonts-noto-cjk; \\
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
+      fontconfig fonts-noto-cjk fonts-noto-color-emoji locales ibus ibus-libpinyin; \\
+    if apt-cache show language-pack-zh-hans >/dev/null 2>&1; then \\
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends language-pack-zh-hans; \\
+    fi; \\
+    printf '\\npath-include /usr/share/locale/zh_CN/**\\n' >> /etc/dpkg/dpkg.cfg.d/docker; \\
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall --no-install-recommends \\
+      xfce4-appfinder xfce4-panel xfce4-session xfce4-settings xfce4-terminal \\
+      thunar thunar-data xfdesktop4 xfdesktop4-data \\
+      libxfce4ui-common libxfce4util-common libgarcon-common; \\
+    sed -i 's/^# *zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen; \\
+    locale-gen zh_CN.UTF-8; \\
+    printf 'LANG=zh_CN.UTF-8\\nLANGUAGE=zh_CN:zh\\nLC_CTYPE=zh_CN.UTF-8\\n' > /etc/default/locale; \\
+    install -d -o cua -g cua /home/cua/.config/environment.d; \\
+    printf 'LANG=zh_CN.UTF-8\\nLANGUAGE=zh_CN:zh\\nLC_CTYPE=zh_CN.UTF-8\\nGTK_IM_MODULE=ibus\\nQT_IM_MODULE=ibus\\nXMODIFIERS=@im=ibus\\n' > /home/cua/.config/environment.d/10-openmausbot-zh.conf; \\
+    chown cua:cua /home/cua/.config/environment.d/10-openmausbot-zh.conf; \\
     rm -rf /var/lib/apt/lists/*; \\
     fc-cache -f; \\
-    test "$(fc-list :lang=zh | wc -l)" -gt 0
+    test "$(fc-list :lang=zh | wc -l)" -gt 0; \\
+    locale -a | grep -qi '^zh_CN\\.utf8$'; \\
+    test -s /usr/share/locale/zh_CN/LC_MESSAGES/xfce4-panel.mo; \\
+    test -s /usr/share/locale/zh_CN/LC_MESSAGES/thunar.mo
 RUN set -eux; \\
     arch="$(uname -m)"; \\
     case "$arch" in \\
@@ -182,6 +206,7 @@ RUN printf '%s\\n' \\
       '  if [ "$attempt" -ge 45 ]; then echo "X display :1 did not become ready within 45 seconds" >&2; exit 1; fi' \\
       '  sleep 1' \\
       'done' \\
+      'if command -v ibus-daemon >/dev/null 2>&1; then ibus-daemon --daemonize --replace --xim || true; fi' \\
       'exec env CUA_DRIVER_INSTALL_CHANNEL=python_package CUA_DRIVER_RS_TELEMETRY_ENABLED=0 ${CUA_EXECUTABLE} serve --socket ${CUA_SOCKET} --permission-mode standard' \\
       > /usr/local/bin/start-openmausbot-cua-driver.sh \\
     && chmod 0755 /usr/local/bin/start-openmausbot-cua-driver.sh
@@ -190,7 +215,7 @@ RUN printf '%s\\n' \\
       '[program:openmausbot-cua-driver]' \\
       'command=/usr/local/bin/start-openmausbot-cua-driver.sh' \\
       'user=cua' \\
-      'environment=HOME="/home/cua",USER="cua",DISPLAY=":1"' \\
+      'environment=HOME="/home/cua",USER="cua",DISPLAY=":1",LANG="zh_CN.UTF-8",LANGUAGE="zh_CN:zh",LC_CTYPE="zh_CN.UTF-8",GTK_IM_MODULE="ibus",QT_IM_MODULE="ibus",XMODIFIERS="@im=ibus"' \\
       'autorestart=true' \\
       'startsecs=2' \\
       'stdout_logfile=/var/log/supervisor/cua-driver.log' \\
@@ -474,6 +499,7 @@ export async function containerComputerStatus(
   runner: CommandRunner = sh,
   platform: NodeJS.Platform = process.platform,
   target: LocalVmTarget = SHARED_LOCAL_VM_TARGET,
+  options: { desktopProbe?: "full" | "quick" } = {},
 ): Promise<ContainerComputerStatus> {
   const status = emptyStatus(platform, target);
   const runtimeStatus = await containerRuntimeStatus(runner, platform);
@@ -588,6 +614,17 @@ export async function containerComputerStatus(
     status.persistence === "durable";
   if (canProbe) {
     try {
+      if (options.desktopProbe === "quick") {
+        await runner(
+          status.runtime,
+          cuaExecArgs(["status", "--socket", CUA_SOCKET], { container: target.containerName }),
+          8000,
+        );
+        status.desktopReady = true;
+        status.problem = statusProblem(status);
+        status.ready = status.problem === null;
+        return status;
+      }
       const expected = `cua-driver ${CUA_DRIVER_VERSION}`;
       const version = await runner(status.runtime, cuaExecArgs(["--version"], { container: target.containerName }), 8000);
       if (version.stdout.trim() !== expected) throw new Error(`expected ${expected}`);
@@ -802,7 +839,9 @@ export function dockerSecurityIsHardened(
     (config.NanoCpus ?? 0) === NANO_CPUS &&
     config.PidsLimit === PIDS_LIMIT &&
     capDrop.includes("all") &&
-    capAdd.join(",") === "setgid,setuid" &&
+    // SYS_CHROOT is required by Firefox's own content-process sandbox. The
+    // browser crashes every navigated tab if the outer container removes it.
+    capAdd.join(",") === "setgid,setuid,sys_chroot" &&
     config.Privileged === false &&
     !config.PidMode &&
     config.IpcMode === "private" &&
@@ -832,7 +871,11 @@ export function podmanSecurityIsHardened(
   const normalizeCaps = (caps: string[] | undefined) => (caps ?? [])
     .map((cap) => cap.toLowerCase().replace(/^cap_/, ""))
     .sort();
-  const exactCaps = "setgid,setuid";
+  // Firefox's own Linux content sandbox enters a chroot before dropping its
+  // child privileges. Without SYS_CHROOT every navigated tab crashes even
+  // though the browser chrome remains alive. Keep this one narrowly scoped
+  // capability instead of disabling Firefox's content sandbox.
+  const exactCaps = "setgid,setuid,sys_chroot";
   if (normalizeCaps(effectiveCaps).join(",") !== exactCaps) return false;
   if (normalizeCaps(boundingCaps).join(",") !== exactCaps) return false;
   return dockerSecurityIsHardened({
@@ -881,6 +924,8 @@ export function containerRunArgs(
       "SETUID",
       "--cap-add",
       "SETGID",
+      "--cap-add",
+      "SYS_CHROOT",
       "--shm-size",
       "512m",
     );
@@ -910,6 +955,8 @@ export function containerRunArgs(
       "SETUID",
       "--cap-add",
       "SETGID",
+      "--cap-add",
+      "SYS_CHROOT",
       "--shm-size",
       "512m",
     );
@@ -921,6 +968,12 @@ export function containerRunArgs(
       : `type=bind,source=${target.workspaceDir},target=${VM_WORKSPACE_GUEST}`,
     "-e",
     `VNC_PW=${password}`,
+    "-e",
+    "LANG=zh_CN.UTF-8",
+    "-e",
+    "LANGUAGE=zh_CN:zh",
+    "-e",
+    "LC_CTYPE=zh_CN.UTF-8",
     "-p",
     target.viewerPort
       ? `127.0.0.1:${target.viewerPort}:${INTERNAL_VIEWER_PORT}`
@@ -958,7 +1011,42 @@ export async function resolveManagedBaseImage(runtime: Runtime, runner: CommandR
   return BASE_IMAGE;
 }
 
-async function prepareManagedImage(runtime: Runtime, runner: CommandRunner): Promise<void> {
+export async function prepareManagedImage(runtime: Runtime, runner: CommandRunner): Promise<void> {
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  const archiveName = localVmImageArchiveName();
+  const candidates = [
+    process.env.OPENMAUSBOT_LOCAL_VM_IMAGE_ARCHIVE,
+    resourcesPath ? join(resourcesPath, "vm-image", archiveName) : undefined,
+    join(process.cwd(), "vm-image", "dist", process.arch, archiveName),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+  const archive = candidates.find((candidate) => existsSync(candidate));
+
+  if (archive) {
+    const expected = (await readFile(`${archive}.sha256`, "utf8")).trim().split(/\s+/)[0]?.toLowerCase();
+    if (!expected?.match(/^[a-f0-9]{64}$/)) throw new Error(`Invalid SHA-256 sidecar for Local VM image: ${archive}`);
+    const actual = await new Promise<string>((resolveHash, rejectHash) => {
+      const hash = createHash("sha256");
+      const input = createReadStream(archive);
+      input.on("error", rejectHash);
+      input.on("data", (chunk) => hash.update(chunk));
+      input.on("end", () => resolveHash(hash.digest("hex")));
+    });
+    if (actual !== expected) throw new Error(`Local VM image checksum mismatch: ${archive}`);
+    await runner(runtime, ["load", "-i", archive], 20 * 60_000);
+    const loaded = inspectedImage((await runner(runtime, ["image", "inspect", IMAGE], 30_000)).stdout);
+    if (!imageLabelsMatch(loaded.labels)) {
+      throw new Error(`Imported Local VM image is incompatible with ${IMAGE}`);
+    }
+    return;
+  }
+
+  if (process.env.OPENMAUSBOT_LOCAL_VM_REQUIRE_PREBUILT === "1") {
+    throw new Error(`Required prebuilt Local VM image is missing: ${archiveName}`);
+  }
+
+  // Development compatibility only. Product installers should carry the
+  // checksum-verified OCI archive and set REQUIRE_PREBUILT so an end user's
+  // machine never compiles the desktop image itself.
   const baseImage = await resolveManagedBaseImage(runtime, runner);
   const context = await mkdtemp(join(tmpdir(), "openmausbot-cua-image-"));
   try {

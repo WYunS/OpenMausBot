@@ -5,6 +5,7 @@
 // own transcript and its own provider session — so sensitive work, a
 // long job and a quick question can sit side by side under one agent.
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Check, ChevronDown, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { useStore, formatTime, type Bot, type Group, type Task } from "@/state/store";
 import { cn } from "@/lib/cn";
@@ -64,6 +65,71 @@ function TaskUsage({ usage }: { usage: Task["usage"] }) {
 
 type PickerTask = Pick<Task, "threadId" | "title" | "createdAt"> & { usage?: Task["usage"] };
 
+export function TaskDeleteConfirmDialog({
+  task,
+  onCancel,
+  onConfirm,
+}: {
+  task: PickerTask;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    dialogRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => event.key === "Escape" && onCancel();
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onCancel]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-[2px]"
+      onMouseDown={(event) => event.target === event.currentTarget && onCancel()}
+    >
+      <div
+        ref={dialogRef}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="task-delete-confirm-title"
+        tabIndex={-1}
+        className="animate-pop-in w-full max-w-[440px] rounded-[22px] border border-hairline/50 bg-panel p-6 shadow-2xl shadow-black/55 outline-none"
+      >
+        <div className="flex items-start gap-4">
+          <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-danger/12 text-danger">
+            <Trash2 size={19} />
+          </span>
+          <div className="min-w-0">
+            <h2 id="task-delete-confirm-title" className="text-[18px] font-semibold tracking-[-0.01em] text-ink">
+              Delete {task.title}?
+            </h2>
+            <p className="mt-2 text-[13px] leading-relaxed text-ink-secondary">
+              This permanently deletes this task and its conversation history. This action cannot be undone.
+            </p>
+          </div>
+        </div>
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-xl px-4 py-2.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="rounded-xl bg-danger px-4 py-2.5 text-[13px] font-medium text-white hover:brightness-110"
+          >
+            Delete task
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ConversationTaskPicker({
   threadId,
   tasks,
@@ -85,6 +151,7 @@ function ConversationTaskPicker({
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [query, setQuery] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<PickerTask | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const finishingRename = useRef(false);
@@ -338,7 +405,10 @@ function ConversationTaskPicker({
                   )}
                   <button
                     type="button"
-                    onClick={() => onDelete(task.threadId)}
+                    onClick={() => {
+                      closeMenu();
+                      setDeleteTarget(task);
+                    }}
                     disabled={busy && active}
                     aria-label="Delete task"
                     title="Delete this task and its conversation"
@@ -362,6 +432,17 @@ function ConversationTaskPicker({
             <Plus size={13} className="text-ink-secondary" /> New task
           </button>
         </div>
+      )}
+      {deleteTarget && createPortal(
+        <TaskDeleteConfirmDialog
+          task={deleteTarget}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => {
+            onDelete(deleteTarget.threadId);
+            setDeleteTarget(null);
+          }}
+        />,
+        document.body,
       )}
     </div>
   );

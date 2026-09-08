@@ -9,7 +9,7 @@ export type DriverKind = string;
 export type InstanceId = string;
 export type ThreadId = string;
 export type TurnId = string;
-export type CloudBackend = "box" | "vps";
+export type CloudBackend = "box" | "vps" | "ruijie-sandbox";
 
 export type ProviderErrorCode =
   | "missing_cli"
@@ -403,6 +403,13 @@ export interface ProviderInstance {
   readonly models: ModelCatalog;
   /** Refresh a live catalog without recreating the provider instance. */
   readonly refreshModels?: () => Promise<void>;
+  /** Authoritative cumulative usage for one provider-native session. Drivers
+   * expose this only when their local runtime has a durable usage projection. */
+  readonly readSessionUsage?: (sessionId: string) => Promise<{
+    input: number;
+    output: number;
+    cachedInput?: number;
+  } | null>;
   /** Optional first-party runtime installation and account setup. */
   readonly installRuntime?: () => Promise<void>;
   readonly startAuthentication?: () => Promise<ProviderAuthenticationStart>;

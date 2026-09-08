@@ -400,6 +400,22 @@ body {
   overflow: hidden;
 }
 
+/* Windows draws only its caption buttons over this empty drag strip. The
+   transparent native overlay lets the active skin provide one continuous color. */
+body {
+  box-sizing: border-box;
+  padding-top: env(titlebar-area-height, 0px);
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: env(titlebar-area-height, 0px);
+  -webkit-app-region: drag;
+  z-index: 2147483647;
+}
+
 /* Keep focus visible after components clear the browser outline. These
    unlayered rules outrank Tailwind utilities without needing !important. */
 :focus-visible {

@@ -540,11 +540,13 @@ function BotContextMenu({
   menu,
   onClose,
   onArchive,
+  onDelete,
   onMoveToSection,
 }: {
   menu: MenuState;
   onClose: () => void;
   onArchive: (bot: Bot) => void;
+  onDelete: (bot: Bot) => void;
   onMoveToSection: (botId: string) => void;
 }) {
   const { state, dispatch } = useStore();
@@ -660,7 +662,7 @@ function BotContextMenu({
           key="delete"
           deleting={deleting}
           onClick={() => {
-            dispatch({ type: "deleteBot", botId: bot.id });
+            onDelete(bot);
             onClose();
           }}
         />,
@@ -845,6 +847,123 @@ export function BotListItem({
   );
 }
 
+export function BotActionConfirmDialog({
+  bot,
+  action,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  bot: Bot;
+  action: "archive" | "delete";
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const deleting = action === "delete";
+
+  useEffect(() => {
+    dialogRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) onCancel();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [busy, onCancel]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-[2px]"
+      onMouseDown={(event) => event.target === event.currentTarget && !busy && onCancel()}
+    >
+      <div
+        ref={dialogRef}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="bot-action-confirm-title"
+        tabIndex={-1}
+        className="animate-pop-in w-full max-w-[440px] rounded-[22px] border border-hairline/50 bg-panel p-6 shadow-2xl shadow-black/55 outline-none"
+      >
+        <div className="flex items-start gap-4">
+          <span className={cn(
+            "flex size-11 shrink-0 items-center justify-center rounded-full",
+            deleting ? "bg-danger/12 text-danger" : "bg-raised text-ink-secondary",
+          )}>
+            {deleting ? <Trash2 size={19} /> : <Archive size={19} />}
+          </span>
+          <div className="min-w-0">
+            <h2 id="bot-action-confirm-title" className="text-[18px] font-semibold tracking-[-0.01em] text-ink">
+              {deleting ? `Delete ${bot.name} permanently?` : `Archive ${bot.name}?`}
+            </h2>
+            <p className="mt-2 text-[13px] leading-relaxed text-ink-secondary">
+              {deleting
+                ? "This deletes the bot and its conversation history. This action cannot be undone."
+                : "The bot leaves your sidebar, but its conversation is kept. Restore it later from Archived bots."}
+            </p>
+          </div>
+        </div>
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-xl px-4 py-2.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            className={cn(
+              "flex min-w-[112px] items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-[13px] font-medium disabled:opacity-55",
+              deleting ? "bg-danger text-white hover:brightness-110" : "bg-raised text-ink hover:bg-raised-hover",
+            )}
+          >
+            {busy && <Loader2 size={14} className="animate-spin" />}
+            {deleting ? "Delete permanently" : "Archive"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function ArchivedBotsButton({
+  count,
+  density,
+  onClick,
+}: {
+  count: number;
+  density: SidebarDensity;
+  onClick: () => void;
+}) {
+  const iconOnly = density === "icons";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={iconOnly ? `Archived bots (${count})` : undefined}
+      title={iconOnly ? `Archived bots (${count})` : undefined}
+      className={cn(
+        "relative flex min-h-10 w-full items-center rounded-xl py-2 text-left transition-colors",
+        iconOnly ? "justify-center px-2" : "gap-3 px-3",
+        "text-ink hover:bg-raised/60",
+      )}
+    >
+      <Archive size={20} className="text-ink-secondary" />
+      <span className={cn("flex-1 text-[14px]", iconOnly && "hidden")}>Archived bots</span>
+      {!iconOnly && <span className="text-[11.5px] tabular-nums text-ink-secondary">{count}</span>}
+      {iconOnly && count > 0 && (
+        <span className="absolute right-1.5 top-1.5 flex min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[9px] font-semibold text-white">
+          {count}
+        </span>
+      )}
+    </button>
+  );
+}
+
 function ArchivedBotsPanel({
   bots,
   onClose,
@@ -953,8 +1072,15 @@ function ArchivedBotsPanel({
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-7 pt-3 sm:px-8">
           <div className="mb-3 text-[12px] font-medium text-ink-secondary">{bots.length} archived</div>
-          <div className="grid grid-cols-1 gap-x-8 md:grid-cols-2">
-            {bots.map((bot) => (
+          {bots.length === 0 ? (
+            <div className="flex min-h-48 flex-col items-center justify-center rounded-2xl border border-dashed border-hairline/50 bg-card/35 px-6 text-center">
+              <Archive size={28} className="mb-3 text-ink-secondary" />
+              <div className="text-[14px] font-medium text-ink">No archived bots</div>
+              <div className="mt-1 text-[12.5px] text-ink-secondary">Bots you archive will appear here and can be restored.</div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-x-8 md:grid-cols-2">
+              {bots.map((bot) => (
               <div key={bot.id} className="flex min-h-[82px] items-center gap-3 border-b border-hairline/35 px-1 py-3">
                 <BotAvatar bot={bot} state="happy" size={42} animated={false} />
                 <div className="min-w-0 flex-1">
@@ -970,8 +1096,9 @@ function ArchivedBotsPanel({
                   Restore
                 </button>
               </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
           {error && <div role="alert" className="mt-4 rounded-lg bg-danger/10 px-3 py-2 text-[12.5px] text-danger">{error}</div>}
         </div>
       </div>
@@ -994,6 +1121,8 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const [teamLibraryOpen, setTeamLibraryOpen] = useState(false);
   const [teamInstallUrl, setTeamInstallUrl] = useState<string | null>(null);
   const [archivedBotsOpen, setArchivedBotsOpen] = useState(false);
+  const [pendingBotAction, setPendingBotAction] = useState<{ bot: Bot; action: "archive" | "delete" } | null>(null);
+  const [botActionBusy, setBotActionBusy] = useState(false);
   const [exportingTeam, setExportingTeam] = useState(false);
   const [teamFeedback, setTeamFeedback] = useState<{
     error: boolean;
@@ -1349,7 +1478,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
     >
       {/* macOS owns inset traffic lights; Linux/Windows use native chrome. */}
       <div
-        className={cn("flex items-center pt-3.5 pb-1", density === "icons" ? "flex-col gap-1 px-2" : "justify-between px-4")}
+        className={cn("flex min-h-[56px] shrink-0 items-center pt-3.5 pb-1", density === "icons" ? "flex-col gap-1 px-2" : "justify-between px-4")}
         style={windowDragStyle}
       >
         {macInset ? (
@@ -1472,19 +1601,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                   <Library size={16} className="text-ink-secondary" />
                   Teams
                 </button>
-                {archivedBots.length > 0 && (
-                  <button
-                    onClick={() => {
-                      setPlusOpen(false);
-                      setArchivedBotsOpen(true);
-                    }}
-                    className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
-                  >
-                    <Archive size={16} className="text-ink-secondary" />
-                    <span className="flex-1">Archived bots</span>
-                    <span className="text-[11.5px] text-ink-secondary">{archivedBots.length}</span>
-                  </button>
-                )}
               </div>
             </>
           )}
@@ -1518,7 +1634,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                 bot={unsectionedChief}
                 density={density}
                 onMenu={setMenu}
-                onArchive={(bot) => void archiveBot(bot)}
+                onArchive={(bot) => setPendingBotAction({ bot, action: "archive" })}
                 archiveDisabled
               />
             </div>
@@ -1592,7 +1708,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                         bot={bot}
                         density={density}
                         onMenu={setMenu}
-                        onArchive={(candidate) => void archiveBot(candidate)}
+                        onArchive={(candidate) => setPendingBotAction({ bot: candidate, action: "archive" })}
                         archiveDisabled
                       />
                     ))}
@@ -1610,7 +1726,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                         bot={bot}
                         density={density}
                         onMenu={setMenu}
-                        onArchive={(candidate) => void archiveBot(candidate)}
+                        onArchive={(candidate) => setPendingBotAction({ bot: candidate, action: "archive" })}
                         archiveDisabled={activeBotCount <= 1}
                       />
                     ))}
@@ -1692,6 +1808,13 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           <SidebarPhoneButton
             density={density}
             onOpen={() => dispatch(phoneSettingsAction())}
+          />
+        )}
+        {density === "icons" && (
+          <ArchivedBotsButton
+            count={archivedBots.length}
+            density={density}
+            onClick={() => setArchivedBotsOpen(true)}
           />
         )}
         {account.desktopSso && (
@@ -1809,6 +1932,13 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             ]}
           />
         )}
+        {density !== "icons" && (
+          <ArchivedBotsButton
+            count={archivedBots.length}
+            density={density}
+            onClick={() => setArchivedBotsOpen(true)}
+          />
+        )}
         {!account.desktopSso && (density === "icons" ? (
           <div className="flex items-center justify-center">
             <button
@@ -1837,7 +1967,8 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         <BotContextMenu
           menu={menu}
           onClose={() => setMenu(null)}
-          onArchive={(bot) => void archiveBot(bot)}
+          onArchive={(bot) => setPendingBotAction({ bot, action: "archive" })}
+          onDelete={(bot) => setPendingBotAction({ bot, action: "delete" })}
           onMoveToSection={(botId) => setSectionPicker({ botId, x: menu.x, y: menu.y })}
         />
       )}
@@ -1868,6 +1999,29 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         />
       )}
       {newRoom && <NewRoomPanel onClose={() => setNewRoom(false)} />}
+      {pendingBotAction && createPortal(
+        <BotActionConfirmDialog
+          bot={pendingBotAction.bot}
+          action={pendingBotAction.action}
+          busy={botActionBusy}
+          onCancel={() => setPendingBotAction(null)}
+          onConfirm={() => {
+            const pending = pendingBotAction;
+            setBotActionBusy(true);
+            if (pending.action === "archive") {
+              void archiveBot(pending.bot).finally(() => {
+                setBotActionBusy(false);
+                setPendingBotAction(null);
+              });
+              return;
+            }
+            dispatch({ type: "deleteBot", botId: pending.bot.id });
+            setBotActionBusy(false);
+            setPendingBotAction(null);
+          }}
+        />,
+        document.body,
+      )}
       {archivedBotsOpen && (
         <ArchivedBotsPanel
           bots={archivedBots}

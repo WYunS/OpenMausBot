@@ -171,6 +171,7 @@ const bridge = {
   desktopWorkspace: {
     open: (input) => ipcRenderer.invoke("desktop-workspace:open", input),
     layout: (items) => ipcRenderer.invoke("desktop-workspace:layout", items),
+    capture: (contextId) => ipcRenderer.invoke("desktop-workspace:capture", contextId),
     setInteractive: (contextId) => ipcRenderer.invoke("desktop-workspace:set-interactive", contextId),
     close: (contextId) => ipcRenderer.invoke("desktop-workspace:close", contextId),
     onState: (cb) => {

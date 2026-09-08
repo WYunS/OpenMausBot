@@ -16,6 +16,7 @@ afterEach(async () => {
 
 function harness() {
   const calls = [];
+  const desktopCalls = [];
   let held = false;
   let epoch = 0;
   let agentEpoch = 0;
@@ -45,12 +46,22 @@ function harness() {
       return { png: "eA==", format: "jpeg" };
     },
   };
-  const host = createBrowserHost({ manager: () => manager, token: MASTER, now: () => clock });
+  const desktopManager = {
+    ensureOpen: (input) => { desktopCalls.push(["ensureOpen", input.contextId]); return { status: "ready" }; },
+    setAgentInput: (contextId) => { desktopCalls.push(["setAgentInput", contextId]); return true; },
+    capture: (contextId) => { desktopCalls.push(["capture", contextId]); return { png: "ZGVza3RvcA==", mime: "image/png" }; },
+    act: (contextId, action, input) => {
+      desktopCalls.push(["act", contextId, action, input]);
+      return { png: "YWN0ZWQ=", mime: "image/png" };
+    },
+  };
+  const host = createBrowserHost({ manager: () => manager, desktopManager: () => desktopManager, token: MASTER, now: () => clock });
   hosts.push(host);
   return {
     host,
     manager,
     calls,
+    desktopCalls,
     pins,
     now: () => clock,
     advanceTime: (milliseconds) => { clock += milliseconds; },
@@ -88,7 +99,41 @@ async function request(host, operation, { botId = "bot-a", profile = "work", tok
   return { response, body: await response.json() };
 }
 
+async function desktopRequest(host, operation, { botId = "bot-a", token, body = {} } = {}) {
+  const response = await fetch(`${host.url}/v1/desktop/${botId}/${operation}`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return { response, body: await response.json() };
+}
+
 describe("browser loopback host", () => {
+  it("attaches a secret VNC viewer to one turn capability and drives it without exposing the URL", async () => {
+    const { host, desktopCalls } = harness();
+    await host.start();
+    const scoped = await register(host);
+    const attached = await manage(host, "desktop", {
+      token: scoped,
+      botId: "bot-a",
+      contextId: "ruijie-preview:bot-a",
+      url: "http://172.24.37.150:11095/vnc.html#password=secret",
+    });
+    expect(attached.response.status).toBe(200);
+    expect(JSON.stringify(attached.body)).not.toContain("secret");
+
+    const shot = await desktopRequest(host, "screenshot", { token: scoped });
+    expect(shot.response.status).toBe(200);
+    expect(shot.body).toEqual({ png: "ZGVza3RvcA==", mime: "image/png" });
+    const click = await desktopRequest(host, "click", { token: scoped, body: { x: 20, y: 30 } });
+    expect(click.response.status).toBe(200);
+    expect(desktopCalls).toContainEqual(["setAgentInput", "ruijie-preview:bot-a"]);
+    expect(desktopCalls).toContainEqual(["act", "ruijie-preview:bot-a", "click", {
+      x: 20, y: 30, button: undefined, double: false,
+    }]);
+    expect((await desktopRequest(host, "screenshot", { botId: "bot-b", token: scoped })).response.status).toBe(401);
+  });
+
   it("registers only master-authorized per-turn capabilities and revokes them", async () => {
     const { host, pins, now, advanceTime } = harness();
     await host.start();

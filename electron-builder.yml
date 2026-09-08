@@ -76,6 +76,15 @@ extraResources:
     to: skills
   - from: dist-native/android-platform-tools
     to: android-platform-tools
+  # The release pipeline stages exactly one architecture-specific OCI archive
+  # plus its checksum here for offline/full installers. The directory remains
+  # absent from ordinary developer packages, which keep the dynamic fallback.
+  - from: vm-image/dist/${arch}
+    to: vm-image
+    filter:
+      - "*.oci.tar"
+      - "*.oci.tar.sha256"
+      - "manifest-*.json"
 
 mac:
   # Two single-arch artifacts rather than one universal binary: the app is
@@ -149,7 +158,7 @@ win:
 nsis:
   oneClick: true
   perMachine: false
-  shortcutName: OpenMausBot
+  shortcutName: 锐捷Bot
   # Versioned, like the .dmg. The README's /latest/download/ button needs a
   # STABLE filename, so ship a second copy named OpenMausBot-setup.exe on the
   # release — the same trick as OpenMausBot.dmg beside OpenMausBot-${version}.dmg.

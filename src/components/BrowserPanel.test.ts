@@ -13,6 +13,7 @@ import {
   profileIdFor,
   shouldAcceptBrowserSurfaceState,
   shouldClearBrowserSurfaceFailure,
+  shouldPlaceBrowserSurface,
 } from "./BrowserPanel";
 import {
   heldComputerControlBotIds,
@@ -148,6 +149,16 @@ describe("browser panel address and profile helpers", () => {
       failureCode: "renderer-gone",
       ...common,
     })).toBe("failed");
+  });
+
+  it("keeps a real page visible while its loading flag is still true", () => {
+    const loadingPage = surface({
+      open: true,
+      url: "https://cn.bing.com/search?q=test",
+      loading: true,
+    });
+
+    expect(shouldPlaceBrowserSurface("loading", loadingPage)).toBe(true);
   });
 
   it("renders useful empty, loading, and recoverable failure chrome", () => {

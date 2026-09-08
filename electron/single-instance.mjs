@@ -10,6 +10,7 @@ export function activateExistingWindow(windows) {
   if (alive.length === 0) return false;
   const target = alive.findLast((win) => win.isFocused()) ?? alive[0];
   if (target.isMinimized()) target.restore();
+  if (!target.isMaximized()) target.maximize();
   target.show();
   target.focus();
   return true;

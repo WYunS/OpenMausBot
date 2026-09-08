@@ -1,17 +1,15 @@
 /**
- * Adapter for the already-running Ruijie Harness desktop Host.
+ * Adapter for the locally installed Ruijie Harness desktop Host.
  *
  * The desktop owns OAuth, quota, plugins, tools, and machine routing. This
- * driver only speaks its loopback API, so credentials never cross into
- * OpenMausBot and both products use the same authenticated account.
+ * driver discovers or starts the packaged app and only speaks its loopback
+ * API, so credentials never cross into OpenMausBot and both products use the
+ * same authenticated account.
  */
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import { mkdir, readFile, readlink, rename, writeFile } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { promisify } from "node:util";
+import { join } from "node:path";
 
 import type {
   DriverCreateInput,
@@ -27,9 +25,14 @@ import type {
 import { newEventId, newId } from "../contracts.ts";
 import { computerProxyEnv } from "../container-computer.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
+import {
+  defaultRuijieBridgePath,
+  ruijieHarnessLocator,
+} from "./ruijie-harness-local.ts";
+
+export { defaultRuijieBridgePath } from "./ruijie-harness-local.ts";
 
 const DRIVER_KIND = "ruijieHarness";
-const BRIDGE_FILENAME = "openmaus-bridge.json";
 const DEFAULT_MODEL = "deepseek-official::deepseek-v4-flash";
 const DEFAULT_MODELS: ModelCatalog = {
   default: DEFAULT_MODEL,
@@ -45,16 +48,10 @@ export interface RuijieHarnessConfig {
   endpoint?: string;
   bridgePath?: string;
   expectedAccountEmail?: string;
-  /** Optional override for non-standard Harness launchers. Ordinary installs
-   * use ~/.dsh; the local development launcher is discovered from its pid. */
+  /** Optional override for a custom-installed packaged Harness executable. */
+  executablePath?: string;
+  /** Optional override for non-standard Harness homes. Ordinary installs use ~/.dsh. */
   dshHome?: string;
-}
-
-interface BridgeRecord {
-  schemaVersion: 1;
-  endpoint: string;
-  pid: number;
-  generationId: string;
 }
 
 interface PendingTurn {
@@ -65,6 +62,7 @@ interface PendingTurn {
   interrupted: boolean;
   settled: boolean;
   toolNames: Map<string, string>;
+  usageByStep: Map<number, { input: number; output: number; cachedInput?: number }>;
 }
 
 interface PendingRequest {
@@ -94,6 +92,9 @@ function decodeConfig(raw: unknown): RuijieHarnessConfig {
     bridgePath: typeof value.bridgePath === "string" && value.bridgePath.trim() ? value.bridgePath.trim() : undefined,
     expectedAccountEmail: typeof value.expectedAccountEmail === "string" && value.expectedAccountEmail.trim()
       ? value.expectedAccountEmail.trim().toLowerCase()
+      : undefined,
+    executablePath: typeof value.executablePath === "string" && value.executablePath.trim()
+      ? value.executablePath.trim()
       : undefined,
     dshHome: typeof value.dshHome === "string" && value.dshHome.trim() ? value.dshHome.trim() : undefined,
   };
@@ -125,97 +126,19 @@ export function toolResultImageAttachment(value: unknown): {
   return visit(value, 0);
 }
 
-export function defaultRuijieBridgePath(
-  platform: NodeJS.Platform = process.platform,
-  environment: NodeJS.ProcessEnv = process.env,
-  home: string = homedir(),
-): string {
-  const appData = platform === "win32"
-    ? environment.APPDATA ?? join(home, "AppData", "Roaming")
-    : platform === "darwin"
-      ? join(home, "Library", "Application Support")
-      : environment.XDG_CONFIG_HOME ?? join(home, ".config");
-  return join(appData, "锐捷 Harness", BRIDGE_FILENAME);
-}
-
-function validLoopbackEndpoint(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) return undefined;
-    if (!url.port) return undefined;
-    return url.origin;
-  } catch {
-    return undefined;
-  }
-}
-
-async function endpointFromBridge(path: string): Promise<string | undefined> {
-  try {
-    const record = JSON.parse(await readFile(path, "utf8")) as Partial<BridgeRecord>;
-    if (record.schemaVersion !== 1 || !Number.isSafeInteger(record.pid) || !record.generationId) return undefined;
-    return validLoopbackEndpoint(record.endpoint);
-  } catch {
-    return undefined;
-  }
-}
-
-async function bridgeRecord(path: string): Promise<BridgeRecord | undefined> {
-  try {
-    const record = JSON.parse(await readFile(path, "utf8")) as Partial<BridgeRecord>;
-    if (record.schemaVersion !== 1 || !Number.isSafeInteger(record.pid) || !record.generationId) return undefined;
-    const endpoint = validLoopbackEndpoint(record.endpoint);
-    return endpoint ? { ...record, endpoint } as BridgeRecord : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function resolveEndpoint(config: RuijieHarnessConfig): Promise<string> {
-  const explicit = validLoopbackEndpoint(config.endpoint ?? process.env.RUIJIE_HARNESS_ENDPOINT);
-  if (explicit) return explicit;
+async function resolveEndpoint(config: RuijieHarnessConfig, autoLaunch = true): Promise<string> {
   const bridgePath = config.bridgePath ?? process.env.RUIJIE_HARNESS_BRIDGE ?? defaultRuijieBridgePath();
-  const discovered = await endpointFromBridge(bridgePath);
-  if (discovered) return discovered;
-  throw new Error("锐捷 Harness 未运行，请先打开锐捷 Harness 桌面客户端并完成登录");
-}
-
-const execFileAsync = promisify(execFile);
-
-async function harnessExecutable(pid: number): Promise<string | undefined> {
-  try {
-    if (process.platform === "win32") {
-      const script = `(Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}').ExecutablePath`;
-      const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-        windowsHide: true,
-        timeout: 5_000,
-      });
-      return stdout.trim() || undefined;
-    }
-    if (process.platform === "linux") return await readlink(`/proc/${pid}/exe`).catch(() => undefined);
-  } catch { /* fall through to the standard home */ }
-  return undefined;
+  return await ruijieHarnessLocator.ensureEndpoint({
+    endpoint: config.endpoint ?? process.env.RUIJIE_HARNESS_ENDPOINT,
+    bridgePath,
+    executablePath: config.executablePath ?? process.env.RUIJIE_HARNESS_EXECUTABLE,
+    autoLaunch,
+  });
 }
 
 async function resolveDshHome(config: RuijieHarnessConfig): Promise<string> {
   const configured = config.dshHome ?? process.env.RUIJIE_HARNESS_HOME ?? process.env.DSH_HOME;
   if (configured) return configured;
-
-  const bridgePath = config.bridgePath ?? process.env.RUIJIE_HARNESS_BRIDGE ?? defaultRuijieBridgePath();
-  const record = await bridgeRecord(bridgePath);
-  if (record) {
-    const executable = await harnessExecutable(record.pid);
-    if (executable) {
-      let cursor = dirname(executable);
-      while (true) {
-        const developmentHome = join(cursor, ".local-data", "dsh-home");
-        if (existsSync(developmentHome)) return developmentHome;
-        const parent = dirname(cursor);
-        if (parent === cursor) break;
-        cursor = parent;
-      }
-    }
-  }
   return join(homedir(), ".dsh");
 }
 
@@ -371,6 +294,66 @@ function reasonOfTurnEnd(data: unknown): { ok: boolean; stopReason: string; mess
   return { ok: false, stopReason: kind, message };
 }
 
+function usageOf(value: unknown): { input: number; output: number; cachedInput?: number } | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const usage = value as Record<string, unknown>;
+  const count = (field: string) => {
+    const candidate = usage[field];
+    return typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0 ? candidate : undefined;
+  };
+  const uncached = count("inputTokens");
+  const output = count("outputTokens");
+  const cacheRead = count("cacheReadTokens");
+  const cacheWrite = count("cacheWriteTokens");
+  if (uncached === undefined && output === undefined && cacheRead === undefined && cacheWrite === undefined) return undefined;
+  return {
+    input: (uncached ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0),
+    output: output ?? 0,
+    ...(cacheRead === undefined ? {} : { cachedInput: cacheRead }),
+  };
+}
+
+function projectedUsageOf(value: unknown): { input: number; output: number; cachedInput?: number } | null {
+  const tokenUsage = (value as {
+    projections?: { values?: { tokenUsage?: unknown } };
+  } | undefined)?.projections?.values?.tokenUsage;
+  if (!tokenUsage || typeof tokenUsage !== "object") return null;
+  const usage = tokenUsage as Record<string, unknown>;
+  const count = (field: string) => {
+    const candidate = usage[field];
+    return typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0
+      ? Math.trunc(candidate)
+      : undefined;
+  };
+  const uncached = count("uncachedInputTokens");
+  const output = count("outputTokens");
+  const cacheRead = count("cacheReadTokens");
+  const cacheWrite = count("cacheWriteTokens");
+  if (uncached === undefined || output === undefined || cacheRead === undefined || cacheWrite === undefined) return null;
+  return {
+    input: uncached + cacheRead + cacheWrite,
+    output,
+    cachedInput: cacheRead,
+  };
+}
+
+function totalUsage(pending: PendingTurn): { input: number; output: number; cachedInput?: number } | undefined {
+  if (pending.usageByStep.size === 0) return undefined;
+  let input = 0;
+  let output = 0;
+  let cachedInput = 0;
+  let reportsCachedInput = false;
+  for (const usage of pending.usageByStep.values()) {
+    input += usage.input;
+    output += usage.output;
+    if (usage.cachedInput !== undefined) {
+      cachedInput += usage.cachedInput;
+      reportsCachedInput = true;
+    }
+  }
+  return { input, output, ...(reportsCachedInput ? { cachedInput } : {}) };
+}
+
 function toModelCatalog(value: unknown, current: ModelCatalog): ModelCatalog {
   const groups = (value as { groups?: unknown } | undefined)?.groups;
   if (!Array.isArray(groups)) return current;
@@ -456,13 +439,17 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
       for (const listener of listeners) listener(full);
     };
 
-    const refreshModels = async () => {
-      const endpoint = await resolveEndpoint(input.config);
-      await matchingSsoSummary(endpoint, input.config.expectedAccountEmail);
+    const updateModelCatalog = async (endpoint: string) => {
       const result = await rpc<unknown>(endpoint, "llm.models", {});
       const next = toModelCatalog(result, catalog);
       catalog.default = next.default;
       catalog.options.splice(0, catalog.options.length, ...next.options);
+    };
+
+    const refreshModels = async () => {
+      const endpoint = await resolveEndpoint(input.config);
+      await matchingSsoSummary(endpoint, input.config.expectedAccountEmail);
+      await updateModelCatalog(endpoint);
     };
 
     const settle = (threadId: string, pending: PendingTurn, ok: boolean, stopReason: string, message?: string) => {
@@ -472,7 +459,8 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
       active.delete(threadId);
       for (const [id, request] of requests) if (request.sessionId === pending.sessionId) requests.delete(id);
       if (message && !pending.interrupted) emit({ type: "runtime.error", threadId, turnId: pending.turnId, message });
-      emit({ type: "turn.completed", threadId, turnId: pending.turnId, ok, stopReason });
+      const usage = totalUsage(pending);
+      emit({ type: "turn.completed", threadId, turnId: pending.turnId, ok, stopReason, ...(usage ? { usage } : {}) });
     };
 
     const handleFrame = (threadId: string, pending: PendingTurn, endpoint: string, envelope: { rpcId?: unknown; payload?: unknown }) => {
@@ -518,9 +506,15 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
         if (chunk?.type === "text-delta" && typeof chunk.text === "string") {
           emit({ type: "content.delta", threadId, turnId: pending.turnId, streamKind: "assistant_text", delta: chunk.text });
         }
+        if (chunk?.type === "usage") {
+          const usage = usageOf(chunk.usage);
+          if (usage) pending.usageByStep.set(typeof data?.step === "number" ? data.step : 0, usage);
+        }
       } else if (event.type === "assistant/message") {
         const text = textOfAssistantMessage(data);
         if (text) emit({ type: "item.completed", threadId, turnId: pending.turnId, itemType: "assistant_text", text });
+        const usage = usageOf(data?.usage);
+        if (usage) pending.usageByStep.set(typeof data?.step === "number" ? data.step : 0, usage);
       } else if (event.type === "tool/call") {
         const itemId = typeof data?.callId === "string" ? data.callId : newId();
         const toolName = typeof data?.name === "string" ? data.name : "Harness tool";
@@ -585,22 +579,35 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
           sessionId = turn.resumeCursor;
         }
         if (!sessionId) {
-          const agentPreset = integration
-            ? await ensureComputerPreset(
+          if (!integration) {
+            const created = await rpc<{ sessionId: string }>(endpoint, "session.create", { cwd: turn.cwd });
+            sessionId = created.sessionId;
+          } else {
+            // Podman and the Cua socket may still be warming when Harness
+            // performs its initial MCP handshake. A failed mount can retain
+            // its namespace, so retry once with a fresh preset/server name.
+            // No prompt has been sent yet, therefore this cannot duplicate
+            // user work or model usage.
+            let lastError: unknown;
+            for (let attempt = 0; attempt < 2 && !sessionId; attempt += 1) {
+              const agentPreset = await ensureComputerPreset(
                 endpoint,
                 input.config,
                 integration,
-                // Harness can keep a client mounted after either app restarts,
-                // or after session.create fails halfway through. A fresh mount
-                // attempt therefore needs a fresh preset id and serverName.
                 sessionIntegrationKey(integrationKey, turn.threadId, newId()),
-              )
-            : undefined;
-          const created = await rpc<{ sessionId: string }>(endpoint, "session.create", {
-            cwd: turn.cwd,
-            ...(agentPreset ? { agentPreset } : {}),
-          });
-          sessionId = created.sessionId;
+              );
+              try {
+                const created = await rpc<{ sessionId: string }>(endpoint, "session.create", {
+                  cwd: turn.cwd,
+                  agentPreset,
+                });
+                sessionId = created.sessionId;
+              } catch (error) {
+                lastError = error;
+              }
+            }
+            if (!sessionId) throw lastError;
+          }
         }
         sessions.set(turn.threadId, { id: sessionId, integrationKey });
         const selected = decodeModel(turn.model);
@@ -609,7 +616,15 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
           ...(turn.effort ? { reasoningEffort: turn.effort } : {}),
         });
 
-        const pending: PendingTurn = { turnId: newId(), sessionId, abort: new AbortController(), interrupted: false, settled: false, toolNames: new Map() };
+        const pending: PendingTurn = {
+          turnId: newId(),
+          sessionId,
+          abort: new AbortController(),
+          interrupted: false,
+          settled: false,
+          toolNames: new Map(),
+          usageByStep: new Map(),
+        };
         active.set(turn.threadId, pending);
         let opened!: () => void;
         const ready = new Promise<void>((resolve) => { opened = resolve; });
@@ -638,7 +653,7 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
         const pending = active.get(threadId);
         if (!pending || (turnId && pending.turnId !== turnId)) return;
         pending.interrupted = true;
-        const endpoint = await resolveEndpoint(input.config).catch(() => undefined);
+        const endpoint = await resolveEndpoint(input.config, false).catch(() => undefined);
         if (endpoint) void rpc(endpoint, "session.cancel", { sessionId: pending.sessionId }).catch(() => undefined);
         settle(threadId, pending, false, "interrupted");
       },
@@ -679,6 +694,12 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
       enabled: input.enabled,
       get models() { return catalog; },
       refreshModels,
+      async readSessionUsage(sessionId: string) {
+        const endpoint = await resolveEndpoint(input.config, false);
+        await matchingSsoSummary(endpoint, input.config.expectedAccountEmail);
+        const history = await rpc<unknown>(endpoint, "session.history", { sessionId, maxMessages: 1 });
+        return projectedUsageOf(history);
+      },
       adapter,
       async snapshot() {
         if (!input.enabled) return { state: "unavailable", reason: "disabled" };
@@ -686,6 +707,7 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
           const endpoint = await resolveEndpoint(input.config);
           await rpc(endpoint, "host.describe", {});
           const sso = await matchingSsoSummary(endpoint, input.config.expectedAccountEmail);
+          await updateModelCatalog(endpoint);
           return { state: "available", authenticated: true, version: "Ruijie Harness", billing: "subscription", sso };
         } catch (cause) {
           return { state: "unavailable", authenticated: false, reason: cause instanceof Error ? cause.message : String(cause) };

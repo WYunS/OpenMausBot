@@ -679,7 +679,12 @@ export class Store {
           botsMigrated = true;
         }
       }
-      if (b.cloudBackend !== undefined && b.cloudBackend !== "box" && b.cloudBackend !== "vps") {
+      if (
+        b.cloudBackend !== undefined &&
+        b.cloudBackend !== "box" &&
+        b.cloudBackend !== "vps" &&
+        b.cloudBackend !== "ruijie-sandbox"
+      ) {
         delete b.cloudBackend;
         botsMigrated = true;
       }
@@ -1211,6 +1216,11 @@ export class Store {
     t.activeLeafId = full.id;
     mdb.appendMessage(threadId, full);
     this.emit({ type: "message", threadId, message: full });
+    // Unlike a linear append, a branch message is a sibling of the source,
+    // not a child of the client's current leaf. Announce the new leaf
+    // explicitly so live clients leave a failed branch immediately instead
+    // of showing its stale error while the replacement turn runs unseen.
+    this.emit({ type: "thread", threadId, activeLeafId: full.id });
     return full;
   }
 
@@ -1280,6 +1290,7 @@ export class Store {
       ...(profile.mascotBody ? { mascotBody: profile.mascotBody } : {}),
       unread: false,
       modelSelection: profile.modelSelection ?? this.defaultSelection(),
+      computer: "local",
       resumeCursors: {},
       createdAt: Date.now(),
     };
@@ -1479,6 +1490,27 @@ export class Store {
     this.saveBots();
     this.emit({ type: "bot", botId });
     return task.usage;
+  }
+
+  /** Replace a task tally with an authoritative provider-history total.
+   * Unlike addTaskUsage this is safe to repeat after every restart. */
+  replaceTaskUsage(botId: string, threadId: string, usage: TaskUsage): TaskUsage | null {
+    const task = this.taskByThread(botId, threadId);
+    if (!task) return null;
+    const clean = (n: number) => Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
+    const input = clean(usage.input);
+    const next: TaskUsage = {
+      input,
+      output: clean(usage.output),
+      ...(typeof usage.cachedInput === "number" ? { cachedInput: Math.min(clean(usage.cachedInput), input) } : {}),
+      costUsd: typeof usage.costUsd === "number" && Number.isFinite(usage.costUsd) ? usage.costUsd : null,
+      turns: clean(usage.turns),
+    };
+    if (JSON.stringify(task.usage) === JSON.stringify(next)) return task.usage ?? next;
+    task.usage = next;
+    this.saveBots();
+    this.emit({ type: "bot", botId });
+    return next;
   }
 
   /** The folder a task's turn runs in. Pins on first call from the bot's

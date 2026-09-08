@@ -20,10 +20,12 @@ export function CloudBackendPicker({
       <div className="mt-0.5 text-[11.5px] text-ink-secondary">
         {value === "vps"
           ? "Auto reuses a running VPS by default. Enable Start VPS automatically to let Auto create or wake its managed container, or choose Cloud to do it explicitly. Open the live desktop securely from the computer panel."
+          : value === "ruijie-sandbox"
+            ? "Creates a pooled Ruijie Linux sandbox with live preview, VNC Take Control, and visual mouse-and-keyboard tools for the bot."
           : "Box is the default hosted computer. Choose Self-hosted VPS to use your SSH-configured Linux Docker host."}
       </div>
       <div className="mt-2 flex overflow-hidden rounded-lg border border-hairline/40">
-        {(["box", "vps"] as const).map((backend, i) => {
+        {(["box", "vps", "ruijie-sandbox"] as const).map((backend, i) => {
           const disabled = backend === "vps" && !vpsSupported;
           return (
             <button
@@ -38,7 +40,7 @@ export function CloudBackendPicker({
                 value === backend ? "bg-raised text-ink" : "text-ink-secondary hover:bg-raised/60 hover:text-ink",
               )}
             >
-              {backend === "vps" ? "Self-hosted VPS" : "Box"}
+              {backend === "vps" ? "Self-hosted VPS" : backend === "ruijie-sandbox" ? "Ruijie sandbox" : "Box"}
             </button>
           );
         })}

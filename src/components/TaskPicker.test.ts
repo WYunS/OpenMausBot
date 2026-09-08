@@ -1,11 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   TASK_PICKER_DISMISS_MS,
   TASK_RENAME_HINT,
+  TaskDeleteConfirmDialog,
   filterTasks,
   taskPickerPointerIntent,
 } from "./TaskPicker";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 describe("taskPickerPointerIntent", () => {
   it("treats a single click as switch, not rename", () => {
@@ -34,6 +37,20 @@ describe("task picker copy", () => {
     expect(TASK_RENAME_HINT).toContain("double-click");
     expect(TASK_RENAME_HINT).toContain("right-click");
     expect(TASK_PICKER_DISMISS_MS).toBeGreaterThanOrEqual(500);
+  });
+});
+
+describe("task deletion confirmation", () => {
+  it("requires confirmation and names the conversation that will be deleted", () => {
+    const markup = renderToStaticMarkup(createElement(TaskDeleteConfirmDialog, {
+      task: { threadId: "task-1", title: "Release audit", createdAt: 1 },
+      onCancel: vi.fn(),
+      onConfirm: vi.fn(),
+    }));
+
+    expect(markup).toContain("Delete Release audit?");
+    expect(markup).toContain("conversation history");
+    expect(markup).toContain(">Delete task</button>");
   });
 });
 

@@ -6,3 +6,6 @@
 shared/mascot-bodies.ts text eol=lf
 ios/Sources/CompanionCore/MausBodies.swift text eol=lf
 android/app/src/main/kotlin/com/openmausbot/companion/ui/MausBodies.kt text eol=lf
+vm-image/Containerfile text eol=lf
+vm-image/*.sh text eol=lf
+vm-image/*.conf text eol=lf

@@ -273,9 +273,10 @@ export async function launchVerificationServer(
   const logPath = join(evidenceDir, `server-${Date.now()}-${process.pid}.log`);
   writeFileSync(join(dataDir, "config.json"), JSON.stringify({
     instances: {
-      claude: {
+      verification: {
         driver: "claudeAgent",
         displayName: "Verification fixture",
+        enabled: true,
         config: { cli: FAKE_CLI },
       },
     },

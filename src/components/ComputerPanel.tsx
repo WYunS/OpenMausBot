@@ -81,6 +81,13 @@ interface VpsComputerStatus {
   problem: string | null;
 }
 
+interface RuijieSandboxStatus {
+  configured: boolean;
+  status: string;
+  ready: boolean;
+  problem: string | null;
+}
+
 type LocalDesktopViewerInput =
   | { kind: "click"; xRatio: number; yRatio: number; button?: "left" | "right"; double?: boolean }
   | { kind: "text"; text: string }
@@ -272,6 +279,7 @@ type Phase =
   | "vps-unconfigured"
   | "vps-incompatible"
   | "vps-stopped"
+  | "sandbox-unconfigured"
   | "local"
   | "local-unavailable"
   | "auto-unavailable"
@@ -423,6 +431,10 @@ export function ComputerPanel({
     resolvedComputer: resolvedComputerSelection?.computer ?? null,
     resolvedCloudBackend: resolvedComputerSelection?.cloudBackend ?? null,
   });
+  const cloudDesktopReady = Boolean(
+    cloudPreviewReady ||
+      (cloudBackend === "ruijie-sandbox" && computerStatusCurrent && bot.computer === "cloud" && phase === "ready"),
+  );
   const updateComputerSelection = useCallback((patch: {
     computer?: Bot["computer"] | null;
     cloudBackend?: CloudBackend;
@@ -457,6 +469,7 @@ export function ComputerPanel({
   }, [bot.id, bot.computer, cloudBackend, flushBotPatches]);
   const [boxState, setBoxState] = useState<string | null>(null);
   const [polledFrame, setPolledFrame] = useState<{ png: string; mime: string } | null>(null);
+  const [ruijieFrame, setRuijieFrame] = useState<{ png: string; mime: string } | null>(null);
   const [vmFrame, setVmFrame] = useState<string | null>(null);
   // The Local VM's interactive noVNC viewer (passworded, autoconnect). The
   // preview below is a periodic screenshot that swallows clicks — this URL is
@@ -550,6 +563,8 @@ export function ComputerPanel({
   const vpsSupported = Boolean(computerToolSupported && selectedInstance?.driverKind !== "boxAgent");
   const cloudSupported = cloudBackend === "vps"
     ? vpsSupported
+    : cloudBackend === "ruijie-sandbox"
+      ? computerToolSupported
     : computerToolSupported || selectedInstance?.driverKind === "boxAgent";
   const botRoutines = state.routines
     .filter((routine) => routine.botId === bot.id)
@@ -563,7 +578,7 @@ export function ComputerPanel({
   );
   const computerDestination =
     bot.computer === "cloud"
-      ? cloudBackend === "vps" ? "this self-hosted VPS" : "this cloud box"
+      ? cloudBackend === "vps" ? "this self-hosted VPS" : cloudBackend === "ruijie-sandbox" ? "this Ruijie sandbox" : "this cloud box"
       : bot.computer === "vm"
         ? "the Local VM"
       : bot.computer === "local"
@@ -573,7 +588,7 @@ export function ComputerPanel({
         : bot.computer === "off"
           ? null
           : phase === "ready" || phase === "show-ready-box" || phase === "show-sleeping-box" || phase === "show-pending-box"
-            ? cloudBackend === "vps" ? "the self-hosted VPS selected by Auto" : "the cloud box selected by Auto"
+            ? cloudBackend === "vps" ? "the self-hosted VPS selected by Auto" : cloudBackend === "ruijie-sandbox" ? "the Ruijie sandbox selected by Auto" : "the cloud box selected by Auto"
             : "this computer selected by Auto";
 
   // resolve the mode on open; box endpoints are only ever hit on the
@@ -586,6 +601,7 @@ export function ComputerPanel({
     setResolvedComputerSelection(null);
     setPhase("checking");
     setPolledFrame(null);
+    setRuijieFrame(null);
     setVmFrame(null);
     setVmViewerUrl(null);
     setVmStatus(null);
@@ -672,6 +688,62 @@ export function ComputerPanel({
       return;
     }
     if (bot.computer !== "cloud" && !capabilitiesReady) return;
+    if (cloudBackend === "ruijie-sandbox") {
+      let retryTimer: number | undefined;
+      api(`/api/bots/${bot.id}/computer`)
+        .then((rawStatus) => {
+          if (!alive) return;
+          const status: RuijieSandboxStatus = rawStatus;
+          setResolvedComputerSelection({ botId: bot.id, computer: bot.computer, cloudBackend });
+          // A previous manager poll may have failed while the already-issued
+          // VNC URL kept working. Any reachable status supersedes that stale
+          // transport error immediately.
+          setError(null);
+          if (!status.configured) {
+            setError(status.problem ?? "Configure the Ruijie sandbox connection in App Settings → Connections.");
+            setPhase("sandbox-unconfigured");
+            return;
+          }
+          if (status.ready) {
+            setBoxState(status.status);
+            setPhase("ready");
+            return;
+          }
+          if (status.status === "queued" || status.status === "scheduling") {
+            setPhase("starting");
+            retryTimer = window.setTimeout(() => setRetry((value) => value + 1), 2000);
+            return;
+          }
+          if (status.status === "unreachable") {
+            setError(status.problem ?? "The Ruijie sandbox manager is unreachable.");
+            setPhase("error");
+            retryTimer = window.setTimeout(() => setRetry((value) => value + 1), 2000);
+            return;
+          }
+          if (bot.computer === "cloud") {
+            setPhase("starting");
+            return api(`/api/bots/${bot.id}/computer/provision`, { method: "POST", body: "{}" }).then((result) => {
+              if (!alive) return;
+              setBoxState(result.status ?? null);
+              setError(null);
+              if (result.ready) setPhase("ready");
+              else retryTimer = window.setTimeout(() => setRetry((value) => value + 1), 2000);
+            });
+          }
+          setError("Choose Cloud to create the Ruijie sandbox.");
+          setPhase("auto-unavailable");
+        })
+        .catch((e) => {
+          if (!alive) return;
+          setError(e instanceof Error ? e.message : String(e));
+          setPhase("error");
+          retryTimer = window.setTimeout(() => setRetry((value) => value + 1), 2000);
+        });
+      return () => {
+        alive = false;
+        if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      };
+    }
     if (cloudBackend === "vps") {
       const autoLocal =
         !isLinux && bot.computer !== "cloud" && capabilitiesReady && localSelectable;
@@ -821,6 +893,8 @@ export function ComputerPanel({
     cloudSupported,
     vpsSupported,
     state.config?.vps?.sshAlias,
+    state.config?.ruijieSandbox?.configured,
+    state.config?.ruijieSandbox?.managerUrl,
     panelView,
     computerSelectionPersisted,
   ]);
@@ -854,6 +928,77 @@ export function ComputerPanel({
       clearInterval(timer);
     };
   }, [panelView, cloudPreviewReady, sseFlowing, bot.id, viewerOpen, pageVisible, bot.busy]);
+
+  // Ruijie supplies a browser-facing noVNC endpoint rather than a screenshot
+  // API. Electron keeps a private noVNC page off screen and captures it for
+  // this card. The native page is never laid over the preview, so card clicks
+  // still go through the explicit Take Control window.
+  useEffect(() => {
+    const bridge = window.ogb?.desktopWorkspace;
+    const contextId = `ruijie-preview:${bot.id}`;
+    if (
+      !bridge?.capture ||
+      panelView !== "computer" ||
+      cloudBackend !== "ruijie-sandbox" ||
+      bot.computer !== "cloud" ||
+      phase !== "ready" ||
+      !computerStatusCurrent ||
+      viewerOpen ||
+      !pageVisible
+    ) {
+      if (bridge) void bridge.close(contextId).catch(() => {});
+      return;
+    }
+
+    let alive = true;
+    let timer: number | undefined;
+    let capturing = false;
+    const capture = async () => {
+      if (capturing) return;
+      capturing = true;
+      try {
+        const frame = await bridge.capture(contextId);
+        if (alive && frame?.png) setRuijieFrame(frame);
+      } catch {
+        // noVNC may need a few seconds to negotiate its first framebuffer.
+      } finally {
+        capturing = false;
+      }
+    };
+    const start = async () => {
+      await bridge.close(contextId).catch(() => {});
+      const result = await api(`/api/bots/${bot.id}/computer/join`, { method: "POST", body: "{}" });
+      if (!alive || typeof result.joinUrl !== "string") return;
+      await bridge.open({
+        contextId,
+        url: result.joinUrl,
+        title: `${bot.name}'s sandbox preview`,
+        // The native view stays hidden, but its viewport still determines the
+        // framebuffer/capture size. Give noVNC a useful 16:10 canvas.
+        bounds: { x: 0, y: 0, width: 960, height: 600 },
+      });
+      if (!alive) return;
+      await capture();
+      timer = window.setInterval(() => void capture(), bot.busy ? 2500 : 5000);
+    };
+    void start().catch(() => {});
+    return () => {
+      alive = false;
+      if (timer !== undefined) window.clearInterval(timer);
+      void bridge.close(contextId).catch(() => {});
+    };
+  }, [
+    bot.busy,
+    bot.computer,
+    bot.id,
+    bot.name,
+    cloudBackend,
+    computerStatusCurrent,
+    pageVisible,
+    panelView,
+    phase,
+    viewerOpen,
+  ]);
 
   // Local VM preview comes directly from Cua Driver through the harness. It
   // does not use the password-protected noVNC viewer or cloud endpoints.
@@ -940,12 +1085,14 @@ export function ComputerPanel({
       ? vmFrame
       : phase === "local" && !isLinux
       ? (!control.held && localAgentFrame) || localFrame
+      : cloudBackend === "ruijie-sandbox" && bot.computer === "cloud" && phase === "ready"
+        ? ruijieFrame && `data:${ruijieFrame.mime};base64,${ruijieFrame.png}`
       : cloudPreviewReady || (bot.computer === "cloud" && phase === "starting")
         ? cloudFrame && `data:${cloudFrame.mime};base64,${cloudFrame.png}`
         : null;
   const previewOpensDesktop = Boolean(
     frameSrc &&
-      ((phase === "vm" && vmViewerUrl) || cloudPreviewReady),
+      ((phase === "vm" && vmViewerUrl) || cloudPreviewReady || (cloudBackend === "ruijie-sandbox" && phase === "ready")),
   );
 
   // who-is-driving: SSE keeps this fresh; the mount fetch covers a panel
@@ -1090,7 +1237,7 @@ export function ComputerPanel({
       }
 
       let viewerUrl = vmViewerUrl;
-      if (cloudPreviewReady) {
+      if (cloudDesktopReady) {
         const result = await api(`/api/bots/${bot.id}/computer/join`, { method: "POST" });
         viewerUrl = result.joinUrl?.constructor === String ? String(result.joinUrl) : null;
       }
@@ -1112,7 +1259,7 @@ export function ComputerPanel({
       // Release the bot before waiting on best-effort tunnel cleanup. A sick
       // SSH process must never leave the agent paused indefinitely.
       if (tookControl) await transitionControl("release").catch(() => {});
-      if (cloudPreviewReady && cloudBackend === "vps") {
+      if (cloudDesktopReady && cloudBackend === "vps") {
         await api(`/api/bots/${bot.id}/computer/viewer-close`, { method: "POST", body: "{}" }).catch(() => {});
       }
       setError(e instanceof Error ? e.message : String(e));
@@ -1142,8 +1289,9 @@ export function ComputerPanel({
         }
         if (kind === "sleep") {
           setResolvedComputerSelection(null);
-          setBoxState(cloudBackend === "vps" ? "stopped" : "archived");
+          setBoxState(cloudBackend === "vps" ? "stopped" : cloudBackend === "ruijie-sandbox" ? "released" : "archived");
           if (cloudBackend === "vps") setPhase("vps-stopped");
+          else if (cloudBackend === "ruijie-sandbox") setPhase("starting");
         }
       })
       .catch((e) => {
@@ -1238,6 +1386,7 @@ export function ComputerPanel({
     "vps-unconfigured": "No managed VPS computer is configured for this bot",
     "vps-incompatible": "This VPS computer belongs to an earlier OpenMausBot version",
     "vps-stopped": "The managed VPS computer is stopped",
+    "sandbox-unconfigured": "The Ruijie sandbox connection is not configured",
     "local-unavailable": localDisabledReason ?? "Local computer control isn't ready.",
     "vm-unavailable": "The Local VM isn't available for this bot",
     browser: "This bot works in the built-in browser — no desktop here",
@@ -1351,6 +1500,7 @@ export function ComputerPanel({
               <span className="text-[11px]">cloud box · Auto · read-only</span>
             )}
             {computerStatusCurrent && bot.computer === "cloud" && cloudBackend === "vps" && (phase === "ready" || phase === "starting") && <span className="text-[11px]">self-hosted VPS</span>}
+            {computerStatusCurrent && bot.computer === "cloud" && cloudBackend === "ruijie-sandbox" && (phase === "ready" || phase === "starting") && <span className="text-[11px]">Ruijie sandbox · VNC</span>}
         </div>
         <div className="flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl bg-card">
           {frameSrc && (previewOpensDesktop || phase === "local") ? (
@@ -1391,6 +1541,8 @@ export function ComputerPanel({
               <span className="text-[12px]">
                 {cloudPreviewReady
                   ? "Waiting for the first frame…"
+                  : cloudBackend === "ruijie-sandbox" && phase === "ready"
+                    ? "Connecting the read-only sandbox preview…"
                   : phase === "ready"
                     ? "Auto found an existing cloud computer. Choose Cloud to open it."
                   : phase === "vm"
@@ -1459,6 +1611,14 @@ export function ComputerPanel({
                   className="mt-1 rounded-lg bg-control px-3 py-1.5 text-[12px] text-ink hover:bg-raised-hover"
                 >
                   Open VPS settings
+                </button>
+              )}
+              {computerStatusCurrent && phase === "sandbox-unconfigured" && (
+                <button
+                  onClick={openConnectionSettings}
+                  className="mt-1 rounded-lg bg-control px-3 py-1.5 text-[12px] text-ink hover:bg-raised-hover"
+                >
+                  Open sandbox settings
                 </button>
               )}
               {computerStatusCurrent && (phase === "vps-stopped" || (phase === "vps-unconfigured" && vpsStatus?.configured)) &&
@@ -1578,7 +1738,7 @@ export function ComputerPanel({
           <div className="mt-3 rounded-xl border border-accent/25 bg-accent/10 p-4">
             <div className="text-[13px] leading-relaxed text-ink">
               You have the wheel — the bot's clicks and keystrokes are refused until you hand it back.
-              {cloudPreviewReady && " Use Open desktop to drive."}
+              {cloudDesktopReady && " Use Open desktop to drive."}
               {phase === "vm" && " Use Open desktop to drive — the preview here is watch-only."}
               {phase === "local" && " Open the enlarged view to control the desktop without leaving OpenMausBot."}
             </div>
@@ -1649,7 +1809,7 @@ export function ComputerPanel({
           </button>
         )}
         {/* Cloud-only actions */}
-        {cloudPreviewReady && (
+        {cloudDesktopReady && (
           <div className="mt-3 flex gap-2">
             {!control.held && !control.helpReason && (
               <button

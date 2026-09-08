@@ -293,6 +293,7 @@ type SkillRecordingPayload = {
           bounds: DesktopWorkspaceBounds;
           visible: boolean;
         }>): Promise<boolean>;
+        capture(contextId: string): Promise<{ png: string; mime: "image/png" }>;
         setInteractive(contextId: string | null): Promise<boolean>;
         close(contextId?: string): Promise<boolean>;
         onState(cb: (state: DesktopWorkspaceState) => void): () => void;
@@ -308,7 +309,7 @@ type SkillRecordingPayload = {
       saveFile?(filePath: string): Promise<string | null>;
       /** Save a provider credential through Electron's OS-backed store. */
       setCredential?(
-        name: "composioApiKey" | "xaiApiKey" | "boxToken" | "opencodeGoApiKey" | "ttsKey" | "openaiImageApiKey",
+        name: "composioApiKey" | "xaiApiKey" | "boxToken" | "ruijieSandboxRequestJson" | "opencodeGoApiKey" | "ttsKey" | "openaiImageApiKey",
         value: string,
       ): Promise<ConfigStatus>;
       /** In-app auto-update (packaged app only; dormant in dev). onState

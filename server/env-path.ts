@@ -59,7 +59,9 @@ function windowsKnownDirs(): string[] {
   const home = homedir();
   const appData = process.env.APPDATA ?? join(home, "AppData", "Roaming");
   const localAppData = process.env.LOCALAPPDATA ?? join(home, "AppData", "Local");
+  const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
   return [
+    join(programFiles, "RedHat", "Podman"), // managed/external Podman installed while the app is open
     join(appData, "npm"), // npm -g shims: claude, codex
     join(home, ".grok", "bin"), // x.ai installer
     join(localAppData, "agy", "bin"), // Antigravity installer

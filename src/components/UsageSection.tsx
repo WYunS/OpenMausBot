@@ -45,8 +45,11 @@ export function UsageSection() {
                 <span className="truncate">{bot.name}</span>
               </span>
               <span className="text-right tabular-nums text-ink-secondary">{usage.turns}</span>
-              <span className="text-right tabular-nums text-ink" title={usageDetail(usage)}>
-                {formatTokens(usage.input + usage.output)}
+              <span
+                className="text-right tabular-nums text-ink"
+                title={usage.input + usage.output > 0 ? usageDetail(usage) : "This engine did not report token usage for these turns."}
+              >
+                {usage.input + usage.output > 0 ? formatTokens(usage.input + usage.output) : "—"}
               </span>
               <span className="text-right tabular-nums text-ink">{hasFiniteCost(usage.costUsd) ? formatUsd(usage.costUsd) : <span className="text-ink-secondary">—</span>}</span>
             </div>
@@ -57,6 +60,11 @@ export function UsageSection() {
             <span className="text-right tabular-nums" title={usageDetail(total)}>{formatTokens(total.input + total.output)}</span>
             <span className="text-right tabular-nums">{hasFiniteCost(total.costUsd) ? formatUsd(total.costUsd) : "—"}</span>
           </div>
+          {rows.some(({ usage }) => usage.input + usage.output === 0) && (
+            <div className="mt-3 text-[12px] leading-relaxed text-ink-secondary">
+              A dash means the engine did not report token usage for those settled turns; it does not mean zero usage.
+            </div>
+          )}
           {cachedInput(total) > 0 && (
             <div className="mt-3 text-[12px] leading-relaxed text-ink-secondary">
               Tokens count everything the model read and wrote. Each turn resends the whole conversation with the system prompt and tool

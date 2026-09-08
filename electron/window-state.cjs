@@ -46,7 +46,7 @@ function resolveWindowState(state, workAreas, defaults = DEFAULT_BOUNDS) {
     height: primary ? Math.min(defaults.height, primary.height) : defaults.height,
   };
   const parsed = parseWindowState(state);
-  if (!parsed || !primary) return { bounds: defaultBounds, maximized: false };
+  if (!parsed || !primary) return { bounds: defaultBounds, maximized: true };
 
   let target = primary;
   let bestArea = 0;
@@ -70,7 +70,7 @@ function resolveWindowState(state, workAreas, defaults = DEFAULT_BOUNDS) {
         width,
         height,
       },
-      maximized: parsed.maximized,
+      maximized: true,
     };
   }
   return {
@@ -80,7 +80,7 @@ function resolveWindowState(state, workAreas, defaults = DEFAULT_BOUNDS) {
       width,
       height,
     },
-    maximized: parsed.maximized,
+    maximized: true,
   };
 }
 

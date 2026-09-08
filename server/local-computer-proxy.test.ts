@@ -64,7 +64,7 @@ describe("local computer MCP proxy", () => {
     expect(toDriver).toHaveLength(2);
   });
 
-  it("requests follow-up screenshots after a mutating action", () => {
+  it("coalesces follow-up screenshots after a mutating action", () => {
     const toDriver: string[] = [];
     const scheduled: Array<() => void> = [];
     const proxy = createLocalComputerProxyInterceptor({
@@ -83,7 +83,7 @@ describe("local computer MCP proxy", () => {
     for (const callback of scheduled) callback();
 
     const observations = toDriver.slice(1).map((line) => JSON.parse(line));
-    expect(observations).toHaveLength(5);
+    expect(observations).toHaveLength(1);
     expect(observations.every((message) =>
       message.method === "tools/call"
       && message.params.name === "get_window_state"
@@ -93,6 +93,49 @@ describe("local computer MCP proxy", () => {
       && message.params.arguments.max_elements === 10
     )).toBe(true);
 
+    proxy.fromDriver(frame({
+      jsonrpc: "2.0", id: observations[0].id,
+      result: { content: [{ type: "image", mimeType: "image/png", data: "settling-frame" }] },
+    }));
+    expect(toDriver.slice(1).map((line) => JSON.parse(line))).toHaveLength(2);
+
+  });
+
+  it("does not queue stale observations ahead of the next real action", () => {
+    const toDriver: string[] = [];
+    const scheduled: Array<() => void> = [];
+    const proxy = createLocalComputerProxyInterceptor({
+      toDriver: (line) => toDriver.push(line),
+      toClient: () => undefined,
+      publishFrame: async () => undefined,
+      schedule: (callback) => { scheduled.push(callback); },
+    });
+
+    proxy.fromClient(frame({
+      jsonrpc: "2.0", id: 30, method: "tools/call",
+      params: { name: "click", arguments: { pid: 22, window_id: 33, x: 10, y: 20 } },
+    }));
+    proxy.fromDriver(frame({ jsonrpc: "2.0", id: 30, result: { content: [{ type: "text", text: "ok" }] } }));
+    for (const callback of scheduled) callback();
+
+    const syntheticBeforeNextAction = toDriver
+      .map((line) => JSON.parse(line))
+      .filter((message) => String(message.id).startsWith("omb-screen-"));
+    expect(syntheticBeforeNextAction).toHaveLength(1);
+
+    proxy.fromClient(frame({
+      jsonrpc: "2.0", id: 31, method: "tools/call",
+      params: { name: "press_key", arguments: { pid: 22, window_id: 33, key: "return" } },
+    }));
+    expect(JSON.parse(toDriver.at(-1)!).id).toBe(31);
+
+    proxy.fromDriver(frame({
+      jsonrpc: "2.0", id: syntheticBeforeNextAction[0].id,
+      result: { content: [{ type: "image", mimeType: "image/png", data: "new-frame" }] },
+    }));
+    expect(toDriver.map((line) => JSON.parse(line)).filter((message) =>
+      String(message.id).startsWith("omb-screen-")
+    )).toHaveLength(1);
   });
 
   it("observes a browser opened directly from a search URL", () => {
@@ -114,9 +157,9 @@ describe("local computer MCP proxy", () => {
     }));
     for (const callback of scheduled) callback();
 
-    expect(toDriver.slice(1).map((line) => JSON.parse(line).params.arguments)).toEqual(
-      Array.from({ length: 5 }, () => ({ pid: 44, window_id: 55, max_depth: 1, max_elements: 10 })),
-    );
+    expect(toDriver.slice(1).map((line) => JSON.parse(line).params.arguments)).toEqual([
+      { pid: 44, window_id: 55, max_depth: 1, max_elements: 10 },
+    ]);
   });
 
   it("restores a minimized target without activation before requesting its frame", async () => {

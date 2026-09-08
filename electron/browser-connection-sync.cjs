@@ -17,8 +17,25 @@ function removeBrowserConnectionDescriptor({ userData, fileSystem = fs }) {
   }
 }
 
+function browserConnectionDescriptorMatches({ userData, connection, fileSystem = fs }) {
+  if (!connection) return false;
+  try {
+    const current = JSON.parse(fileSystem.readFileSync(path.join(userData, "browser-connection.json"), "utf8"));
+    return current?.version === connection.version
+      && current?.url === connection.url
+      && current?.token === connection.token
+      && current?.pid === connection.pid;
+  } catch {
+    return false;
+  }
+}
+
 function postBrowserConnection(proc, connection) {
   proc.postMessage({ type: "openmausbot:browser-connection", connection: connection ?? null });
 }
 
-module.exports = { postBrowserConnection, removeBrowserConnectionDescriptor };
+module.exports = {
+  browserConnectionDescriptorMatches,
+  postBrowserConnection,
+  removeBrowserConnectionDescriptor,
+};
