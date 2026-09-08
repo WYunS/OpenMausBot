@@ -53,6 +53,35 @@ export const DISPLAY = ":1";
 export const CUA_SOCKET = "/run/user/1000/openmausbot-cua.sock";
 export const CUA_EXECUTABLE = "/usr/local/libexec/openmausbot/cua-driver";
 
+/** Apply browser search defaults to an already-created VM as well as a fresh
+ * one. Browser profiles are durable, but system policy lives in the
+ * disposable container layer, so re-assert it after every start and before a
+ * turn uses a container that survived an app restart. */
+export async function ensureLocalVmBrowserDefaults(
+  runtime: Runtime,
+  target: LocalVmTarget,
+  runner: CommandRunner = sh,
+): Promise<void> {
+  const chromePolicy = JSON.stringify({
+    DefaultSearchProviderEnabled: true,
+    DefaultSearchProviderName: "Bing",
+    DefaultSearchProviderKeyword: "bing.com",
+    DefaultSearchProviderSearchURL: "https://www.bing.com/search?q={searchTerms}",
+    DefaultSearchProviderSuggestURL: "https://www.bing.com/osjson.aspx?query={searchTerms}",
+  });
+  const firefoxPolicy = JSON.stringify({ policies: { SearchEngines: { Default: "Bing" } } });
+  const script = [
+    "set -eu",
+    "for directory in /etc/opt/chrome/policies/managed /etc/chromium/policies/managed; do",
+    '  install -d -m 0755 "$directory"',
+    `  printf '%s\\n' '${chromePolicy}' > "$directory/openmausbot-search.json"`,
+    "done",
+    "install -d -m 0755 /usr/lib/firefox-esr/distribution",
+    `printf '%s\\n' '${firefoxPolicy}' > /usr/lib/firefox-esr/distribution/policies.json`,
+  ].join("\n");
+  await runner(runtime, ["exec", "-u", "0", target.containerName, "sh", "-c", script], 8_000);
+}
+
 export function localVmImageArchiveName(arch = process.arch): string {
   const linuxArch = arch === "arm64" ? "arm64" : arch === "x64" ? "amd64" : arch;
   return `openmausbot-cua-local-vm-driver-${CUA_DRIVER_VERSION}-v${IMAGE_LAYER_VERSION}-linux-${linuxArch}.oci.tar`;
@@ -1135,6 +1164,12 @@ export async function containerComputerAction(
           ? ["rm", runtime === "container" ? "--force" : "-f", target.containerName]
           : [action, target.containerName];
     await runner(runtime, args, 2 * 60_000);
+    if (action === "run" || action === "start") {
+      // Search defaults are helpful rather than safety-critical. An older or
+      // unusual desktop image must remain usable even if it rejects policy
+      // installation; the turn prompt still directs searches to Bing.
+      await ensureLocalVmBrowserDefaults(runtime, target, runner).catch(() => {});
+    }
   }
   return containerComputerStatus(runner, platform, target);
 }
