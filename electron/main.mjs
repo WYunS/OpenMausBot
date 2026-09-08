@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, nativeTheme, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, utilityProcess } from "electron";
+import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, nativeTheme, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, utilityProcess } from "electron";
 import { createRequire } from "node:module";
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -61,6 +61,14 @@ import {
   readPhoneSecretIdentity,
   withPhoneSecretIdentity,
 } from "./phone-secret-identity.mjs";
+import {
+  desktopCompanionAccess,
+  desktopCompanionRendererArguments,
+  pairDesktopCompanion,
+  startDesktopCompanionRelay,
+  withDesktopCompanionAccess,
+  withoutDesktopCompanionAccess,
+} from "./desktop-companion-client.mjs";
 import { createRuijieSsoAccountService } from "./ruijie-sso-account.mjs";
 import {
   RuijieAuthorizationRecovery,
@@ -92,12 +100,16 @@ const { createLocalDesktopInputController } = require("./local-desktop-input.cjs
 const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.cjs");
 const { DESKTOP_VIEWER_USER_AGENT, desktopViewerUrl, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
 const { createDesktopWorkspaceManager } = require("./desktop-workspace.cjs");
+const { createTrustedApprovalModeCoordinator } = require("./approval-trusted-mode.cjs");
+const { DESKTOP_MUTATION_HEADER, desktopServerHeaders } = require("./desktop-server-auth.cjs");
 const { createBrowserSurfaceManager } = require("./browser-surface.cjs");
 const { browserProfilePartition } = require("./browser-snapshot.cjs");
 const { createBrowserHost } = require("./browser-host.cjs");
 const { browserSurfaceSupported } = require("./browser-platform.cjs");
+const { clearBrowserPartitionSession } = require("./browser-partition-cleanup.cjs");
 const {
   browserConnectionDescriptorMatches,
+  postBrowserConnection,
   removeBrowserConnectionDescriptor: removeBrowserConnectionDescriptorFile,
 } = require("./browser-connection-sync.cjs");
 const { createCuaConnectionStore: createDescriptorStore } = require("./cua-connection.cjs");
@@ -1015,12 +1027,13 @@ async function gatherDiagnostics() {
 // taken by another process — decides which error-page message renders.
 let serverStartConflictOnly = false;
 
-
-
-
-
-
-
+function syncBrowserConnection(proc) {
+  try {
+    postBrowserConnection(proc, browserHost?.url ? browserHost.descriptor() : null);
+  } catch (error) {
+    slog(`browser connection sync failed: ${error?.message ?? error}`);
+  }
+}
 /** Run one private cleanup request at most once and acknowledge only after
  * Chromium confirms its session data is gone. Duplicate retries join the
  * same promise; a retry whose success ACK was lost receives a cached ACK. */
@@ -1499,6 +1512,10 @@ function publishBrowserConnection() {
     browserConnectionStore.persist(connection);
   }
   if (serverProc) syncBrowserConnection(serverProc);
+}
+
+async function clearBrowserPartition(partition) {
+  await clearBrowserPartitionSession(session.fromPartition(partition));
 }
 
 function startBrowserDescriptorRefresh() {

@@ -20,7 +20,7 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import localOriginModule from "./local-origin.cjs";
 
 // Local control answers only the local server's UI (electron/local-origin.cjs).
@@ -39,6 +39,7 @@ const {
   stageAppImageCuaBundle,
 } = require("./cua-linux-bundle.cjs");
 const { linuxLocalControlSupport } = require("./capabilities.cjs");
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 const INSTALLED_DRIVER = "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
 const STANDALONE_SOCKET = path.join(
@@ -127,7 +128,7 @@ export function resolveDriverBinary() {
   // directly as well as accepting CUA_DRIVER_PATH so a developer restart of
   // Electron cannot silently turn off “This computer”.
   if (process.platform === "win32") {
-    const staged = path.join(__dirname, "..", "dist-native", "cua-win32-x64", "cua-driver.exe");
+    const staged = path.join(moduleDir, "..", "dist-native", "cua-win32-x64", "cua-driver.exe");
     if (fs.existsSync(staged)) return staged;
   }
   if (fs.existsSync(INSTALLED_DRIVER)) return INSTALLED_DRIVER;

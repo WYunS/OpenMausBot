@@ -1,7 +1,27 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { activateExistingWindow, releaseSingleInstanceLock } from "./single-instance.mjs";
+
+test("main imports Electron's native updater before subscribing to update quit", () => {
+  const source = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
+  const electronImport = source.match(/import\s*\{([^}]+)\}\s*from\s*["']electron["']/)?.[1] ?? "";
+  assert.match(source, /nativeAutoUpdater\.on\("before-quit-for-update"/);
+  assert.match(electronImport, /\bautoUpdater\s+as\s+nativeAutoUpdater\b/);
+});
+
+test("main declares the upstream desktop security and companion dependencies it calls", () => {
+  const source = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
+  assert.match(source, /createTrustedApprovalModeCoordinator\s*}\s*=\s*require\(["']\.\/approval-trusted-mode\.cjs["']\)/);
+  assert.match(source, /DESKTOP_MUTATION_HEADER,\s*desktopServerHeaders\s*}\s*=\s*require\(["']\.\/desktop-server-auth\.cjs["']\)/);
+  assert.match(source, /desktopCompanionAccess[\s\S]*from\s*["']\.\/desktop-companion-client\.mjs["']/);
+});
+
+test("the ESM CUA entrypoint does not rely on CommonJS __dirname", () => {
+  const source = readFileSync(new URL("./cua.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /\b__dirname\b/);
+});
 
 function fakeWindow({ destroyed = false, minimized = false, focused = false, maximized = false } = {}) {
   const calls = [];
