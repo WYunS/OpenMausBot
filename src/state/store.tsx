@@ -1999,14 +1999,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (bot) rawDispatch({ type: "botPatched", bot: withTaskWrites(bot) });
       }).catch((error) => {
         showError(error);
-        // Reconcile rejected settings, but retain the failed promise so an
-        // immediate send cannot silently use the previous model or authority.
+        // Block sends until authoritative settings have been restored. Do
+        // not clear the failed write if reconciliation also fails or a newer
+        // write supersedes it: those settings are still unconfirmed.
         if (taskWrites.get(threadId) === pending) {
           pending.patch = {};
           void api("/api/bots").then(({ bots }) => {
             if (taskWrites.get(threadId) !== pending) return;
             const bot = bots.find((candidate: Bot) => candidate.id === botId);
-            if (bot) rawDispatch({ type: "botPatched", bot: withTaskWrites(bot) });
+            if (bot) {
+              rawDispatch({ type: "botPatched", bot: withTaskWrites(bot) });
+              taskWrites.delete(threadId);
+            }
           }).catch(() => {});
         }
       });
