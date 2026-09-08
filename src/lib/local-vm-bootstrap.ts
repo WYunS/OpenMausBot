@@ -8,6 +8,27 @@ export type LocalVmBootstrapOutcome =
   | { kind: "cancelled" }
   | { kind: "reboot-required"; state: LocalVmBootstrapState };
 
+/** Shared mode has one account-wide desktop, while per-bot mode owns a
+ * separate target. Keep that distinction at the renderer boundary so the
+ * native bootstrap and the server lifecycle endpoint always address the same
+ * VM. */
+export function localVmTarget(
+  mode: "shared" | "per-bot",
+  botId: string,
+): LocalVmBootstrapTarget {
+  return mode === "per-bot" ? { botId } : {};
+}
+
+export function localVmLifecyclePath(
+  mode: "shared" | "per-bot",
+  botId: string,
+  action: "run" | "remove",
+): string {
+  return mode === "per-bot"
+    ? `/api/bots/${encodeURIComponent(botId)}/local-computer/${action}`
+    : `/api/local-computer/${action}`;
+}
+
 /** The Electron bootstrap can repair both shared and per-bot Local VMs. The
  * server-only fallback can create only a per-bot container from a known image. */
 export function localVmSetupAvailable(

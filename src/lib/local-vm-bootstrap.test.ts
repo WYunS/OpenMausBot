@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ensureLocalVmReady,
   localVmLaunchAction,
+  localVmLifecyclePath,
   localVmSelectionStartsBootstrap,
   localVmSetupAvailable,
+  localVmTarget,
   type LocalVmBootstrapBridge,
 } from "./local-vm-bootstrap";
 
@@ -54,6 +56,19 @@ describe("ensureLocalVmReady", () => {
     await expect(ensureLocalVmReady(native, {}, confirm)).resolves.toMatchObject({ kind: "ready" });
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(native.start).toHaveBeenNthCalledWith(2, { target: {}, confirmed: true });
+  });
+});
+
+describe("Local VM target routing", () => {
+  it("routes shared mode through the account-wide VM endpoints", () => {
+    expect(localVmTarget("shared", "plum")).toEqual({});
+    expect(localVmLifecyclePath("shared", "plum", "run")).toBe("/api/local-computer/run");
+  });
+
+  it("routes per-bot mode through the bot-owned VM endpoints", () => {
+    expect(localVmTarget("per-bot", "plum")).toEqual({ botId: "plum" });
+    expect(localVmLifecyclePath("per-bot", "plum / unsafe", "remove"))
+      .toBe("/api/bots/plum%20%2F%20unsafe/local-computer/remove");
   });
 });
 

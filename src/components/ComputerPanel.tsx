@@ -65,8 +65,10 @@ import type { LocaleKey } from "@/locales";
 import {
   ensureLocalVmReady,
   localVmLaunchAction,
+  localVmLifecyclePath,
   localVmSelectionStartsBootstrap,
   localVmSetupAvailable,
+  localVmTarget,
 } from "@/lib/local-vm-bootstrap";
 
 class LocalizedPanelError extends Error {
@@ -1123,7 +1125,7 @@ export function ComputerPanel({
       if (action === "vm-create" && window.ogb?.localVmBootstrap) {
         const outcome = await ensureLocalVmReady(
           window.ogb.localVmBootstrap,
-          { botId: bot.id },
+          localVmTarget(vmStatus?.mode ?? "per-bot", bot.id),
           () => window.confirm(t("vm.setup.confirmOneClick")),
         );
         if (outcome.kind === "cancelled") return;
@@ -1137,13 +1139,13 @@ export function ComputerPanel({
         return;
       }
       if (action !== "vm-create") {
-        await api(`/api/bots/${bot.id}/local-computer/remove`, {
+        await api(localVmLifecyclePath(vmStatus?.mode ?? "per-bot", bot.id, "remove"), {
           method: "POST",
           body: "{}",
         });
       }
       if (action !== "vm-delete") {
-        const status: LocalVmStatus = await api(`/api/bots/${bot.id}/local-computer/run`, {
+        const status: LocalVmStatus = await api(localVmLifecyclePath(vmStatus?.mode ?? "per-bot", bot.id, "run"), {
           method: "POST",
           body: "{}",
         });

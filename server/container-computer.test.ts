@@ -24,6 +24,7 @@ import {
   VM_WORKSPACE_GUEST,
   WORKSPACE_LABEL,
   computerProxyEnv,
+  containerCliEnv,
   containerComputerAction,
   containerComputerFrame,
   containerComputerMcp,
@@ -150,6 +151,20 @@ function perBotReadyInspect(botId: string, viewerPort: number, targetLabel?: str
 }
 
 describe("containerComputerStatus", () => {
+  it("ignores a stale ambient Podman connection without discarding an explicit host fixture", () => {
+    const env = containerCliEnv("podman", {
+      PATH: "C:\\Windows\\System32",
+      CONTAINER_CONNECTION: "machine-that-no-longer-exists",
+      Container_Connection: "case-insensitive-stale-value",
+      CONTAINER_HOST: "ssh://fixture/run/user/1000/podman/podman.sock",
+      CONTAINER_SSHKEY: "C:\\fixture\\podman-machine-default",
+    });
+
+    expect(Object.keys(env).filter((key) => key.toUpperCase() === "CONTAINER_CONNECTION")).toEqual([]);
+    expect(env.CONTAINER_HOST).toBe("ssh://fixture/run/user/1000/podman/podman.sock");
+    expect(env.CONTAINER_SSHKEY).toBe("C:\\fixture\\podman-machine-default");
+  });
+
   it("prefers the supported Podman image store when Docker is also healthy on Windows", async () => {
     const fake = runner({
       "where.exe podman": "C:\\Program Files\\RedHat\\Podman\\podman.exe\n",
