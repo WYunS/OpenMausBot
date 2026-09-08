@@ -1869,7 +1869,7 @@ const StoreContext = createContext<{
 } | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const taskWrites = useRef(new Map<string, { promise: Promise<BotAnnouncement>; patch: TaskUpdatePatch }>()).current;
+  const taskWrites = useRef(new Map<string, { promise: Promise<BotAnnouncement>; execution: Promise<unknown>; patch: TaskUpdatePatch }>()).current;
   const withTaskWrites = (bot: BotAnnouncement): BotAnnouncement => ({
     ...bot,
     tasks: bot.tasks?.map((task) => ({ ...task, ...taskPatchFields(taskWrites.get(task.threadId)?.patch ?? {}) })),
@@ -1965,7 +1965,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // Capture this send's task save before waiting on slower profile saves.
       // Reconciliation may clear a failed lane meanwhile; that must not turn
       // an already-waiting send into work under reverted settings.
-      const taskWrite = threadId ? taskWrites.get(threadId)?.promise : undefined;
+      const taskWrite = threadId ? taskWrites.get(threadId)?.execution : undefined;
       await Promise.all([taskWrite, ...expectedBots.map(async (expected) => {
         const persisted = await botPatchQueue.flush(expected.id);
         if (!persisted) return;
@@ -1979,7 +1979,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           throw new Error("The approval level or model could not be saved, so this work was not started");
         }
       })]);
-      if (threadId) await taskWrites.get(threadId)?.promise;
+      if (threadId) await taskWrites.get(threadId)?.execution;
     };
 
     const persistTaskPatch = (botId: string, threadId: string, patch: TaskUpdatePatch) => {
@@ -1995,7 +1995,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           });
           return result.bot as BotAnnouncement;
         });
-      const pending = { patch: { ...previous?.patch, ...patch }, promise };
+      // Later edits still get saved after an earlier failure, but a send
+      // awaiting this batch must observe every rejected setting in it. A
+      // successful folder move is not confirmation of a failed model change.
+      const execution = Promise.all([previous?.execution, promise]);
+      void execution.catch(() => {}); // handled by the write and send paths
+      const pending = { patch: { ...previous?.patch, ...patch }, promise, execution };
       taskWrites.set(threadId, pending);
       void pending.promise.then((bot) => {
         if (taskWrites.get(threadId) !== pending) return;

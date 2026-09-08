@@ -29,12 +29,36 @@ function mount(request: typeof fetch) {
   return {
     profile: () => dispatch({ type: "updateBot", botId: "bot", patch: { title: "Updated" } }),
     update: () => dispatch({ type: "updateTask", botId: "bot", threadId: "thread", patch: { approvalMode: "auto" } }),
+    move: () => dispatch({ type: "updateTask", botId: "bot", threadId: "thread", patch: { projectId: null } }),
     send: () => dispatch({ type: "send", botId: "bot", threadId: "thread", text: "Continue" }),
   };
 }
 afterEach(() => { initialState.bots = []; vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("thread setting save recovery", () => {
+  it("does not let a successful queued folder move mask a failed approval save", async () => {
+    const firstWrite = deferred();
+    const secondWrite = deferred();
+    let writes = 0;
+    const requests = vi.fn<typeof fetch>(async (path) => {
+      if (path === "/api/bots/bot/tasks/thread") return ++writes === 1 ? firstWrite.promise : secondWrite.promise;
+      return response({});
+    });
+    const controls = mount(requests);
+    controls.update();
+    controls.move();
+    controls.send();
+    firstWrite.resolve(response({ error: "Approval save failed" }, 500));
+    await flush();
+    expect(writes).toBe(2);
+    secondWrite.resolve(response({ bot }));
+    await flush();
+    expect(requests.mock.calls.some(([path]) => path === "/api/bots/bot/messages")).toBe(false);
+    controls.send();
+    await flush();
+    expect(requests).toHaveBeenLastCalledWith("/api/bots/bot/messages", expect.objectContaining({ method: "POST" }));
+  });
+
   it("does not revive a failed send that was waiting on a slower profile save", async () => {
     initialState.bots = [{ ...bot, messages: [] }];
     const profileSave = deferred();
@@ -115,6 +139,11 @@ describe("thread setting save recovery", () => {
     await flush();
     expect(requests.mock.calls.some(([path]) => path === "/api/bots/bot/messages")).toBe(false);
     nextWrite.resolve(response({ bot }));
+    await flush();
+    // This send still belonged to the failed batch; only a fresh send after
+    // the newer settings settle may run.
+    expect(requests.mock.calls.some(([path]) => path === "/api/bots/bot/messages")).toBe(false);
+    controls.send();
     await flush();
     expect(requests).toHaveBeenLastCalledWith("/api/bots/bot/messages", expect.objectContaining({ method: "POST" }));
   });
