@@ -21,6 +21,8 @@ describe("SidebarSectionHeader", () => {
     expect(html).toContain('aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"');
     expect(html).toContain('aria-hidden="true"');
     expect(html).not.toContain('role="button"');
+    expect(html.indexOf(">Work</span>")).toBeLessThan(html.indexOf("lucide-chevron-down"));
+    expect(html).not.toContain("uppercase");
   });
 
   it("renders collapsed attention signals in the heading", () => {

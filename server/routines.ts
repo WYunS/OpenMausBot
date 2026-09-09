@@ -96,6 +96,8 @@ export interface Routine {
   /** Conversation that created this routine in chat. Calendar/import-created
    * routines intentionally have no source, and older files migrate in place. */
   sourceThreadId?: string;
+  /** Stable visible report destination; execution still gets a fresh task. */
+  resultsThreadId?: string;
   nextRunAt: number | null;
   createdAt: number;
   updatedAt: number;
@@ -132,6 +134,8 @@ export interface RoutineRun {
   /** Snapshot the routine's reporting destination. Execution remains on the
    * separate `threadId` so recurring work never contaminates chat context. */
   sourceThreadId?: string;
+  /** Snapshot of the chosen destination, never redirected by later edits. */
+  resultsThreadId?: string;
   threadId?: string;
   startedAt?: number;
   finishedAt?: number;
@@ -193,6 +197,8 @@ export interface RoutineInput {
   timeoutMinutes?: number | null;
   attachments?: RoutineContextAttachment[];
   continuity?: boolean;
+  /** Omission preserves routing; null creates a new dedicated results task. */
+  resultsThreadId?: string | null;
 }
 
 interface RoutineFile {
@@ -219,6 +225,11 @@ export interface RoutineManagerOptions {
   goalState?: (groupId: string, coordinatorBotId: string) => "ready" | "busy" | "missing";
   createTask: (botId: string, title: string, activate?: boolean) => { threadId: string } | null;
   createGoalTask?: (groupId: string, title: string) => { threadId: string } | null;
+  isResultsThread?: (botId: string, threadId: string) => boolean;
+  /** Reuse a valid destination, keep a trusted chat source, or create one. */
+  resolveResultsThread?: (routine: Routine, forceNew: boolean) => string | undefined;
+  /** Compensate an uncommitted explicit allocation, only while still empty. */
+  discardResultsThread?: (botId: string, threadId: string) => void;
   startTurn: (
     botId: string,
     threadId: string,
@@ -708,6 +719,7 @@ export class RoutineManager {
               timeoutMinutes: loadTimeoutMinutes(routine.timeoutMinutes),
               attachments: loadAttachments(routine.attachments),
               sourceThreadId: persistedSourceThreadId.parse(routine.sourceThreadId),
+              resultsThreadId: persistedSourceThreadId.parse(routine.resultsThreadId),
             };
             if (loaded.timeoutMinutes === undefined) delete loaded.timeoutMinutes;
             return [loaded];
@@ -725,6 +737,7 @@ export class RoutineManager {
               timeoutMinutes: loadTimeoutMinutes(run.timeoutMinutes),
               attachments: loadAttachments(run.attachments),
               sourceThreadId: persistedSourceThreadId.parse(run.sourceThreadId),
+              resultsThreadId: persistedSourceThreadId.parse(run.resultsThreadId),
             };
             if (loaded.timeoutMinutes === undefined) delete loaded.timeoutMinutes;
             return loaded;
@@ -889,10 +902,11 @@ export class RoutineManager {
       createdAt: at,
       updatedAt: at,
     };
+    const discardResults = this.applyResultsInput(routine, input.resultsThreadId);
     this.commitMutation(() => {
       this.routines.unshift(routine);
       if (request) this.rememberRoutineRequest(request, routine.id, at);
-    });
+    }, discardResults);
     this.emitRoutine(routine);
     return cloneRoutine(routine);
   }
@@ -936,9 +950,13 @@ export class RoutineManager {
     if (clean.schedule.type === "interval" && clean.enabled && nextRunAt === null) {
       throw new Error("This interval has no future runs. Choose a later end date or turn it off.");
     }
+    const destination = { ...routine, ...clean };
+    if (destination.botId !== routine.botId) delete destination.resultsThreadId;
+    const discardResults = this.applyResultsInput(destination, patch.resultsThreadId);
     const cancelledRuns: RoutineRun[] = [];
     this.commitMutation(() => {
       Object.assign(routine, clean, {
+        resultsThreadId: destination.resultsThreadId,
         nextRunAt,
         // `updatedAt` doubles as the optimistic revision on durable routine
         // confirmation cards. Keep it monotonic even for two writes in one ms.
@@ -961,7 +979,7 @@ export class RoutineManager {
         }
       }
       if (request) this.rememberRoutineRequest(request, routine.id, now);
-    });
+    }, discardResults);
     for (const run of cancelledRuns) this.emitRun(run);
     this.emitRoutine(routine);
     return cloneRoutine(routine);
@@ -1065,9 +1083,9 @@ export class RoutineManager {
     if (!routine) return null;
     let run!: RoutineRun;
     this.commitMutation(() => {
-      run = this.newRun(routine, this.now(), true);
-      // A chat-confirmed "run now" reports back to the conversation that
-      // invoked this one run. It must not silently rebind future schedules.
+      run = this.newRun(routine, this.now(), true, request?.threadId ?? routine.sourceThreadId);
+      // Preserve the invoking chat as provenance/fallback for this run.
+      // An explicitly configured results destination continues to win.
       if (request) run.sourceThreadId = request.threadId;
       if (request) this.rememberRoutineRequest(request, run.id, this.now());
     });
@@ -1524,7 +1542,15 @@ export class RoutineManager {
     return nextOccurrence(schedule, now);
   }
 
-  private newRun(routine: Routine, scheduledFor: number, manual: boolean): RoutineRun {
+  private newRun(routine: Routine, scheduledFor: number, manual: boolean, sourceThreadId = routine.sourceThreadId): RoutineRun {
+    if (routine.target === "bot" && this.options.resolveResultsThread) {
+      const destination = this.options.resolveResultsThread({ ...routine, sourceThreadId }, false);
+      if (destination !== routine.resultsThreadId) {
+        routine.resultsThreadId = destination;
+        routine.updatedAt = Math.max(this.now(), routine.updatedAt + 1);
+        this.emitRoutine(routine);
+      }
+    }
     const run: RoutineRun = {
       id: randomUUID(),
       routineId: routine.id,
@@ -1541,11 +1567,31 @@ export class RoutineManager {
       status: "queued",
       manual,
       triggerSource: manual ? "manual" : "schedule",
-      sourceThreadId: routine.sourceThreadId,
+      sourceThreadId,
+      resultsThreadId: routine.resultsThreadId,
       createdAt: this.now(),
     };
     this.runs.push(run);
     return run;
+  }
+
+  private applyResultsInput(routine: Routine, value: RoutineInput["resultsThreadId"]) {
+    if (routine.target !== "bot") {
+      if (value != null) throw Object.assign(new Error("Results threads are only available for bot routines"), { status: 400 });
+      delete routine.resultsThreadId;
+      return;
+    }
+    if (value === undefined) return;
+    if (value === null) {
+      const destination = this.options.resolveResultsThread?.(routine, true);
+      if (!destination) throw new Error("Could not create a results thread for this routine");
+      routine.resultsThreadId = destination;
+      return () => this.options.discardResultsThread?.(routine.botId, destination);
+    }
+    if (typeof value !== "string" || !value.trim() || !this.options.isResultsThread?.(routine.botId, value.trim())) {
+      throw Object.assign(new Error("Choose a visible results thread belonging to this bot"), { status: 400 });
+    }
+    routine.resultsThreadId = value.trim();
   }
 
   private emitRoutine(routine: Routine) {
@@ -1602,7 +1648,7 @@ export class RoutineManager {
    * state if writing or renaming that file fails so a retry cannot mistake an
    * uncommitted action for a durable one.
    */
-  private commitMutation(mutate: () => void): void {
+  private commitMutation(mutate: () => void, rollback?: () => void): void {
     const before = {
       routines: this.routines.map(cloneRoutine),
       runs: this.runs.map(cloneRun),
@@ -1615,6 +1661,11 @@ export class RoutineManager {
       this.routines = before.routines;
       this.runs = before.runs;
       this.routineRequestReceipts = before.receipts;
+      try {
+        rollback?.();
+      } catch (cleanupError) {
+        console.error("routine: could not discard uncommitted results thread", cleanupError);
+      }
       throw error;
     }
   }

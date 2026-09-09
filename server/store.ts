@@ -281,6 +281,8 @@ export interface TaskRecord {
   createdAt: number;
   /** Organizational grouping only; never a directory or provider context. */
   projectId?: string;
+  /** Detached routine execution, reachable through its visible results card. */
+  routineRunId?: string;
   /** Defaults are copied when a task is created; older records fall back
    * to the bot until migration seeds their model selection. */
   modelSelection?: ModelSelection;
@@ -313,6 +315,7 @@ export interface TaskRecord {
 const TASK_PATCH_FIELDS = [
   "title", "projectId", "modelSelection", "approvalMode", "autoApprove", "alwaysAllow",
   "unread", "rewound", "pinnedMessageId", "resumeCursors", "lastInstanceId", "cwd",
+  "routineRunId",
 ] as const satisfies readonly (keyof TaskRecord)[];
 export type TaskPatch = Partial<Pick<TaskRecord, typeof TASK_PATCH_FIELDS[number]>>;
 
@@ -2004,10 +2007,12 @@ export class Store {
     if (!bot || !bot.tasks || bot.tasks.length < 2) return null;
     if (!bot.tasks.some((t) => t.threadId === threadId)) return null;
     bot.tasks = bot.tasks.filter((t) => t.threadId !== threadId);
-    this.deleteThreadRecord(threadId);
+    const visible = bot.tasks.find((task) => !task.routineRunId)
+      ?? this.createTask(botId, undefined, bot.threadId === threadId)!;
     if (bot.threadId === threadId) {
-      this.mirrorActiveTask(bot, bot.tasks[0]!);
+      this.mirrorActiveTask(bot, visible);
     }
+    this.deleteThreadRecord(threadId);
     bot.unread = bot.tasks.some((task) => task.unread);
     this.refreshBotActivity(bot);
     this.saveBots();
