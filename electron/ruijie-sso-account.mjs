@@ -105,11 +105,24 @@ export function ruijieAccountSummary(accessToken, usagePayload, subscriptionPayl
   };
 }
 
+function ruijieAccountIdentity(accessToken) {
+  const claims = jwtClaims(accessToken);
+  return {
+    authentication: "sso",
+    account: {
+      id: optionalClaim(claims, "sub", "user_id", "uid") ?? "sso-user",
+      name: optionalClaim(claims, "name", "preferred_username", "username"),
+      email: optionalClaim(claims, "email"),
+    },
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
 function publicState(status, extra = {}) {
   return Object.freeze({ status, ...extra });
 }
 
-async function jsonRequest(fetchImpl, url, init, operation) {
+async function jsonRequest(fetchImpl, url, init, operation, sessionRejectedStatuses = [400, 401, 403]) {
   let response;
   try {
     response = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
@@ -118,7 +131,7 @@ async function jsonRequest(fetchImpl, url, init, operation) {
   }
   if (!response.ok) {
     const error = new Error(`${operation}失败（HTTP ${response.status}）`);
-    if ([400, 401, 403].includes(response.status)) throw new SessionRejectedError(error.message);
+    if (sessionRejectedStatuses.includes(response.status)) throw new SessionRejectedError(error.message);
     throw error;
   }
   const payload = await response.json();
@@ -238,11 +251,19 @@ export function createRuijieSsoAccountService({
   const summary = async (current) => {
     const valid = await refreshedTokens(current);
     const headers = { authorization: `Bearer ${valid.accessToken}` };
-    const [usage, subscription] = await Promise.all([
-      jsonRequest(fetchImpl, new URL("/v1/dashboard/billing/usage", issuer), { headers }, "GPTAuth 用量读取"),
-      jsonRequest(fetchImpl, new URL("/v1/dashboard/billing/subscription", issuer), { headers }, "GPTAuth 额度读取"),
-    ]);
-    return ruijieAccountSummary(valid.accessToken, usage, subscription);
+    try {
+      const [usage, subscription] = await Promise.all([
+        jsonRequest(fetchImpl, new URL("/v1/dashboard/billing/usage", issuer), { headers }, "GPTAuth 用量读取", [401]),
+        jsonRequest(fetchImpl, new URL("/v1/dashboard/billing/subscription", issuer), { headers }, "GPTAuth 额度读取", [401]),
+      ]);
+      return ruijieAccountSummary(valid.accessToken, usage, subscription);
+    } catch (cause) {
+      if (cause instanceof SessionRejectedError) throw cause;
+      // Billing is supplemental account metadata. A valid SSO token must not
+      // be discarded merely because this account lacks billing scope or the
+      // usage service is temporarily unavailable.
+      return ruijieAccountIdentity(valid.accessToken);
+    }
   };
   const stateWork = async () => {
     if (phase) return phase;

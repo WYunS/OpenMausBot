@@ -48,8 +48,22 @@ map entry only after the shared control surface can really drive it.
 The [cloud preview fixture](cloud-preview.md) mounts the real Computer panel
 against an isolated server for image decoding, loading, and recovery UI checks.
 
+The [live browser fixture](browser-live.md) mounts the real Browser panel with
+an explicitly selected native engine and Chrome in a disposable home, covering
+watching, takeover, input, and profile switching.
+
 The [bot settings fixture](bot-settings.md) checks profile saves, standing
 instructions, history restore, skill/memory refresh, and stale-response isolation.
+
+The [independent threads fixture](threads.md) checks nested sidebar navigation,
+per-thread models, simultaneous direct conversations and thread-scoped Stop.
+
+The [routines fixture](routines.md) checks confirmed proposals, manual and
+scheduled runs, central run logs, List/Calendar views, and bot-scoped routines
+using the real renderer and an isolated fake-engine server.
+
+The [server settings recipe](server-settings.md) checks browser provider sign-in
+with an offline CLI and custom-domain validation without touching live accounts.
 
 The [Group and Goal Local VM recipe](group-local-vm.md) checks per-speaker
 desktop routing, cancellation, and computer authority cleanup.

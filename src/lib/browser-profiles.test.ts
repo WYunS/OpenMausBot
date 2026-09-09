@@ -1,10 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
+import { setLocale } from "./i18n";
 import {
   browserProfileDeletionBlockReason,
   browserProfilePartitionId,
   browserProfilesForPatch,
+  browserProfilesMutation,
+  newBrowserProfileId,
 } from "./browser-profiles";
+
+beforeEach(() => setLocale("en"));
 
 describe("browser profile deletion", () => {
   it("blocks a wipe while any assigned bot has a live turn", () => {
@@ -37,5 +42,24 @@ describe("browser profile partition routing", () => {
       { id: "client", name: "Client" },
       { id: "personal", name: "Personal" },
     ]);
+  });
+
+  it("sends the exact edited list as a compare-and-swap base without internal metadata", () => {
+    const next = [{ ...profiles[0]!, name: "Renamed" }, { id: "new", name: "New" }];
+    const mutation = browserProfilesMutation(profiles, next);
+    expect(mutation).toEqual({
+      expectedBrowserProfiles: [{ id: "client", name: "Client" }, { id: "personal", name: "Personal" }],
+      browserProfiles: [{ id: "client", name: "Renamed" }, { id: "new", name: "New" }],
+    });
+    next[0]!.name = "Later edit";
+    expect(mutation.browserProfiles[0]!.name).toBe("Renamed");
+    expect(browserProfilesMutation(profiles, []).browserProfiles).toEqual([]);
+    expect(browserProfilesMutation([], profiles).expectedBrowserProfiles).toEqual([]);
+  });
+
+  it("creates distinct safe profile IDs within the server's 40-character bound", () => {
+    const ids = new Set(Array.from({ length: 50 }, () => newBrowserProfileId()));
+    expect(ids.size).toBe(50);
+    for (const id of ids) expect(id).toMatch(/^profile-[a-f0-9]{32}$/);
   });
 });

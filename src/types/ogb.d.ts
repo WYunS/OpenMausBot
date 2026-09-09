@@ -138,7 +138,7 @@ type SkillRecordingPayload = {
   type RuijieAccountSummary = {
     authentication: "sso";
     account: { id: string; name?: string; email?: string };
-    billing: {
+    billing?: {
       currency: "CNY";
       total: number;
       used: number;

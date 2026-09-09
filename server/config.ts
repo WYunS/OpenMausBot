@@ -242,6 +242,11 @@ const defaultModelSelectionSchema = z.object({
   effort: z.enum(EFFORT_LEVELS).optional(),
 });
 const appConfigSchema = z.object({
+  /** Verified by the dedicated domain endpoint, never a generic config patch. */
+  customDomain: z.string().optional(),
+  /** Who may sign in with an emailed code (server/account-signin.ts):
+   * addresses or `@domain` entries; admins get every scope, members chat only. */
+  signIn: z.object({ admins: z.array(z.string().max(320)).max(500).optional(), members: z.array(z.string().max(320)).max(5000).optional() }).optional(),
   defaultModelSelection: defaultModelSelectionSchema.optional(),
   /** CLI-only launch preferences. Never enable remote access implicitly. */
   cliStartup: z.object({
@@ -288,10 +293,12 @@ const appConfigSchema = z.object({
 const storedAppConfigSchema = appConfigSchema.extend({
   browserProfiles: storedBrowserProfilesSchema.optional(),
 });
-const appConfigPatchSchema = appConfigSchema.omit({ instances: true, mcpServers: true, cliStartup: true });
+const appConfigPatchSchema = appConfigSchema.omit({ instances: true, mcpServers: true, cliStartup: true, customDomain: true });
 const jsonObjectSchema = z.record(z.string(), z.json());
 
 export interface AppConfig {
+  customDomain?: string;
+  signIn?: { admins?: string[]; members?: string[] };
   /** Preferred selection for newly created bots; existing bots keep theirs. */
   defaultModelSelection?: ModelSelection;
   cliStartup?: {
@@ -513,6 +520,14 @@ export function loadConfig(): AppConfig {
   if (process.env.OMB_TTS_KEY !== undefined) cfg.tts.key = process.env.OMB_TTS_KEY;
   cfg.imageGen = { ...cfg.imageGen };
   if (process.env.OMB_OPENAI_IMAGE_KEY !== undefined) cfg.imageGen.key = process.env.OMB_OPENAI_IMAGE_KEY;
+  // The sign-in allow-list: env is how a headless box or a container is
+  // bootstrapped before anyone can reach Settings.
+  const splitEmails = (value: string) => value.split(/[,\s]+/).map((entry) => entry.trim().toLowerCase()).filter(Boolean);
+  if (process.env.OMB_SIGNIN_EMAILS !== undefined || process.env.OMB_SIGNIN_MEMBER_EMAILS !== undefined) {
+    cfg.signIn = { ...cfg.signIn };
+    if (process.env.OMB_SIGNIN_EMAILS !== undefined) cfg.signIn.admins = splitEmails(process.env.OMB_SIGNIN_EMAILS);
+    if (process.env.OMB_SIGNIN_MEMBER_EMAILS !== undefined) cfg.signIn.members = splitEmails(process.env.OMB_SIGNIN_MEMBER_EMAILS);
+  }
   return cfg;
 }
 
@@ -601,7 +616,7 @@ export const PROVIDER_CREDENTIAL_ENV = [
 
 /** Merge a partial config into ~/.openmausbot/config.json (secrets never
  * echoed back — callers report configured-or-not booleans only). */
-export function saveConfig(patch: Partial<AppConfig>): void {
+export function saveConfig(patch: Partial<AppConfig>, options: { replaceInstances?: boolean } = {}): void {
   const p = join(DATA_DIR, "config.json");
   let disk: JsonObject = {};
   try {
@@ -627,6 +642,8 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   if (checkedPatch.vps !== undefined) disk.vps = normalizeVpsConfig(checkedPatch.vps);
   // scalar, not a section: the merge loop above only walks objects
   if (checkedPatch.language !== undefined) disk.language = checkedPatch.language;
+  if (checkedPatch.customDomain !== undefined) disk.customDomain = checkedPatch.customDomain;
+  if (checkedPatch.signIn !== undefined) disk.signIn = checkedPatch.signIn;
   // A selection is replaced as one value, so changing engines also clears
   // an effort level omitted from the new selection.
   if (checkedPatch.defaultModelSelection !== undefined) {
@@ -660,10 +677,16 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   }
   if (checkedPatch.instances) {
     const currentInstances = jsonObjectSchema.safeParse(disk.instances);
-    const diskInstances: JsonObject = currentInstances.success ? currentInstances.data : {};
+    const storedInstances: JsonObject = currentInstances.success ? currentInstances.data : {};
+    const diskInstances: JsonObject = options.replaceInstances ? {} : storedInstances;
     for (const [instanceId, entry] of Object.entries(checkedPatch.instances)) {
-      const current = jsonObjectSchema.safeParse(diskInstances[instanceId]);
+      const current = jsonObjectSchema.safeParse(storedInstances[instanceId]);
       const merged: JsonObject = current.success ? { ...current.data } : {};
+      // Replacement clears omitted known settings, but retained shadow
+      // entries keep fields understood only by a newer app or driver.
+      if (options.replaceInstances) {
+        for (const key of Object.keys(instanceConfigSchema.shape)) delete merged[key];
+      }
       Object.assign(merged, entry);
       diskInstances[instanceId] = merged;
     }
@@ -678,8 +701,8 @@ export function saveConfig(patch: Partial<AppConfig>): void {
  * entry rides driver.defaultConfig(). Returns false for unknown instances
  * when the fleet is explicitly configured. The returned map must stay
  * PERSISTABLE: instanceConfigs() injects credential env into consuming
- * drivers' entries for the live fleet, so those injected keys are stripped
- * back out before the map is returned — otherwise saving an override would
+ * drivers' entries for the live fleet, so only their originally configured
+ * environment is retained — otherwise saving an override would
  * copy xai/box/opencodeGo secrets into the instances section of
  * config.json. */
 export function withInstanceCli(
@@ -688,7 +711,7 @@ export function withInstanceCli(
   cli: string,
 ): InstanceCliUpdate {
   const next: AppConfig = structuredClone(cfg);
-  const map = instanceConfigs(next);
+  const map = persistableInstanceConfigs(next);
   // hasOwn, not truthiness: map is a plain object literal, so
   // map["__proto__"] resolves to Object.prototype — truthy — and the
   // assignment below would poison EVERY object in the process (instanceId
@@ -705,14 +728,6 @@ export function withInstanceCli(
     const rest = { ...currentConfig.data };
     delete rest.cli;
     entry.config = Object.keys(rest).length ? rest : undefined;
-  }
-  for (const e of Object.values(map)) {
-    if (!e.environment) continue;
-    const injected = injectedEnvironment(next, e.driver);
-    for (const [k, v] of Object.entries(e.environment)) {
-      if (injected.get(k) === v) delete e.environment[k];
-    }
-    if (!Object.keys(e.environment).length) delete e.environment;
   }
   next.instances = map;
   return { ok: true, config: next };
@@ -741,13 +756,23 @@ export function withInstanceEnabled(
   return { ok: true, config: next };
 }
 
+/** Materialize defaults without copying injected workspace secrets to disk. */
+export function persistableInstanceConfigs(cfg: AppConfig): InstanceConfigMap {
+  const map = instanceConfigs(cfg);
+  for (const [id, entry] of Object.entries(map)) {
+    const environment = cfg.instances?.[id]?.environment;
+    if (environment) entry.environment = { ...environment };
+    else delete entry.environment;
+  }
+  return map;
+}
+
 interface InstanceCliUpdate {
   ok: boolean;
   config: AppConfig;
 }
 
-/** The credential env instanceConfigs() injects for one driver — shared with
- * withInstanceCli() so the inject rule and the strip rule cannot drift apart.
+/** The credential env instanceConfigs() injects for one driver at runtime.
  * Each secret goes only to the driver that actually reads it: the API-key
  * Grok driver reads XAI_API_KEY, the Computer driver reads BOX_TOKEN, and
  * OpenCode reads OPENCODE_API_KEY. Every other engine brings its own

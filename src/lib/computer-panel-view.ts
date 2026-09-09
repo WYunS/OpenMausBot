@@ -1,4 +1,4 @@
-export type ComputerPanelView = "computer" | "android" | "browser";
+export type ComputerPanelView = "computer" | "android" | "browser" | "routines";
 
 export function computerPreviewIntervalMs(busy?: boolean): number {
   return busy ? 2_000 : 8_000;
@@ -16,7 +16,7 @@ export function readComputerPanelView(
 ): ComputerPanelView {
   try {
     const value = storage.getItem(storageKey(botId));
-    if (value === "android" || value === "browser") return value;
+    if (value === "android" || value === "browser" || value === "routines") return value;
   } catch {
     // Storage can be unavailable in hardened or private renderer sessions.
   }

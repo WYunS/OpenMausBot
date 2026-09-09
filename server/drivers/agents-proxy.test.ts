@@ -54,6 +54,9 @@ let lastProfileRequestBody: any = null;
 let profileRequestResponse: unknown = { requestId: "profile-request-1", summary: "Name → Kiwi" };
 let lastSessionSearchUrl = "";
 let lastSessionReadUrl = "";
+let lastMemoryBody: any = null;
+let memoryResponse: unknown = { ok: true, text: "- new fact", truncated: false, bytes: 10 };
+let memoryStatus = 200;
 let sessionSearchResponse: unknown = {
   hits: [
     { threadId: "thread-old", messageId: "m-audit", at: Date.UTC(2026, 8, 1), role: "bot", snippet: "the [audit] found three [broken] [links]", task: "Site audit", current: false },
@@ -202,6 +205,16 @@ beforeAll(async () => {
       });
       return;
     }
+    if (req.method === "POST" && req.url === "/api/internal/memory") {
+      let data = "";
+      req.on("data", (c) => (data += c));
+      req.on("end", () => {
+        lastMemoryBody = JSON.parse(data);
+        res.writeHead(memoryStatus, { "content-type": "application/json" });
+        res.end(JSON.stringify(memoryResponse));
+      });
+      return;
+    }
     if (req.method === "GET" && req.url?.startsWith("/api/internal/session-search?")) {
       lastSessionSearchUrl = req.url;
       res.writeHead(200, { "content-type": "application/json" });
@@ -286,6 +299,7 @@ describe("agents-proxy MCP surface", () => {
       "post_to_room",
       "create_bot",
       "request_credential",
+      "memory_update",
       "session_search",
       "session_read",
       "list_routines",
@@ -618,6 +632,44 @@ describe("agents-proxy MCP surface", () => {
     delegationStatusResponse = { status: "done", toBotName: "Helper", result: "All done." };
   });
 
+  it("memory_update forwards only the configured owner and thread with its capability token", async () => {
+    const result = await callTool("memory_update", {
+      action: "replace", text: "- New preference", old_text: "- Old preference",
+      fromBotId: "spoofed-bot", fromThreadId: "spoofed-thread",
+    });
+    expect(result.result.isError).toBe(false);
+    expect(result.result.content[0].text).toBe("Memory updated.");
+    expect(lastAuth).toBe(`Bearer ${TOKEN}`);
+    expect(lastMemoryBody).toEqual({
+      fromBotId: "bot-asker", fromThreadId: "thread-asker-routine",
+      action: "replace", text: "- New preference", oldText: "- Old preference",
+    });
+    const append = await callTool("memory_update", { action: "append", text: "- Another fact" });
+    expect(append.result.isError).toBe(false);
+    expect(lastMemoryBody).toEqual({
+      fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", action: "append", text: "- Another fact",
+    });
+    const missing = await callTool("memory_update", { action: "replace", text: "unsafe replacement" });
+    expect(missing.result.isError).toBe(true);
+    expect(lastMemoryBody.action).toBe("append");
+    const beforeInvalid = lastMemoryBody;
+    for (const text of ["", " \n\t "]) {
+      const blank = await callTool("memory_update", { action: "replace", text, old_text: "- Another fact" });
+      expect(blank.result.isError).toBe(true);
+      expect(lastMemoryBody).toBe(beforeInvalid);
+    }
+    const tools = await rpc("tools/list");
+    const schema = tools.result.tools.find((tool: { name: string }) => tool.name === "memory_update").inputSchema;
+    expect(schema.properties.text).toMatchObject({ minLength: 1, pattern: "\\S" });
+    memoryStatus = 409;
+    memoryResponse = { error: "oldText must match exactly once in the latest memory." };
+    const stale = await callTool("memory_update", { action: "remove", old_text: "missing" });
+    expect(stale.result.isError).toBe(true);
+    expect(stale.result.content[0].text).toContain("latest memory");
+    memoryStatus = 200;
+    memoryResponse = { ok: true, text: "- new fact", truncated: false, bytes: 10 };
+  });
+
   it("session_search recalls the bot's own past threads through the harness, scoped to the sender", async () => {
     const list = await rpc("tools/list");
     const tool = list.result.tools.find((t: { name: string }) => t.name === "session_search");
@@ -725,6 +777,42 @@ describe("agents-proxy MCP surface", () => {
     expect(lastRoutineRequestBody.routine).not.toHaveProperty("forBotId");
     expect(lastRoutineRequestBody.routine).not.toHaveProperty("for_bot_id");
     expect(res.result.isError).toBeFalsy();
+  });
+
+  it("preserves execution settings copied from list_routines", async () => {
+    const res = await callTool("propose_routine", {
+      name: "Cloud check",
+      instructions: "Check the queue.",
+      schedule: { type: "interval", everyMinutes: 15, anchorAt: "2026-09-01T09:00:00+05:30" },
+      runOn: "cloud",
+      timeoutMinutes: 20,
+    });
+    expect(res.result.isError).toBeFalsy();
+    expect(lastRoutineRequestBody.routine).toMatchObject({
+      runOn: "cloud",
+      timeoutMinutes: 20,
+      schedule: { type: "interval", everyMinutes: 15, anchorAt: "2026-09-01T09:00:00+05:30" },
+    });
+  });
+
+  it.each([
+    { run_on: 7 },
+    { run_on: "maus", runOn: "cloud" },
+    { timeout_minutes: "20" },
+    { timeout_minutes: 10, timeoutMinutes: 20 },
+    { clear_timeout: true, timeoutMinutes: 10 },
+    { continuity: "true" },
+    { clear_timeout: "true" },
+  ])("refuses malformed execution settings without silently dropping them: %j", async (settings) => {
+    lastRoutineRequestBody = null;
+    const res = await callTool("propose_routine", {
+      name: "Check",
+      instructions: "Check the queue.",
+      schedule: { type: "daily", time: "09:00" },
+      ...settings,
+    });
+    expect(res.result.isError).toBe(true);
+    expect(lastRoutineRequestBody).toBeNull();
   });
 
   it("proposes a one-time routine with the explicit-offset timestamp intact", async () => {
@@ -838,6 +926,31 @@ describe("agents-proxy MCP surface", () => {
     expect(unknown.result.isError).toBe(true);
     expect(unknown.result.content[0].text).toContain("Unknown schedule type");
     expect(lastRoutineRequestBody).toBeNull();
+  });
+
+  it.each([
+    { type: "weekly", time: "09:00", weekdays: ["monday"], timezone: "America/New_York" },
+    { type: "interval", every_minutes: 15, start_at: "2026-09-01T09:00:00+05:30" },
+  ])("refuses scheduling constraints that would otherwise be silently discarded: %j", async (schedule) => {
+    lastRoutineRequestBody = null;
+    const res = await callTool("propose_routine", { name: "Check", instructions: "Check the queue.", schedule });
+    expect(res.result.isError).toBe(true);
+    expect(res.result.content[0].text).toContain("Unsupported");
+    expect(lastRoutineRequestBody).toBeNull();
+  });
+
+  it("ignores unused null schedule properties from provider schema conversion", async () => {
+    const res = await callTool("propose_routine", {
+      name: "Check",
+      instructions: "Check the queue.",
+      schedule: { type: "daily", time: "09:00", at: null, every_minutes: null, starts_at: null },
+      run_on: null,
+      timeout_minutes: null,
+      clear_timeout: null,
+      continuity: null,
+    });
+    expect(res.result.isError).toBeFalsy();
+    expect(lastRoutineRequestBody.routine.schedule).toMatchObject({ type: "weekly", time: "09:00" });
   });
 
   it("rejects malformed routine proposals before calling the harness", async () => {

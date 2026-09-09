@@ -5,7 +5,8 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { augmentedPath } from "./env-path.ts";
-import { createLineSplitter } from "./mcp-bridge.ts";
+import { createControlClient } from "./control-client.ts";
+import { createLineSplitter, createMcpBridgeInterceptor } from "./mcp-bridge.ts";
 
 type Frame = { png: string; mime: "image/png" | "image/jpeg" | "image/webp" };
 type Timer = (callback: () => void, delayMs: number) => unknown;
@@ -228,20 +229,32 @@ async function postFrame(frame: Frame): Promise<void> {
 }
 
 export function runLocalComputerProxy(): void {
-  const command = process.env.OMB_CUA_COMMAND;
-  if (!command) throw new Error("OMB_CUA_COMMAND is required");
-  let args: string[] = [];
+  const {
+    OMB_CUA_COMMAND: command,
+    OMB_CUA_ARGS: encodedArgs,
+    OMB_CONTROL_URL: url,
+    OMB_CONTROL_TOKEN: token,
+    ...childEnv
+  } = process.env;
+  let args: string[];
   try {
-    const parsed = JSON.parse(process.env.OMB_CUA_ARGS ?? "[]");
-    if (!Array.isArray(parsed) || !parsed.every((arg) => typeof arg === "string")) throw new Error();
+    const parsed: unknown = JSON.parse(encodedArgs ?? "");
+    const endpoint = new URL(url ?? "");
+    if (!command?.trim() || command.includes("\0")
+      || !Array.isArray(parsed) || !parsed.every((arg) => typeof arg === "string" && !arg.includes("\0"))
+      || !token || !["http:", "https:"].includes(endpoint.protocol)
+      || !["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname) || endpoint.username || endpoint.password) {
+      throw new Error("invalid connection");
+    }
     args = parsed;
   } catch {
-    throw new Error("OMB_CUA_ARGS must be a JSON string array");
+    process.stderr.write("invalid local computer proxy connection\n");
+    process.exit(2);
   }
-  const child = spawn(command, args, {
+  const child = spawn(command!, args, {
     shell: false,
     windowsHide: true,
-    env: { ...process.env, PATH: augmentedPath() },
+    env: { ...childEnv, PATH: augmentedPath() },
     stdio: ["pipe", "pipe", "pipe"],
   });
   child.stdin.on("error", () => undefined);
@@ -253,10 +266,32 @@ export function runLocalComputerProxy(): void {
     publishFrame: postFrame,
     prepareWindow: restorer ? (target) => restorer.restore(target) : undefined,
   });
-  const inbound = createLineSplitter(proxy.fromClient);
+  const client = createControlClient({ url: url!, token: token! });
+  let refusalReason: string | undefined;
+  const intercept = createMcpBridgeInterceptor({
+    answer: (line) => process.stdout.write(line + "\n"),
+    forward: proxy.fromClient,
+    gate: {
+      isHeld: async () => {
+        refusalReason = undefined;
+        const state = await client.state(true);
+        refusalReason = state.blockedReason;
+        return state.held;
+      },
+      getRefusalReason: () => refusalReason,
+    },
+  });
+  let pendingInput = Promise.resolve();
+  const inbound = createLineSplitter((line) => {
+    const completion = intercept(line);
+    if (completion) pendingInput = completion;
+  });
   const outbound = createLineSplitter(proxy.fromDriver);
   process.stdin.on("data", (chunk: Buffer) => inbound.push(chunk));
-  process.stdin.on("end", () => { inbound.flush(); child.stdin.end(); });
+  process.stdin.on("end", () => {
+    inbound.flush();
+    void pendingInput.finally(() => child.stdin.end());
+  });
   child.stdout.on("data", (chunk: Buffer) => outbound.push(chunk));
   child.stdout.on("end", () => outbound.flush());
   child.on("error", (error) => {

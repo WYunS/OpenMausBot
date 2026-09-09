@@ -14,6 +14,7 @@ import { customMcpServers,
   localVmMode,
   parseConfigPatch,
   parseStoredConfig,
+  persistableInstanceConfigs,
   roomTurnTimeoutMinutes,
   showToolCallsEnabled,
   saveConfig,
@@ -33,6 +34,11 @@ import { customMcpServers,
 } from "./config.ts";
 
 describe("configuration boundaries", () => {
+  it("persists a custom domain but excludes it from generic config patches", () => {
+    expect(parseStoredConfig({ customDomain: "https://bots.example.com" })).toEqual({ customDomain: "https://bots.example.com" });
+    expect(parseConfigPatch({ customDomain: "https://unverified.example.com", language: "en" })).toEqual({ language: "en" });
+    expect(parseStoredConfig({ customDomain: "" })).toEqual({ customDomain: "" });
+  });
   it("keeps supported stored settings and drops unrelated top-level data", () => {
     expect(
       parseStoredConfig({
@@ -527,6 +533,24 @@ describe("Instance CLI override", () => {
     const kept = withInstanceCli(custom, "claude", "/x");
     expect(kept.config.instances!.claude.environment).toEqual({ MY_FLAG: "1" });
   });
+
+  it("preserves explicit instance credentials even when workspace injection shadows them", () => {
+    const cfg: AppConfig = {
+      box: { token: "fixture-workspace-box" },
+      xai: { key: "fixture-shared-xai" },
+      instances: {
+        computer: { driver: "boxAgent", environment: { BOX_TOKEN: "fixture-instance-box", MY_FLAG: "1" } },
+        sameCredential: { driver: "grok", environment: { XAI_API_KEY: "fixture-shared-xai" } },
+        injectedOnly: { driver: "boxAgent" },
+      },
+    };
+    const instances = persistableInstanceConfigs(cfg);
+    expect(instances.computer.environment).toEqual({ BOX_TOKEN: "fixture-instance-box", MY_FLAG: "1" });
+    expect(instances.sameCredential.environment).toEqual({ XAI_API_KEY: "fixture-shared-xai" });
+    expect(instances.injectedOnly.environment).toBeUndefined();
+    instances.computer.environment!.MY_FLAG = "changed";
+    expect(cfg.instances!.computer.environment!.MY_FLAG).toBe("1");
+  });
 });
 
 describe("Instance enabled switch", () => {
@@ -662,6 +686,15 @@ describe("credential env preference", () => {
     expect(cfg.imageGen).toEqual({ key: "env-image" });
   });
 
+  it("saves and removes the verified domain without replacing existing settings", () => {
+    saveConfig({ profile: { name: "Workspace owner" }, customDomain: "https://bots.example.com" });
+    expect(loadConfig().customDomain).toBe("https://bots.example.com");
+    saveConfig({ language: "en" });
+    expect(loadConfig().customDomain).toBe("https://bots.example.com");
+    saveConfig({ customDomain: "" });
+    expect(loadConfig()).toMatchObject({ customDomain: "", language: "en", profile: { name: "Workspace owner" } });
+  });
+
   it("falls back to the config file when the env var is unset (dev mode)", () => {
     writeFileSync(
       join(DATA_DIR, "config.json"),
@@ -696,6 +729,35 @@ describe("credential env preference", () => {
     expect(loadConfig().defaultModelSelection).toEqual(replacement);
     expect(loadConfig().profile).toEqual({ name: "Ada", email: "ada@example.com" });
     expect(loadConfig().instances).toEqual(existing.instances);
+  });
+
+  it("replaces instance membership and known settings while preserving retained extension fields", () => {
+    const path = join(DATA_DIR, "config.json");
+    writeFileSync(path, JSON.stringify({
+      instances: {
+        retained: {
+          driver: "fixture-future-driver",
+          displayName: "Old label",
+          environment: { FIXTURE_TOKEN: "fixture-stored-token" },
+          config: { cli: "/fixture/old-cli" },
+          futureSetting: { keep: true },
+        },
+        removed: { driver: "fixture-removed-driver", futureSetting: { remove: true } },
+      },
+    }));
+    const instances = persistableInstanceConfigs(loadConfig());
+    delete instances.removed;
+    delete instances.retained.displayName;
+    delete instances.retained.environment;
+    delete instances.retained.config;
+
+    saveConfig({ instances }, { replaceInstances: true });
+    expect(JSON.parse(readFileSync(path, "utf8")).instances).toEqual({
+      retained: { driver: "fixture-future-driver", futureSetting: { keep: true } },
+    });
+
+    saveConfig({ instances: {} }, { replaceInstances: true });
+    expect(JSON.parse(readFileSync(path, "utf8")).instances).toEqual({});
   });
 
   it("loads legacy browser profiles without resetting config and canonicalizes them on the next write", () => {

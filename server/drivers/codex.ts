@@ -37,6 +37,7 @@ import { classifyError, computeBackoff, RETRY_MAX_ATTEMPTS } from "./retry.ts";
 import { appendNative } from "./native.ts";
 import { codexDeveloperInstructions, syncCodexInstructions } from "./codex-instructions.ts";
 import type { ApprovalMode } from "../../shared/approval-mode.ts";
+import { CodexDeviceAuthController } from "./codex-device-auth.ts";
 
 export { decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 
@@ -522,6 +523,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       }
     };
     await refreshModels();
+    const authentication = new CodexDeviceAuthController({
+      cli: config.cli,
+      environment: childEnv,
+      onAuthenticated: refreshModels,
+    });
     const listeners = new Set<RuntimeEventListener>();
     interface Turn {
       stop: () => Promise<boolean>;
@@ -1217,6 +1223,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       return models;
     },
     refreshModels,
+    startAuthentication: () => authentication.start(),
+    getAuthentication: (flowId) => authentication.get(flowId),
+    cancelAuthentication: () => authentication.cancel(),
     snapshot,
     adapter: {
       provider: DRIVER_KIND,
@@ -1254,6 +1263,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       },
     },
     dispose: async () => {
+      await authentication.dispose();
       await Promise.all([...active.values()].map(({ stop }) => stop()));
       listeners.clear();
     },

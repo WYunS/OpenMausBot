@@ -26,8 +26,7 @@ export function ModelSection({ bot }: { bot: Bot }) {
         />
       </div>
 
-      {/* The same row the chat header's picker shows, so the two cannot
-          disagree about which levels exist or what is selected. */}
+      {/* Share the model picker's effort choices, but edit the profile default. */}
       <EffortRow
         bot={bot}
         className="rounded-xl bg-card p-4"

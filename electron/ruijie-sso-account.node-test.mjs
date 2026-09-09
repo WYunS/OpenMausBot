@@ -66,3 +66,22 @@ test("restores and signs out an independent OpenMaus SSO session", async () => {
   assert.equal(credentials[RUIJIE_SSO_ACCESS_TOKEN_FIELD], undefined);
   assert.equal(credentials[RUIJIE_SSO_REFRESH_TOKEN_FIELD], undefined);
 });
+
+test("keeps a valid SSO session when billing scope is unavailable", async () => {
+  let credentials = {
+    [RUIJIE_SSO_ACCESS_TOKEN_FIELD]: jwt({ sub: "608", name: "王允尚", exp: 4_102_444_800 }),
+    [RUIJIE_SSO_REFRESH_TOKEN_FIELD]: "refresh",
+  };
+  const service = createRuijieSsoAccountService({
+    readCredentials: () => structuredClone(credentials),
+    updateCredentials: async (derive) => { credentials = await derive(structuredClone(credentials)); },
+    openAuthorization: async () => { throw new Error("not expected"); },
+    fetchImpl: async () => new Response(null, { status: 403 }),
+  });
+
+  const ready = await service.state();
+  assert.equal(ready.status, "ready");
+  assert.equal(ready.summary.account.name, "王允尚");
+  assert.equal(ready.summary.billing, undefined);
+  assert.equal(credentials[RUIJIE_SSO_REFRESH_TOKEN_FIELD], "refresh");
+});
