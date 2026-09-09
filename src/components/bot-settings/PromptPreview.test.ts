@@ -1,7 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { setLocale } from "@/lib/i18n";
 import { PromptPreview, type PromptPreviewData } from "./PromptPreview";
 
 const data: PromptPreviewData = {
@@ -15,6 +16,8 @@ const data: PromptPreviewData = {
 };
 
 describe("PromptPreview", () => {
+  beforeEach(() => setLocale("en"));
+
   it("shows the byte/token header while closed, without the section rows", () => {
     const markup = renderToStaticMarkup(
       createElement(PromptPreview, { data, open: false, onToggle: vi.fn() }),

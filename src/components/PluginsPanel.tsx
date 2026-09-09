@@ -10,6 +10,9 @@ import { t } from "@/lib/i18n";
 import type { LocaleKey } from "@/locales";
 import { readCachedInventory, writeCachedInventory } from "@/lib/connected-apps-cache";
 import { managedConnectorUnavailableReason } from "../../shared/connector-availability";
+import { FeishuCard } from "@/tuantuan/feishu/FeishuCard";
+import { feishuConnected, feishuVisible } from "@/tuantuan/feishu/model";
+import { useFeishu } from "@/tuantuan/feishu/useFeishu";
 import { McpServersPanel } from "./McpServersPanel";
 
 interface ToolkitCard {
@@ -211,7 +214,7 @@ function ServiceIcon({ card }: { card: ToolkitCard }) {
 }
 
 export function PluginsPanel() {
-  const { dispatch } = useStore();
+  const { state: appState, dispatch } = useStore();
   const remoteClient = window.ogb?.remoteClient?.active === true;
   const mayDisconnect = connectedAppsMayDisconnect(remoteClient);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -241,6 +244,7 @@ export function PluginsPanel() {
   const [error, setError] = useState<string | { key: LocaleKey } | null>(null);
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState<"marketplace" | "connected">("marketplace");
+  const feishu = useFeishu(surface === "apps");
 
   const pollTimers = useRef(new Map<string, ReturnType<typeof setInterval>>());
   const statusGenerations = useRef(new Map<string, number>());
@@ -489,7 +493,18 @@ export function PluginsPanel() {
   const visible = matching.filter((card) =>
     tab === "marketplace" || status[card.slug]?.connected || Boolean(status[card.slug]?.accounts?.length)
   );
-  const connectedCount = Object.values(status).filter((service) => service.connected || service.accounts?.length).length;
+  const nativeFeishuConnected = feishu.available
+    ? feishuConnected(feishu.state, feishu.error)
+    : false;
+  const showFeishu = feishuVisible(
+    search,
+    tab,
+    feishu.available ? feishu.state : null,
+    feishu.available ? feishu.error : null,
+  );
+  const connectedCount = Object.values(status).filter(
+    (service) => service.connected || service.accounts?.length,
+  ).length + (nativeFeishuConnected === true ? 1 : 0);
   const connectedEmptyCopy = connectedInventoryCopy(inventoryPhase);
   const close = () => dispatch({ type: "togglePlugins", open: false });
 
@@ -637,20 +652,26 @@ export function PluginsPanel() {
         {error && <div role="alert" className="mx-6 mt-2 rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger sm:mx-8">{typeof error === "string" ? error : t(error.key)}</div>}
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-7 pt-5 sm:px-8">
-          {cards === null ? (
+          <div className="mb-3 text-[12px] font-medium text-ink-secondary">
+            {tab === "connected"
+              ? t("connectors.section.yours")
+              : search
+                ? t("connectors.section.results")
+                : t("connectors.section.available")}
+          </div>
+          <div className="grid grid-cols-1 items-start gap-x-10 md:grid-cols-2">
+            {showFeishu && (
+              <FeishuCard
+                native={feishu}
+                bots={appState.bots}
+                selectedBotId={appState.selectedId}
+              />
+            )}
+            {cards === null && (
             <div className="flex items-center justify-center gap-2 py-24 text-[13px] text-ink-secondary">
               <Loader2 size={14} className="animate-spin" /> {t("connectors.loadingCatalog")}
             </div>
-          ) : (
-            <div>
-              <div className="mb-3 text-[12px] font-medium text-ink-secondary">
-                {tab === "connected"
-                  ? t("connectors.section.yours")
-                  : search
-                    ? t("connectors.section.results")
-                    : t("connectors.section.available")}
-              </div>
-              <div className="grid grid-cols-1 gap-x-10 md:grid-cols-2">
+            )}
               {visible.map((card) => {
               const serviceStatus = status[card.slug];
               const pending = serviceStatus?.pending;
@@ -801,10 +822,8 @@ export function PluginsPanel() {
                 </div>
               );
               })}
-              </div>
-            </div>
-          )}
-          {cards !== null && visible.length === 0 && (
+          </div>
+          {cards !== null && visible.length === 0 && !showFeishu && (
             <div className="flex min-h-56 flex-col items-center justify-center text-center">
               <div className="text-[14px] font-medium text-ink">
                 {tab === "connected" ? connectedEmptyCopy.title : t("connectors.noAppsFound")}

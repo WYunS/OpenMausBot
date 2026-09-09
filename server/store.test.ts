@@ -33,7 +33,7 @@ describe("Store", () => {
       text: `Hi, I'm ${bot.name}. What would you like me to do?`,
     });
     expect(bot.modelSelection).toEqual(selection());
-    expect(bot.computer).toBe("local");
+    expect(bot.computer).toBe("off");
   });
 
   it("dismisses an open options card when the user talks, and leaves live asks", () => {

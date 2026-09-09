@@ -15,4 +15,30 @@ function desktopServerHeaders(headers, { packaged, token }) {
   return next;
 }
 
-module.exports = { DESKTOP_MUTATION_HEADER, desktopServerHeaders };
+function isDesktopMutationTarget(rawUrl, { serverPort, developmentUrl }) {
+  let target;
+  try {
+    target = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  if (
+    target.protocol === "http:" &&
+    target.hostname === "127.0.0.1" &&
+    Number(target.port || 80) === serverPort
+  ) return true;
+
+  if (!developmentUrl || (target.pathname !== "/api" && !target.pathname.startsWith("/api/"))) {
+    return false;
+  }
+  try {
+    const development = new URL(developmentUrl);
+    return development.protocol === "http:" &&
+      ["127.0.0.1", "localhost", "[::1]"].includes(development.hostname) &&
+      target.origin === development.origin;
+  } catch {
+    return false;
+  }
+}
+
+module.exports = { DESKTOP_MUTATION_HEADER, desktopServerHeaders, isDesktopMutationTarget };

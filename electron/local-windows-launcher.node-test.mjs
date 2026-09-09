@@ -14,20 +14,27 @@ test("the desktop wrapper starts PowerShell without flashing a console", async (
   assert.match(source, /shell\.Run command, 0, False/);
 });
 
-test("development services start from absolute paths in this checkout", async () => {
+test("the development desktop owns the credential-aware server and Vite stays external", async () => {
   const source = await readFile(launcher, "utf8");
-  assert.match(source, /Join-Path \$repoRoot 'server\\index\.ts'/);
   assert.match(source, /Join-Path \$repoRoot 'node_modules\\vite\\bin\\vite\.js'/);
   assert.match(source, /\$developmentServerPort\s*=\s*38799/);
   assert.match(source, /Stop-LocalDevelopmentService \$developmentServerPort/);
   assert.match(source, /Stop-LocalDevelopmentService 5199/);
+  assert.match(source, /\$env:OMB_DESKTOP_SERVER\s*=\s*'1'/);
+  assert.doesNotMatch(source, /Start-LocalService 'dev:server'/);
+  assert.match(source, /Start-LocalService 'dev' 'vite'/);
   assert.match(source, /\$env:OMB_CONTROL_PLANE_URL\s*=\s*'https:\/\/accounts\.openmausbot\.com'/);
   assert.match(source, /\[char\]0x9510/);
   assert.match(source, /\[char\]0x6377/);
   assert.match(source, /\$env:OMB_USER_DATA\s*=\s*Join-Path \$env:APPDATA \$ruijieAppName/);
   assert.match(source, /\$env:OMB_DATA_DIR\s*=\s*Join-Path \$env:USERPROFILE '\.openmausbot'/);
   assert.match(source, /\$env:OMB_PORT\s*=\s*\[string\]\$developmentServerPort/);
-  assert.match(source, /\$env:OMB_DESKTOP_PARENT\s*=\s*\$null/);
+  assert.match(source, /Get-ItemProperty[\s\S]*Internet Settings/);
+  assert.match(source, /ProxyEnable\s*-ne\s*1/);
+  assert.match(source, /\$env:NODE_USE_ENV_PROXY\s*=\s*'1'/);
+  assert.match(source, /\$env:HTTPS_PROXY\s*=\s*\$proxy/);
+  assert.match(source, /127\.0\.0\.1,localhost,::1/);
+  assert.doesNotMatch(source, /\$env:OMB_DESKTOP_PARENT\s*=\s*\$null/);
   assert.doesNotMatch(source, /\$env:OMB_USER_DATA\s*=.*'锐捷Bot'/);
 });
 
@@ -54,6 +61,14 @@ test("a cold shortcut launch starts Electron directly and verifies that it stays
   assert.match(source, /Start-Process[\s\S]*-PassThru/);
   assert.match(source, /HasExited/);
   assert.doesNotMatch(source, /Start-LocalService 'dev:desktop' 'desktop'/);
+});
+
+test("an opted-in development desktop uses the same private server ownership path as a package", async () => {
+  const source = await readFile(mainProcess, "utf8");
+  assert.match(source, /const OWNS_LOCAL_SERVER\s*=\s*app\.isPackaged\s*\|\|\s*process\.env\.OMB_DESKTOP_SERVER\s*===\s*"1"/);
+  assert.match(source, /else if \(OWNS_LOCAL_SERVER\) \{\s*serverReady = await startServerPackaged\(\)/);
+  assert.match(source, /app\.isPackaged\s*\?\s*path\.join\(process\.resourcesPath, "server", "index\.js"\)\s*:\s*path\.join\(app\.getAppPath\(\), "server", "index\.ts"\)/);
+  assert.match(source, /execArgv:\s*app\.isPackaged\s*\?\s*\[\]\s*:\s*\["--experimental-strip-types"\]/);
 });
 
 test("the shortcut is never rewritten while it is launching", async () => {

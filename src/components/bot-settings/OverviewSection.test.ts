@@ -1,7 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { setLocale } from "@/lib/i18n";
 import type { BotOverview } from "@/lib/bot-overview-types";
 import type { PromptPreviewData } from "./PromptPreview";
 import { OverviewSection } from "./OverviewSection";
@@ -42,6 +43,9 @@ const prompt: PromptPreviewData = {
 };
 
 describe("OverviewSection", () => {
+  beforeEach(() => setLocale("en"));
+  afterEach(() => setLocale("en"));
+
   it("shows Loading… before the overview arrives", () => {
     const markup = render(
       createElement(OverviewSection, { overview: null, prompt: null, onOpen: vi.fn() }),
@@ -99,5 +103,33 @@ describe("OverviewSection", () => {
     );
 
     expect(markup).not.toContain("Couldn’t refresh");
+  });
+
+  it("localizes overview chrome and known server sentences into Chinese", () => {
+    setLocale("zh");
+    const localized: BotOverview = {
+      ...sentences,
+      does: [],
+      reaches: [
+        "Computer preference: Local VM.",
+        "Works in its private workspace.",
+        "Can use 1 connected app: gmail.",
+      ],
+      wont: [
+        "Command approvals use Ask mode; saved permissions and provider rules still apply.",
+        "Won't act on a schedule.",
+        "Profile proposal cards require your approval.",
+      ],
+      recent: [],
+    };
+    const markup = render(createElement(OverviewSection, { overview: localized, prompt, onOpen: vi.fn() }));
+
+    for (const text of [
+      "工作内容", "还没有计划任务或已学会的技能。", "可访问范围", "执行环境偏好：本地虚拟机。",
+      "在私有工作区内工作。", "可使用 1 个已连接的应用：gmail。", "操作边界",
+      "命令使用“每次问我”审批，已保存的权限和提供商规则仍然有效。", "不会按计划自动运行。",
+      "档案变更提案需要你确认。", "提示词预览 · 42 字节 ≈ 11 个令牌", "最近更改", "查看全部 →",
+      "最近没有更改。",
+    ]) expect(markup).toContain(text);
   });
 });

@@ -1194,6 +1194,10 @@ describe("bot settings section", () => {
     messages: [],
   } as never as Bot;
 
+  it("starts with the computer panel closed", () => {
+    expect(initialState.computerOpen).toBe(false);
+  });
+
   it("toggleSettings with a section sets it and opens", () => {
     const next = reducer(initialState, {
       type: "toggleSettings",

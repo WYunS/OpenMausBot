@@ -1,0 +1,17 @@
+{
+  "amaroCommit": "859befe9883c9f615806a5f9618e08a913170291",
+  "bundledWasmSha256": "2c8132e2c965a6a10024bf83dcee287fe15a0cb90f987394d1f9f3d68053a851",
+  "upstreamWasmSha256": "2c8132e2c965a6a10024bf83dcee287fe15a0cb90f987394d1f9f3d68053a851",
+  "equal": true,
+  "bytes": 2504689,
+  "cargoLockSha256": "25330e75e6fbf0f73d71d7143d7293ee95d183e4104809fc2d797aae898a9e3b",
+  "sections": {
+    "producers": [
+      "\u0001\fprocessed-by\u0002\u0006walrus\u00060.23.3\fwasm-bindgen\u00070.2.100"
+    ],
+    "name": [
+      "\u0001C\u0002<\u001e__wbindgen_closure_wrapper5029� \u001f__wbindgen_add_to_stack_pointer"
+    ],
+    "target_features": []
+  }
+}

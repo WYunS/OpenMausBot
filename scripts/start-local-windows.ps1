@@ -16,10 +16,40 @@ $ruijieAppName = ([string][char]0x9510) + ([char]0x6377) + 'Bot'
 $env:OMB_USER_DATA = Join-Path $env:APPDATA $ruijieAppName
 $env:OMB_DATA_DIR = Join-Path $env:USERPROFILE '.openmausbot'
 $env:OMB_PORT = [string]$developmentServerPort
-# A source server is not Electron's utility child and must discover the
-# development bridge from the descriptor above.
-$env:OMB_DESKTOP_PARENT = $null
+# Let Electron own the source server so encrypted plugin credentials travel
+# over the same private parent/child channel used by packaged builds.
+$env:OMB_DESKTOP_SERVER = '1'
 $env:OMB_BROWSER_CONNECTION = $null
+
+function Set-NodeSystemProxy {
+  # Node's fetch does not use the Windows proxy unless env-proxy support is
+  # enabled explicitly. Mirror the current per-user proxy without hard-coding
+  # a local client's port, while keeping Electron's local services direct.
+  $settings = Get-ItemProperty `
+    -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' `
+    -ErrorAction SilentlyContinue
+  if (-not $settings -or $settings.ProxyEnable -ne 1) { return }
+
+  $proxy = [string]$settings.ProxyServer
+  if ($proxy.Contains('=')) {
+    $entries = @{}
+    foreach ($item in $proxy.Split(';', [StringSplitOptions]::RemoveEmptyEntries)) {
+      $parts = $item.Split('=', 2)
+      if ($parts.Count -eq 2) { $entries[$parts[0].Trim().ToLowerInvariant()] = $parts[1].Trim() }
+    }
+    $proxy = if ($entries.https) { $entries.https } else { $entries.http }
+  }
+  if (-not $proxy) { return }
+  if ($proxy -notmatch '^[a-z][a-z0-9+.-]*://') { $proxy = "http://$proxy" }
+
+  $env:NODE_USE_ENV_PROXY = '1'
+  if (-not $env:HTTP_PROXY) { $env:HTTP_PROXY = $proxy }
+  if (-not $env:HTTPS_PROXY) { $env:HTTPS_PROXY = $proxy }
+  $localBypass = '127.0.0.1,localhost,::1'
+  $env:NO_PROXY = if ($env:NO_PROXY) { "$localBypass,$env:NO_PROXY" } else { $localBypass }
+}
+
+Set-NodeSystemProxy
 
 function Test-LocalPort([int]$Port) {
   $client = [Net.Sockets.TcpClient]::new()
@@ -36,11 +66,7 @@ function Test-LocalPort([int]$Port) {
 function Start-LocalService([string]$Script, [string]$Name) {
   $nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue
   if (-not $nodeCommand) { throw 'Node.js was not found.' }
-  $arguments = if ($Script -eq 'dev:server') {
-    @('--experimental-strip-types', (Join-Path $repoRoot 'server\index.ts'))
-  } else {
-    @((Join-Path $repoRoot 'node_modules\vite\bin\vite.js'))
-  }
+  $arguments = @((Join-Path $repoRoot 'node_modules\vite\bin\vite.js'))
   Start-Process -FilePath $nodeCommand.Source `
     -ArgumentList $arguments `
     -WorkingDirectory $repoRoot `
@@ -118,31 +144,35 @@ function Invoke-Launcher {
   }
 
   # A closed development window must not reconnect to a server left behind by
-  # another checkout or an older source revision. Cold launches own these two
-  # development ports, restart known OpenMausBot services, and use absolute
-  # script paths so ownership is visible in process diagnostics.
+  # another checkout or an older source revision. Electron owns the server so
+  # it can pass encrypted credentials through its private child-process channel;
+  # this wrapper owns only Vite.
   Stop-LocalDevelopmentService $developmentServerPort
   Stop-LocalDevelopmentService 5199
-  Start-LocalService 'dev:server' 'server'
   Start-LocalService 'dev' 'vite'
 
   $deadline = (Get-Date).AddSeconds(45)
-  while ((Get-Date) -lt $deadline -and (-not (Test-LocalPort $developmentServerPort) -or -not (Test-LocalPort 5199))) {
+  while ((Get-Date) -lt $deadline -and -not (Test-LocalPort 5199)) {
     Start-Sleep -Milliseconds 250
   }
-  if (-not (Test-LocalPort $developmentServerPort) -or -not (Test-LocalPort 5199)) {
-    throw "Local services did not become ready. See $logRoot"
+  if (-not (Test-LocalPort 5199)) {
+    throw "The local UI did not become ready. See $logRoot"
   }
 
   $env:CUA_DRIVER_PATH = Join-Path $repoRoot 'dist-native\cua-win32-x64\cua-driver.exe'
   $desktopProcess = Start-DesktopApp
 
-  # A successful GUI launch remains alive. Catch immediate bootstrap failures
-  # while this hidden launcher is still present so double-click never fails
-  # without an explanation.
-  Start-Sleep -Seconds 3
+  # Electron starts the credential-aware source server before creating its
+  # window. Keep the launcher around long enough to surface either failure.
+  $deadline = (Get-Date).AddSeconds(60)
+  while ((Get-Date) -lt $deadline -and -not $desktopProcess.HasExited -and -not (Test-LocalPort $developmentServerPort)) {
+    Start-Sleep -Milliseconds 250
+  }
   if ($desktopProcess.HasExited) {
     throw "Desktop process exited during startup with code $($desktopProcess.ExitCode)."
+  }
+  if (-not (Test-LocalPort $developmentServerPort)) {
+    throw "The local bot server did not become ready. See $logRoot"
   }
 }
 

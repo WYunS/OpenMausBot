@@ -44,6 +44,7 @@ import { useDesktopCapabilities } from "@/components/DesktopCapabilities";
 import { WebhooksPanel } from "@/components/WebhooksPanel";
 import type { CalendarCall, CalendarCallAttachment, CalendarCallInput } from "@/lib/calendar-calls";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 import {
   imageAttachmentFromFile,
   intakeFiles,
@@ -1085,7 +1086,7 @@ function CalendarGrid({
         {starts.map((start) => {
           const date = new Date(start);
           const isToday = start === today;
-          return <div key={start} role="columnheader" className={cn("border-b border-r border-hairline/40 px-2 py-2 text-center last:border-r-0", isToday && "bg-accent/[0.035]")}><div className={cn("text-[10px] font-medium uppercase tracking-[0.14em]", isToday ? "text-accent" : "text-ink-secondary")}>{DAY_NAMES[date.getDay()]}</div><div className={cn("mx-auto mt-1 flex size-8 items-center justify-center rounded-full text-[15px] font-medium", isToday ? "bg-accent text-white" : "text-ink")}>{date.getDate()}</div></div>;
+          return <div key={start} role="columnheader" className={cn("border-b border-r border-hairline/40 px-2 py-2 text-center last:border-r-0", isToday && "bg-accent/[0.035]")}><div className={cn("text-[10px] font-medium uppercase tracking-[0.14em]", isToday ? "text-accent" : "text-ink-secondary")}>{date.toLocaleDateString([], { weekday: "short" })}</div><div className={cn("mx-auto mt-1 flex size-8 items-center justify-center rounded-full text-[15px] font-medium", isToday ? "bg-accent text-white" : "text-ink")}>{date.getDate()}</div></div>;
         })}
       </div>
       <div role="grid" aria-label="Routine and call calendar" onDragEnd={() => setDragPreview(null)} className="relative grid" style={{ height: HOUR_HEIGHT * 24, gridTemplateColumns, minWidth }}>
@@ -1493,51 +1494,51 @@ export function RoutinesPage({ onBack, onOpenRoom }: { onBack: () => void; onOpe
             type="button"
             ref={backButtonRef}
             onClick={onBack}
-            aria-label="Back"
-            title="Back"
+            aria-label={t("common.back")}
+            title={t("common.back")}
             className="flex size-9 shrink-0 items-center justify-center rounded-lg text-ink-secondary hover:bg-raised hover:text-ink"
             style={windowNoDragStyle}
           >
             <ArrowLeft size={18} />
           </button>
-          <div className="mr-2 flex items-center gap-2"><CalendarDays size={21} className="text-accent" /><h1 className="text-[18px] font-semibold tracking-tight text-ink">Automations</h1></div>
-          <div className="flex items-center rounded-lg border border-hairline/50 bg-panel p-0.5" style={windowNoDragStyle} aria-label="Automation type">
-            <button type="button" aria-pressed={section === "calendar"} onClick={() => setSection("calendar")} className={cn("rounded-md px-3 py-1.5 text-[11.5px] font-medium", section === "calendar" ? "bg-raised text-ink shadow-sm" : "text-ink-secondary hover:text-ink")}>{routinesOnly ? "Scheduled routines" : "Schedule"}</button>
-            {!routinesOnly && <button type="button" aria-pressed={section === "webhooks"} onClick={() => setSection("webhooks")} className={cn("flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[11.5px] font-medium", section === "webhooks" ? "bg-raised text-ink shadow-sm" : "text-ink-secondary hover:text-ink")}><Webhook size={12} />Webhooks{state.webhooks.length > 0 && <span className="rounded-full bg-accent/15 px-1.5 text-[9px] text-accent">{state.webhooks.length}</span>}</button>}
+          <div className="mr-2 flex items-center gap-2"><CalendarDays size={21} className="text-accent" /><h1 className="text-[18px] font-semibold tracking-tight text-ink">{t("automation.title")}</h1></div>
+          <div className="flex items-center rounded-lg border border-hairline/50 bg-panel p-0.5" style={windowNoDragStyle} aria-label={t("automation.typeAria")}>
+            <button type="button" aria-pressed={section === "calendar"} onClick={() => setSection("calendar")} className={cn("rounded-md px-3 py-1.5 text-[11.5px] font-medium", section === "calendar" ? "bg-raised text-ink shadow-sm" : "text-ink-secondary hover:text-ink")}>{routinesOnly ? t("automation.scheduledRoutines") : t("automation.schedule")}</button>
+            {!routinesOnly && <button type="button" aria-pressed={section === "webhooks"} onClick={() => setSection("webhooks")} className={cn("flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[11.5px] font-medium", section === "webhooks" ? "bg-raised text-ink shadow-sm" : "text-ink-secondary hover:text-ink")}><Webhook size={12} />{t("automation.webhooks")}{state.webhooks.length > 0 && <span className="rounded-full bg-accent/15 px-1.5 text-[9px] text-accent">{state.webhooks.length}</span>}</button>}
           </div>
           <details ref={newMenuRef} className="group relative ml-auto" style={windowNoDragStyle}>
-            <summary aria-label="Create an automation" className="flex cursor-pointer list-none items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-[12px] font-semibold text-white hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
-              <Plus size={15} aria-hidden="true" />New
+            <summary aria-label={t("automation.createAria")} className="flex cursor-pointer list-none items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-[12px] font-semibold text-white hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
+              <Plus size={15} aria-hidden="true" />{t("automation.new")}
             </summary>
             <div role="group" aria-label="New automation" className="absolute right-0 top-full z-40 mt-1.5 w-[280px] rounded-xl border border-hairline/60 bg-card p-1.5 shadow-2xl">
               <button type="button" aria-label="Create a scheduled task" onClick={() => { newMenuRef.current?.removeAttribute("open"); setSection("calendar"); openCreate({ kind: "routine" }); }} className="flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-raised">
                 <Clock3 size={16} className="mt-0.5 shrink-0 text-accent" aria-hidden="true" />
-                <span><span className="block text-[12.5px] font-medium text-ink">Scheduled task</span><span className="mt-0.5 block text-[10.5px] leading-relaxed text-ink-secondary">Ask a bot to do something later.</span></span>
+                <span><span className="block text-[12.5px] font-medium text-ink">{t("automation.scheduledTask")}</span><span className="mt-0.5 block text-[10.5px] leading-relaxed text-ink-secondary">{t("automation.scheduledTaskHelp")}</span></span>
               </button>
               {!routinesOnly && <button type="button" aria-label="Create a scheduled call" onClick={() => { newMenuRef.current?.removeAttribute("open"); setSection("calendar"); openCreate({ kind: "call" }); }} className="flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-raised">
                 <Video size={16} className="mt-0.5 shrink-0 text-accent" aria-hidden="true" />
-                <span><span className="block text-[12.5px] font-medium text-ink">Scheduled call</span><span className="mt-0.5 block text-[10.5px] leading-relaxed text-ink-secondary">Bring bots together at a set time.</span></span>
+                <span><span className="block text-[12.5px] font-medium text-ink">{t("automation.scheduledCall")}</span><span className="mt-0.5 block text-[10.5px] leading-relaxed text-ink-secondary">{t("automation.scheduledCallHelp")}</span></span>
               </button>}
               {!routinesOnly && <button type="button" aria-label="Create a webhook" disabled={visibleBots.length === 0} onClick={() => { newMenuRef.current?.removeAttribute("open"); setSection("webhooks"); setWebhookCreateRequest((request) => request + 1); }} className="flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-raised disabled:cursor-not-allowed disabled:opacity-40">
                 <Webhook size={16} className="mt-0.5 shrink-0 text-accent" aria-hidden="true" />
-                <span><span className="block text-[12.5px] font-medium text-ink">Webhook</span><span className="mt-0.5 block text-[10.5px] leading-relaxed text-ink-secondary">Start a task when another app sends an event.</span></span>
+                <span><span className="block text-[12.5px] font-medium text-ink">{t("automation.webhook")}</span><span className="mt-0.5 block text-[10.5px] leading-relaxed text-ink-secondary">{t("automation.webhookHelp")}</span></span>
               </button>}
             </div>
           </details>
         </div>
         {section === "calendar" && <div className="mt-2 flex flex-wrap items-center gap-2" style={windowNoDragStyle}>
           <div className="flex items-center rounded-lg border border-hairline/50 bg-panel p-0.5">
-            <button onClick={() => setAnchor((current) => addDays(current, -viewDays))} className="rounded-md p-2 text-ink-secondary hover:bg-raised hover:text-ink" aria-label="Previous dates"><ChevronLeft size={16} /></button>
-            <button onClick={goToday} className="rounded-md px-3 py-1.5 text-[12px] font-medium text-ink hover:bg-raised">Today</button>
-            <button onClick={() => setAnchor((current) => addDays(current, viewDays))} className="rounded-md p-2 text-ink-secondary hover:bg-raised hover:text-ink" aria-label="Next dates"><ChevronRight size={16} /></button>
+            <button onClick={() => setAnchor((current) => addDays(current, -viewDays))} className="rounded-md p-2 text-ink-secondary hover:bg-raised hover:text-ink" aria-label={t("automation.previousDates")}><ChevronLeft size={16} /></button>
+            <button onClick={goToday} className="rounded-md px-3 py-1.5 text-[12px] font-medium text-ink hover:bg-raised">{t("automation.today")}</button>
+            <button onClick={() => setAnchor((current) => addDays(current, viewDays))} className="rounded-md p-2 text-ink-secondary hover:bg-raised hover:text-ink" aria-label={t("automation.nextDates")}><ChevronRight size={16} /></button>
           </div>
           <div className="min-w-[220px] px-2 text-[15px] font-medium text-ink">{calendarRangeLabel(rangeStart, viewDays)}</div>
           <div className="ml-auto flex items-center gap-2">
-            {running > 0 && <span className="hidden items-center gap-1.5 rounded-full bg-accent/10 px-2.5 py-1.5 text-[10.5px] text-accent sm:flex"><Loader2 size={11} className="animate-spin" />{running} active</span>}
+            {running > 0 && <span className="hidden items-center gap-1.5 rounded-full bg-accent/10 px-2.5 py-1.5 text-[10.5px] text-accent sm:flex"><Loader2 size={11} className="animate-spin" />{t("automation.activeCount", { count: running })}</span>}
             {unseenFailures > 0 && <span className="hidden items-center gap-1.5 rounded-full bg-danger/10 px-2.5 py-1.5 text-[10.5px] text-danger sm:flex"><CircleAlert size={11} />{unseenFailures}</span>}
             {paused.length > 0 && <button onClick={() => setPausedOpen(true)} className="hidden items-center gap-1.5 rounded-full border border-hairline/50 px-2.5 py-1.5 text-[10.5px] text-ink-secondary hover:bg-raised sm:flex"><Pause size={11} />{paused.length}</button>}
-            <select aria-label="Filter schedule by bot" value={botFilter} onChange={(event) => setBotFilter(event.target.value)} className="hidden rounded-lg border border-hairline/50 bg-panel px-2.5 py-2 text-[11.5px] text-ink outline-none focus:border-accent sm:block"><option value="all">All bots</option>{visibleBots.map((bot) => <option key={bot.id} value={bot.id}>{bot.name}</option>)}</select>
-            <select aria-label="Schedule range" value={viewDays} onChange={(event) => setView(Number(event.target.value) as 1 | 3 | 7)} className="rounded-lg border border-hairline/50 bg-panel px-2.5 py-2 text-[11.5px] text-ink outline-none focus:border-accent"><option value={1}>Day</option><option value={3}>3 days</option><option value={7}>Week</option></select>
+            <select aria-label={t("automation.filterBot")} value={botFilter} onChange={(event) => setBotFilter(event.target.value)} className="hidden rounded-lg border border-hairline/50 bg-panel px-2.5 py-2 text-[11.5px] text-ink outline-none focus:border-accent sm:block"><option value="all">{t("automation.allBots")}</option>{visibleBots.map((bot) => <option key={bot.id} value={bot.id}>{bot.name}</option>)}</select>
+            <select aria-label={t("automation.range")} value={viewDays} onChange={(event) => setView(Number(event.target.value) as 1 | 3 | 7)} className="rounded-lg border border-hairline/50 bg-panel px-2.5 py-2 text-[11.5px] text-ink outline-none focus:border-accent"><option value={1}>{t("automation.day")}</option><option value={3}>{t("automation.threeDays")}</option><option value={7}>{t("automation.week")}</option></select>
           </div>
           {error && <button onClick={() => setError("")} className="flex items-center gap-1.5 rounded-lg bg-danger/10 px-2.5 py-1.5 text-[10.5px] text-danger"><CircleAlert size={11} />{error}<X size={11} /></button>}
         </div>}

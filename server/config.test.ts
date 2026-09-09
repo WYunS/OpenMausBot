@@ -381,15 +381,16 @@ describe("default fleet", () => {
     expect(map.ruijieHarness.config).toEqual({ expectedAccountEmail: "wangyunshang@ruijie.com.cn" });
   });
 
-  it("ships Qwen and Hermes as custom-only engines", () => {
+  it("ships every default-fleet engine enabled", () => {
     const map = instanceConfigs({});
-    expect(map.qwen).toEqual({ driver: "qwenAgent", enabled: false, environment: {} });
-    expect(map.hermes).toEqual({ driver: "hermesAgent", enabled: false, environment: {} });
+    expect(Object.values(map).every((entry) => entry.enabled === true)).toBe(true);
+    expect(map.qwen).toEqual({ driver: "qwenAgent", enabled: true, environment: {} });
+    expect(map.hermes).toEqual({ driver: "hermesAgent", enabled: true, environment: {} });
   });
 
   it("ships Cursor as a default-fleet subscription engine", () => {
     const map = instanceConfigs({});
-    expect(map.cursor).toEqual({ driver: "cursorAgent", enabled: false, environment: {} });
+    expect(map.cursor).toEqual({ driver: "cursorAgent", enabled: true, environment: {} });
   });
 
   it("carries the saved OpenAI-compatible URL into the live default instance", () => {
@@ -529,12 +530,9 @@ describe("Instance CLI override", () => {
 });
 
 describe("Instance enabled switch", () => {
-  it("defaults the product fleet off except for Harness", () => {
+  it("defaults the whole product fleet on", () => {
     const map = instanceConfigs({});
-    expect(map.ruijieHarness.enabled).toBe(true);
-    expect(map.codex.enabled).toBe(false);
-    expect(map.claude.enabled).toBe(false);
-    expect(map.grok.enabled).toBe(false);
+    expect(Object.values(map).every((entry) => entry.enabled === true)).toBe(true);
   });
 
   it("persists an explicit user choice without deleting CLI configuration", () => {

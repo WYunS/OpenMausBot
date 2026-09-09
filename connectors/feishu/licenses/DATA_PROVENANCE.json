@@ -1,0 +1,17 @@
+{
+  "certdataSha256": "3b98d4e3ff57a326d9587c33633039c8c3a9cf0b55f7ca581d7598ff329eb1f3",
+  "headerSha256": "b8381bf64c65982dc9e93e87489e98f25cc660cfe46bd0f53ffaf99154ac6aac",
+  "headerCertCount": 145,
+  "sourceCertCount": 181,
+  "allHeaderCertsInSource": true,
+  "sourceLicenseHeader": [
+    "#",
+    "# This Source Code Form is subject to the terms of the Mozilla Public",
+    "# License, v. 2.0. If a copy of the MPL was not distributed with this",
+    "# file, You can obtain one at http://mozilla.org/MPL/2.0/.",
+    ""
+  ],
+  "swcJsxEntityProbe": {
+    "code": "const element = <p>&amp;</p>;"
+  }
+}

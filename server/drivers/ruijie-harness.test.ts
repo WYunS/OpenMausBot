@@ -445,6 +445,46 @@ describe("Ruijie Harness driver", () => {
     }
   });
 
+  it("mounts connected apps through a managed Harness user preset", async () => {
+    const dshHome = await mkdtemp(join(tmpdir(), "openmaus-rjh-test-"));
+    try {
+      const instance = await RuijieHarnessDriver.create({
+        instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
+        config: {
+          endpoint: "http://127.0.0.1:49724",
+          expectedAccountEmail: "wangyunshang@ruijie.com.cn",
+          dshHome,
+        },
+      });
+
+      expect(instance.adapter.capabilities).toMatchObject({ composioMcp: true });
+      await instance.adapter.sendTurn({
+        threadId: "thread-composio",
+        text: "读取 Gmail",
+        cwd: "C:\\work",
+        integrations: {
+          composio: {
+            command: "C:\\OpenMaus\\electron.exe",
+            args: ["connector-proxy.js"],
+            env: { OMB_CONNECTOR_TOKEN: "secret" },
+          },
+        },
+      });
+
+      const create = calls.find((call) => call.method === "session.create");
+      expect(create?.payload).toMatchObject({ cwd: "C:\\work", agentPreset: expect.stringMatching(/^openmaus-composio-/) });
+      const preset = await readFile(join(dshHome, ".agent-presets", create!.payload.agentPreset, "agent.cordis.yml"), "utf8");
+      expect(preset).toMatch(/serverName: omb_[a-f0-9]{24}/);
+      const serverName = preset.match(/serverName: (\S+)/)?.[1];
+      expect(serverName).toBeTruthy();
+      expect(serverName!.length).toBeLessThanOrEqual(32);
+      expect(preset).toContain('command: "C:\\\\OpenMaus\\\\electron.exe"');
+      expect(preset).toContain('"OMB_CONNECTOR_TOKEN":"secret"');
+    } finally {
+      await rm(dshHome, { recursive: true, force: true });
+    }
+  });
+
   it("uses a distinct computer MCP preset for each Harness session", async () => {
     const dshHome = await mkdtemp(join(tmpdir(), "openmaus-rjh-test-"));
     try {

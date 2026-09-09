@@ -29,6 +29,7 @@ const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  *   port: number,
  *   pid: () => number | undefined,
  *   bootTimeoutMs: number,
+ *   requireStatic?: boolean,
  *   isExited?: () => boolean,
  *   now?: () => number,
  *   sleep?: (ms: number) => Promise<void>,
@@ -40,6 +41,7 @@ export async function pollServerIdentity({
   port,
   pid,
   bootTimeoutMs,
+  requireStatic = true,
   isExited = () => false,
   now = Date.now,
   sleep = defaultSleep,
@@ -78,7 +80,7 @@ export async function pollServerIdentity({
       expectedPid !== undefined &&
       body?.app === "openmausbot" &&
       body.pid === expectedPid &&
-      body.static;
+      (!requireStatic || body.static);
     if (!identified) return { outcome: "foreign-owner" };
     // A response that finishes after the budget must not count as a healthy
     // boot — re-check the clock before declaring victory.

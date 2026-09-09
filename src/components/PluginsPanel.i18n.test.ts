@@ -19,6 +19,11 @@ afterEach(() => {
 });
 
 describe("plugins modal translation", () => {
+  it("keeps the Chinese stale-status warning platform-neutral and actionable", () => {
+    expect(locales.zh!["connectors.stale"]).not.toContain("Mac");
+    expect(locales.zh!["connectors.stale"]).toContain("刷新");
+  });
+
   it("translates the account action label in every pack", () => {
     const state = {
       busy: false,

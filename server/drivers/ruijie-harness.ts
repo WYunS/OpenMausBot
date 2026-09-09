@@ -164,6 +164,7 @@ async function resolveDshHome(config: RuijieHarnessConfig): Promise<string> {
 }
 
 type StdioIntegration = { command: string; args: string[]; env: Record<string, string> };
+type NamedStdioIntegration = { name: "computer" | "composio"; integration: StdioIntegration };
 
 function computerIntegration(turn: SendTurnInput): StdioIntegration | undefined {
   if (turn.integrations?.localComputer) {
@@ -180,10 +181,23 @@ function computerIntegration(turn: SendTurnInput): StdioIntegration | undefined 
   return undefined;
 }
 
-function stableIntegrationKey(integration: StdioIntegration | undefined): string {
-  if (!integration) return "none";
-  const env = Object.fromEntries(Object.entries(integration.env).sort(([a], [b]) => a.localeCompare(b)));
-  return createHash("sha256").update(JSON.stringify({ ...integration, env })).digest("hex").slice(0, 20);
+function stdioIntegrations(turn: SendTurnInput, computer: StdioIntegration | undefined): NamedStdioIntegration[] {
+  return [
+    ...(computer ? [{ name: "computer" as const, integration: computer }] : []),
+    ...(turn.integrations?.composio
+      ? [{ name: "composio" as const, integration: turn.integrations.composio }]
+      : []),
+  ];
+}
+
+function stableIntegrationKey(integrations: NamedStdioIntegration[]): string {
+  if (integrations.length === 0) return "none";
+  const normalized = integrations.map(({ name, integration }) => ({
+    name,
+    ...integration,
+    env: Object.fromEntries(Object.entries(integration.env).sort(([a], [b]) => a.localeCompare(b))),
+  }));
+  return createHash("sha256").update(JSON.stringify(normalized)).digest("hex").slice(0, 20);
 }
 
 function sessionIntegrationKey(integrationKey: string, threadId: string, mountAttempt: string): string {
@@ -193,13 +207,17 @@ function sessionIntegrationKey(integrationKey: string, threadId: string, mountAt
     .slice(0, 20);
 }
 
-function mcpPresetContent(base: string, integration: StdioIntegration, key: string): string {
+function mcpServerName(name: NamedStdioIntegration["name"], key: string): string {
+  return `omb_${createHash("sha256").update(`${name}\0${key}`).digest("hex").slice(0, 24)}`;
+}
+
+function mcpPresetContent(base: string, integrations: NamedStdioIntegration[], key: string): string {
   const suffix = base.endsWith("\n") ? "" : "\n";
-  return `${base}${suffix}\n# Managed by OpenMausBot. This is user configuration, not Harness source.\n` +
-    `- id: openmaus-computer-${key}\n` +
+  const entries = integrations.map(({ name, integration }) =>
+    `- id: openmaus-${name}-${key}\n` +
     `  name: '@deepseek-ai/dsh-mcp-client'\n` +
     `  config:\n` +
-    `    serverName: openmaus_${key}\n` +
+    `    serverName: ${mcpServerName(name, key)}\n` +
     `    transport: stdio\n` +
     `    command: ${JSON.stringify(integration.command)}\n` +
     `    args: ${JSON.stringify(integration.args)}\n` +
@@ -208,16 +226,19 @@ function mcpPresetContent(base: string, integration: StdioIntegration, key: stri
     // MCP handshake fails open, the prompt can run without computer tools and
     // reconnecting later cannot repair that turn. Keep creation atomic; the
     // caller retries with a fresh mount name before it sends any prompt.
-    `    failOnStartupError: true\n`;
+    `    failOnStartupError: true\n`
+  ).join("");
+  return `${base}${suffix}\n# Managed by OpenMausBot. This is user configuration, not Harness source.\n${entries}`;
 }
 
-async function ensureComputerPreset(
+async function ensureIntegrationPreset(
   endpoint: string,
   config: RuijieHarnessConfig,
-  integration: StdioIntegration,
+  integrations: NamedStdioIntegration[],
   key: string,
 ): Promise<string> {
-  const presetId = `openmaus-computer-${key}`;
+  const kind = integrations.length === 1 ? integrations[0]!.name : "integrations";
+  const presetId = `openmaus-${kind}-${key}`;
   const home = await resolveDshHome(config);
   const directory = join(home, ".agent-presets", presetId);
   const target = join(directory, "agent.cordis.yml");
@@ -225,7 +246,7 @@ async function ensureComputerPreset(
   if (typeof base.content !== "string" || !base.content.trim()) throw new Error("锐捷 Harness 的 standard 预设不可读取");
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(temporary, mcpPresetContent(base.content, integration, key), { encoding: "utf8", mode: 0o600 });
+  await writeFile(temporary, mcpPresetContent(base.content, integrations, key), { encoding: "utf8", mode: 0o600 });
   await rename(temporary, target);
   return presetId;
 }
@@ -629,13 +650,15 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
         queueing: false,
         computerMcp: true,
         localComputerMcp: true,
+        composioMcp: true,
       },
       async sendTurn(turn: SendTurnInput) {
         if (active.has(turn.threadId)) throw new Error("锐捷 Harness 正在处理这个会话");
         const endpoint = await resolveEndpoint(input.config);
         await matchingSsoSummary(endpoint, input.config.expectedAccountEmail);
-        const integration = computerIntegration(turn);
-        const integrationKey = stableIntegrationKey(integration);
+        const computer = computerIntegration(turn);
+        const integrations = stdioIntegrations(turn, computer);
+        const integrationKey = stableIntegrationKey(integrations);
         let session = sessions.get(turn.threadId);
         if (session && session.integrationKey !== integrationKey) session = undefined;
         let sessionId = session?.id;
@@ -643,7 +666,7 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
           sessionId = turn.resumeCursor;
         }
         if (!sessionId) {
-          if (!integration) {
+          if (integrations.length === 0) {
             const created = await rpc<{ sessionId: string }>(endpoint, "session.create", { cwd: turn.cwd });
             sessionId = created.sessionId;
           } else {
@@ -654,10 +677,10 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
             // user work or model usage.
             let lastError: unknown;
             for (let attempt = 0; attempt < 2 && !sessionId; attempt += 1) {
-              const agentPreset = await ensureComputerPreset(
+              const agentPreset = await ensureIntegrationPreset(
                 endpoint,
                 input.config,
-                integration,
+                integrations,
                 sessionIntegrationKey(integrationKey, turn.threadId, newId()),
               );
               try {
@@ -686,7 +709,7 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
           abort: new AbortController(),
           interrupted: false,
           settled: false,
-          requiresComputerAction: Boolean(integration) && computerActionRequested(turn.text),
+          requiresComputerAction: Boolean(computer) && computerActionRequested(turn.text),
           computerToolSucceeded: false,
           computerRetryCount: 0,
           toolNames: new Map(),

@@ -1065,8 +1065,8 @@ export function ArchivedBotsButton({
     <button
       type="button"
       onClick={onClick}
-      aria-label={iconOnly ? `Archived bots (${count})` : undefined}
-      title={iconOnly ? `Archived bots (${count})` : undefined}
+      aria-label={iconOnly ? t("sidebar.archived.buttonAria", { count }) : undefined}
+      title={iconOnly ? t("sidebar.archived.buttonAria", { count }) : undefined}
       className={cn(
         "relative flex min-h-10 w-full items-center rounded-xl py-2 text-left transition-colors",
         iconOnly ? "justify-center px-2" : "gap-3 px-3",
@@ -1074,7 +1074,7 @@ export function ArchivedBotsButton({
       )}
     >
       <Archive size={20} className="text-ink-secondary" />
-      <span className={cn("flex-1 text-[14px]", iconOnly && "hidden")}>Archived bots</span>
+      <span className={cn("flex-1 text-[14px]", iconOnly && "hidden")}>{t("sidebar.archived.title")}</span>
       {!iconOnly && <span className="text-[11.5px] tabular-nums text-ink-secondary">{count}</span>}
       {iconOnly && count > 0 && (
         <span className="absolute right-1.5 top-1.5 flex min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[9px] font-semibold text-white">
@@ -1196,12 +1196,12 @@ function ArchivedBotsPanel({
           </div>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-7 pt-3 sm:px-8">
-          <div className="mb-3 text-[12px] font-medium text-ink-secondary">{bots.length} archived</div>
+          <div className="mb-3 text-[12px] font-medium text-ink-secondary">{t("sidebar.archived.count", { count: bots.length })}</div>
           {bots.length === 0 ? (
             <div className="flex min-h-48 flex-col items-center justify-center rounded-2xl border border-dashed border-hairline/50 bg-card/35 px-6 text-center">
               <Archive size={28} className="mb-3 text-ink-secondary" />
-              <div className="text-[14px] font-medium text-ink">No archived bots</div>
-              <div className="mt-1 text-[12.5px] text-ink-secondary">Bots you archive will appear here and can be restored.</div>
+              <div className="text-[14px] font-medium text-ink">{t("sidebar.archived.emptyTitle")}</div>
+              <div className="mt-1 text-[12.5px] text-ink-secondary">{t("sidebar.archived.emptyBody")}</div>
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-x-8 md:grid-cols-2">

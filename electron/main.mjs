@@ -89,6 +89,7 @@ import environmentsModule from "./environments.cjs";
 import localOriginModule from "./local-origin.cjs";
 import { buildApplicationMenu } from "./menu.mjs";
 import { acquireDataDirLease } from "./data-dir-lease.mjs";
+import { registerFeishu, awaitFeishuShutdown } from "./tuantuan-feishu.mjs";
 
 const { desktopCapabilities, nativeDesktopActions } = capabilitiesModule;
 const nativeActions = nativeDesktopActions(process.platform);
@@ -100,7 +101,7 @@ const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.
 const { DESKTOP_VIEWER_USER_AGENT, desktopViewerUrl, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
 const { createDesktopWorkspaceManager } = require("./desktop-workspace.cjs");
 const { createTrustedApprovalModeCoordinator } = require("./approval-trusted-mode.cjs");
-const { DESKTOP_MUTATION_HEADER, desktopServerHeaders } = require("./desktop-server-auth.cjs");
+const { DESKTOP_MUTATION_HEADER, desktopServerHeaders, isDesktopMutationTarget } = require("./desktop-server-auth.cjs");
 const { createBrowserSurfaceManager } = require("./browser-surface.cjs");
 const { browserProfilePartition } = require("./browser-snapshot.cjs");
 const { createBrowserHost } = require("./browser-host.cjs");
@@ -115,6 +116,7 @@ const { createCuaConnectionStore: createDescriptorStore } = require("./cua-conne
 const { MIN_BOUNDS, normalizeUnreadCount, parseWindowState, resolveWindowState } = require("./window-state.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const OWNS_LOCAL_SERVER = app.isPackaged || process.env.OMB_DESKTOP_SERVER === "1";
 const APP_ID = app.isPackaged ? "com.openmausbot.app" : "com.openmausbot.app.localdev.source";
 const APP_TITLE = "锐捷Bot";
 app.setName(APP_TITLE);
@@ -292,13 +294,14 @@ app.on("second-instance", (_event, commandLine) => {
   deliverPackageInstall(target);
 });
 
-// Packaged: the harness server ships in Resources (compiled JS, zero deps)
-// and runs on Electron's own Node via utilityProcess. It serves the built
-// UI too, so the window talks to one origin and there is no dev proxy.
+// Electron-owned harnesses run on Electron's own Node via utilityProcess.
+// Packages use compiled Resources; the opted-in source launcher uses the TS
+// entry while Vite continues to serve the UI.
 // A stray server on the default port must not brick the app — fall back to
 // alternate ports until one binds AND identifies as ours (the probe checks
 // our API shape, not just a 200).
 let serverProc = null;
+let desktopFeishu = null;
 let serverReady = true;
 let secureCredentials = {};
 let secureCredentialState = null;
@@ -449,7 +452,7 @@ async function secureWorkspaceConfig() {
 function composioBrokerUrl() {
   const configured = process.env.OMB_COMPOSIO_BROKER_URL?.trim();
   return normalizeManagedComposioBrokerUrl(
-    configured || (app.isPackaged ? DEFAULT_COMPOSIO_BROKER_URL : ""),
+    configured || (OWNS_LOCAL_SERVER ? DEFAULT_COMPOSIO_BROKER_URL : ""),
   );
 }
 
@@ -1054,13 +1057,10 @@ function syncDesktopMutationToken(proc) {
 
 function installDesktopMutationHeader() {
   session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
-    let ownsTarget = false;
-    try {
-      const target = new URL(details.url);
-      ownsTarget = target.protocol === "http:" &&
-        target.hostname === "127.0.0.1" &&
-        Number(target.port || 80) === SERVER_PORT;
-    } catch {}
+    const ownsTarget = isDesktopMutationTarget(details.url, {
+      serverPort: SERVER_PORT,
+      developmentUrl: app.isPackaged ? undefined : DEV_URL,
+    });
     if (!ownsTarget) {
       callback({ requestHeaders: details.requestHeaders });
       return;
@@ -1092,7 +1092,10 @@ function receivePhoneSecretSave(proc, rawMessage) {
 }
 
 async function startServerOn(port) {
-  const entry = path.join(process.resourcesPath, "server", "index.js");
+  const entry = app.isPackaged
+    ? path.join(process.resourcesPath, "server", "index.js")
+    : path.join(app.getAppPath(), "server", "index.ts");
+  const resourcesPath = app.isPackaged ? process.resourcesPath : app.getAppPath();
   const childEnv = managedComposioChildEnvironment(composioBrokerUrl(), secureCredentials, {
     ...process.env,
     // The desktop parent owns the durable data-directory lease. Each utility
@@ -1104,9 +1107,9 @@ async function startServerOn(port) {
     // from the launching shell. It starts fail-closed until this exact main
     // process sends the private in-memory connection after spawn.
     OMB_DESKTOP_PARENT: "1",
-    OMB_STATIC_DIR: path.join(process.resourcesPath, "ui"),
-    OMB_RESOURCES_PATH: process.resourcesPath,
-    OMB_SKILLS_DIR: path.join(process.resourcesPath, "skills"),
+    ...(app.isPackaged ? { OMB_STATIC_DIR: path.join(process.resourcesPath, "ui") } : {}),
+    OMB_RESOURCES_PATH: resourcesPath,
+    OMB_SKILLS_DIR: path.join(resourcesPath, "skills"),
     OMB_PORT: String(port),
     // the server advertises this to remote clients so version skew is visible
     OMB_APP_VERSION: app.getVersion(),
@@ -1125,6 +1128,7 @@ async function startServerOn(port) {
   slog(`fork ${entry} port=${port}`);
   const proc = utilityProcess.fork(entry, [], {
     env: childEnv,
+    execArgv: app.isPackaged ? [] : ["--experimental-strip-types"],
     stdio: ["ignore", "pipe", "pipe"],
   });
   let resolveServerExit;
@@ -1154,6 +1158,7 @@ async function startServerOn(port) {
     // Capabilities belong to turns in this exact server child. A crash or
     // restart invalidates them before any replacement child receives the
     // browser descriptor.
+    if (proc === serverProc) void desktopFeishu?.close().catch(() => {});
     slog(`exited code=${code}`);
   });
   // wait for the port to answer (fresh machine: first boot writes data dirs).
@@ -1174,6 +1179,7 @@ async function startServerOn(port) {
     // child a "foreign owner" on its first health answer.
     pid: () => proc.pid,
     bootTimeoutMs: SERVER_BOOT_TIMEOUT_MS,
+    requireStatic: app.isPackaged,
     isExited: () => exited,
   });
   if (identity.outcome === "ready") return { proc };
@@ -1198,7 +1204,7 @@ async function startServerPackaged() {
   // server during teardown — one settle-and-retry covers it
   let everyPortForeignOwned = true;
   for (let attempt = 0; attempt < 2; attempt++) {
-    for (const port of [8799, 18799, 28799]) {
+    for (const port of app.isPackaged ? [8799, 18799, 28799] : [SERVER_PORT]) {
       const started = await startServerOn(port);
       if (started.proc) {
         serverProc = started.proc;
@@ -1961,6 +1967,9 @@ function createWindow() {
     switchEnvironment(LOCAL_ID);
   });
   win.webContents.on("did-finish-load", () => deliverPackageInstall(win));
+  win.webContents.on("did-finish-load", () => {
+    void desktopFeishu?.start().catch(() => {});
+  });
 
   // Native context menu for text inputs — without this, right-click does
   // nothing in the Electron window (no Cut/Copy/Paste/Select All).
@@ -2380,7 +2389,9 @@ function requireMainWindowSender(event) {
 }
 
 function relaunchAfterDesktopRemoteChange() {
-  const timer = setTimeout(() => {
+  const cleanup = awaitFeishuShutdown(() => desktopFeishu?.close());
+  const timer = setTimeout(async () => {
+    await cleanup;
     app.relaunch();
     app.exit(0);
   }, 250);
@@ -2407,6 +2418,38 @@ ipcMain.handle("desktop-remote:disconnect", localOnly("desktop-remote:disconnect
   relaunchAfterDesktopRemoteChange();
   return { active: false };
 }));
+
+desktopFeishu = registerFeishu({
+  ipcMain, localOnly,
+  runtime: () => ({
+    platform: process.platform,
+    // The source desktop launcher owns the embedded server and has the same
+    // private IPC/token boundary as a package, so it is safe for integration
+    // testing without weakening ordinary Vite or remote-renderer access.
+    packaged: app.isPackaged || OWNS_LOCAL_SERVER,
+    remote: !!desktopRemoteAccess,
+    stopping: desktopShutdownStarted,
+    ready: serverReady,
+    pid: serverProc?.pid,
+    baseUrl: `http://127.0.0.1:${SERVER_PORT}`,
+    rendererOrigin: app.isPackaged
+      ? `http://127.0.0.1:${SERVER_PORT}`
+      : new URL(DEV_URL).origin,
+    token: desktopMutationToken,
+  }),
+  resources: app.isPackaged
+    ? path.join(process.resourcesPath, "tuantuan-feishu")
+    : path.join(app.getAppPath(), "connectors", "feishu"),
+  runtimeRoot: path.join(app.getPath("userData"), "feishu"),
+  credentials: () => {
+    if (!secureCredentialState || credentialStoreUnavailable) throw new Error("CREDENTIAL_STORE_UNAVAILABLE");
+    return secureCredentialState.read();
+  },
+  saveCredentials: updateSecureCredentialDocument,
+  dialog,
+  openExternal: (url) => shell.openExternal(url),
+  window: () => mainWindow,
+});
 
 // Auth and connector credentials never cross this boundary. Every handler
 // returns the same deliberately tiny, secret-free public account state.
@@ -2559,7 +2602,7 @@ setCuaStateListener((connection) => {
 });
 
 app.whenReady().then(async () => {
-  if (app.isPackaged) {
+  if (OWNS_LOCAL_SERVER) {
     try {
       // Acquire before either plaintext credential migration reads or writes
       // config.json. The parent retains ownership across utility-child port
@@ -2576,8 +2619,8 @@ app.whenReady().then(async () => {
       return;
     }
   }
-  if (app.isPackaged) {
-    app.setAsDefaultProtocolClient("openmausbot");
+  if (app.isPackaged) app.setAsDefaultProtocolClient("openmausbot");
+  if (OWNS_LOCAL_SERVER) {
     // Chromium adds this capability below JavaScript, so renderer requests
     // can mutate the local harness while a Full-access shell using curl
     // cannot impersonate the person operating the desktop app.
@@ -2585,7 +2628,7 @@ app.whenReady().then(async () => {
   }
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
   secureCredentials = await loadSecureCredentials();
-  if (app.isPackaged) {
+  if (OWNS_LOCAL_SERVER) {
     await secureComposioConfig();
     await secureWorkspaceConfig();
   }
@@ -2596,7 +2639,7 @@ app.whenReady().then(async () => {
     writable: !credentialStoreUnavailable,
   });
   secureCredentials = secureCredentialState.read();
-  if (app.isPackaged) await ensurePhoneSecretIdentity();
+  if (OWNS_LOCAL_SERVER) await ensurePhoneSecretIdentity();
   desktopRemoteAccess = desktopCompanionAccess(secureCredentials);
   const hostedAccount = desktopRemoteAccess ? null : ensureCompanionAccountService();
   // Display capture remains user-initiated. The renderer first sends a
@@ -2680,7 +2723,7 @@ app.whenReady().then(async () => {
       serverReady = false;
       slog(`desktop companion relay failed: ${error?.message ?? error}`);
     }
-  } else if (app.isPackaged) {
+  } else if (OWNS_LOCAL_SERVER) {
     serverReady = await startServerPackaged();
   }
   // The companion the user left on comes back without anyone finding the
@@ -2723,7 +2766,7 @@ app.whenReady().then(async () => {
   if (credentialStoreUnavailable) {
     slog("skipping connected-apps registration: the credential store was unreadable this launch");
   }
-  if (!desktopRemoteAccess && app.isPackaged && composioBrokerUrl() && !credentialStoreUnavailable) {
+  if (!desktopRemoteAccess && OWNS_LOCAL_SERVER && composioBrokerUrl() && !credentialStoreUnavailable) {
     void updateSecureCredentialDocument(async (credentials) => {
       await ensureManagedComposioCredentials({
         brokerUrl: composioBrokerUrl(),
@@ -2801,6 +2844,7 @@ app.on("before-quit", (e) => {
     new Promise((resolve) => setTimeout(resolve, CUA_STOP_TIMEOUT_MS).unref()),
   ]);
   const cleanup = Promise.all([
+    awaitFeishuShutdown(() => desktopFeishu?.close()),
     ownedHelperCleanup,
     stopUtilityServer(stoppingServer).then((stopped) => {
       if (!stopped) slog("server child did not stop before desktop exit; retaining the data-directory lease");

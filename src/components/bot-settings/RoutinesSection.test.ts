@@ -1,7 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { setLocale } from "@/lib/i18n";
 import { StoreProvider, type Bot } from "@/state/store";
 import type { Routine, RoutineRun } from "@/lib/routines";
 
@@ -15,6 +16,8 @@ vi.mock("@/components/DesktopCapabilities", () => ({
 }));
 
 const { RoutinesSection } = await import("./RoutinesSection");
+
+beforeEach(() => setLocale("en"));
 
 const bot: Bot = {
   id: "bot-1",

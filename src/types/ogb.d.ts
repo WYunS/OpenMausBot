@@ -178,6 +178,8 @@ type SkillRecordingPayload = {
         pair(endpoint: string, code: string): Promise<DesktopRemoteClientState>;
         disconnect(): Promise<DesktopRemoteClientState>;
       };
+      /** Optional Windows local-only integration; all actions are validated natively. */
+      feishu?: import("../tuantuan/feishu/model").FeishuBridge;
       companionAccount?: {
         state(): Promise<CompanionAccountState>;
         requestCode(email: string): Promise<CompanionAccountState>;

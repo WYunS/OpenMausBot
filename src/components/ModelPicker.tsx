@@ -37,7 +37,7 @@ export function engineStatus(instance: InstanceInfo): string {
 
 /** The others capitalize cleanly; "xhigh" would read "Xhigh". */
 export function effortLabel(level: EffortLevel): string {
-  return level === "xhigh" ? "X-High" : level[0].toUpperCase() + level.slice(1);
+  return t(`model.effort.${level}` as Parameters<typeof t>[0]);
 }
 
 /** How hard the bot thinks, for the engine it currently runs on. Rendered
@@ -69,7 +69,7 @@ export function EffortRow({
       {label}
       {/* wraps rather than dividing a fixed width: pi offers Default plus six
           levels, which a segmented control would squeeze in the popover */}
-      <div className="mt-2 flex flex-wrap gap-1" role="group" aria-label="Reasoning effort">
+      <div className="mt-2 flex flex-wrap gap-1" role="group" aria-label={t("model.effortAria")}>
         {[undefined, ...levels].map((level) => (
           <button
             key={level ?? "default"}
@@ -77,8 +77,8 @@ export function EffortRow({
             aria-pressed={selection.effort === level}
             title={
               level === undefined
-                ? "Send no effort level and let the engine decide"
-                : `Ask for ${effortLabel(level)} reasoning effort`
+                ? t("model.effortDefaultHelp")
+                : t("model.effortLevelHelp", { level: effortLabel(level) })
             }
             onClick={() => dispatch({ type: "setModel", botId: bot.id, selection: { ...selection, effort: level } })}
             className={cn(
@@ -88,7 +88,7 @@ export function EffortRow({
                 : "border-hairline/40 text-ink-secondary hover:bg-control/60 hover:text-ink",
             )}
           >
-            {level === undefined ? "Default" : effortLabel(level)}
+            {level === undefined ? t("common.default") : effortLabel(level)}
           </button>
         ))}
       </div>
@@ -127,10 +127,10 @@ function ModelRow({
           </span>
         )}
         {option.id === defaultId && (
-          <span className="shrink-0 rounded bg-inset px-1.5 py-px text-[10px] text-ink-secondary">Default</span>
+          <span className="shrink-0 rounded bg-inset px-1.5 py-px text-[10px] text-ink-secondary">{t("common.default")}</span>
         )}
         {option.loaded && (
-          <span className="shrink-0 rounded bg-accent/10 px-1.5 py-px text-[10px] text-accent">Loaded</span>
+          <span className="shrink-0 rounded bg-accent/10 px-1.5 py-px text-[10px] text-accent">{t("model.loaded")}</span>
         )}
       </span>
       {current && <Check size={14} className="shrink-0 text-accent" />}
@@ -441,11 +441,11 @@ export function ModelPicker({
               return (
                 <>
                   {subscription.length > 0 && (
-                    <EngineGroupLabel className="px-0 pb-0.5 pt-0.5 text-center text-[9px]">Cloud</EngineGroupLabel>
+                    <EngineGroupLabel className="px-0 pb-0.5 pt-0.5 text-center text-[9px]">{t("model.cloud")}</EngineGroupLabel>
                   )}
                   {prioritizeEngines(subscription).map(railButton)}
                   {local.length > 0 && (
-                    <EngineGroupLabel className="px-0 pb-0.5 pt-2 text-center text-[9px]">Local</EngineGroupLabel>
+                    <EngineGroupLabel className="px-0 pb-0.5 pt-2 text-center text-[9px]">{t("model.local")}</EngineGroupLabel>
                   )}
                   {prioritizeEngines(local).map(railButton)}
                 </>
@@ -614,7 +614,7 @@ export function ModelPicker({
                   <EffortRow
                     bot={bot}
                     className="shrink-0 border-t border-hairline/40 px-4 py-3"
-                    label={<span className="text-[12.5px] font-medium text-ink">Effort</span>}
+                    label={<span className="text-[12.5px] font-medium text-ink">{t("botSettings.model.effort")}</span>}
                   />
                 )}
 

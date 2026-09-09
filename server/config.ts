@@ -801,7 +801,6 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     hermes: { driver: "hermesAgent" },
     pi: { driver: "piAgent" },
   };
-  const DEFAULT_ENABLED_INSTANCE_IDS = new Set(["ruijieHarness"]);
   const PRODUCT_FLEET_INSTANCE_IDS = new Set(Object.keys(DEFAULT_FLEET));
   const CUSTOM_ONLY = {
     qwen: { driver: "qwenAgent" },
@@ -836,7 +835,7 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     const entry = { ...sourceEntry };
     map[id] = entry;
     if (entry.enabled === undefined && PRODUCT_FLEET_INSTANCE_IDS.has(id)) {
-      entry.enabled = DEFAULT_ENABLED_INSTANCE_IDS.has(id);
+      entry.enabled = true;
     }
     const environment = { ...entry.environment };
     for (const [key, value] of injectedEnvironment(cfg, entry.driver)) environment[key] = value;

@@ -23,6 +23,17 @@ test("returns ready when our own child answers with its identity", async () => {
   assert.equal(outcome.outcome, "ready");
 });
 
+test("an opted-in source child does not need packaged static assets", async () => {
+  const outcome = await pollServerIdentity({
+    port: 38799,
+    pid: () => 4242,
+    bootTimeoutMs: 5_000,
+    requireStatic: false,
+    fetchImpl: okFetch({ body: { app: "openmausbot", pid: 4242, static: false } }),
+  });
+  assert.equal(outcome.outcome, "ready");
+});
+
 test("a never-completing /api/health cannot wedge the launcher past the boot budget", async () => {
   // Hangs until the probe aborts it, exactly like a server that accepts the
   // connection but never writes a response.

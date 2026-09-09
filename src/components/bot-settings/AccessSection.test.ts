@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StoreProvider, type Bot } from "@/state/store";
+import { setLocale } from "@/lib/i18n";
 import type { useBotSettingsDerived } from "./useBotSettingsDerived";
 
 // DesktopCapabilities reads `window.ogb` at module scope for its context
@@ -17,7 +18,10 @@ const { AccessSection } = await import("./AccessSection");
 // WorkingFolder (moved into this file) reads window.ogb?.pickFolder directly
 // at render time, same "node" environment gap as above — stub per test, the
 // way desktop.test.ts and EngineUpdateNotice.test.ts do.
-beforeEach(() => vi.stubGlobal("window", {}));
+beforeEach(() => {
+  setLocale("en");
+  vi.stubGlobal("window", {});
+});
 afterEach(() => vi.unstubAllGlobals());
 
 function makeBot(overrides: Partial<Bot> = {}): Bot {

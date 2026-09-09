@@ -1,10 +1,13 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { setLocale } from "@/lib/i18n";
 import type { Bot } from "@/state/store";
 import type { HistoryRow } from "./HistorySection";
 import { HistorySection } from "./HistorySection";
+
+beforeEach(() => setLocale("en"));
 
 const bot: Bot = {
   id: "bot-1",

@@ -8,6 +8,7 @@ import { useStore, type Bot } from "@/state/store";
 import type { Routine, RoutineRun } from "@/lib/routines";
 import { niceTime, scheduleSentence } from "@/lib/schedule-label";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 import { RoutineEditor } from "../RoutinesPage";
 
 function capitalize(text: string): string {
@@ -33,9 +34,9 @@ export function RoutinesSection({ bot, routines, runs }: { bot: Bot; routines: R
       <div className="rounded-xl bg-card p-4">
         <div className="flex items-center gap-2">
           <CalendarClock size={16} className="text-accent" />
-          <div className="min-w-0 flex-1 text-[15px] font-medium text-ink">Scheduled tasks</div>
+          <div className="min-w-0 flex-1 text-[15px] font-medium text-ink">{t("botSettings.routines.title")}</div>
           <span className="shrink-0 text-[11.5px] tabular-nums text-ink-secondary">
-            {activeCount} active · {routines.length} total
+            {t("botSettings.routines.count", { active: activeCount, total: routines.length })}
           </span>
         </div>
         <div className="mt-3 flex gap-2">
@@ -45,20 +46,20 @@ export function RoutinesSection({ bot, routines, runs }: { bot: Bot; routines: R
             className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[13px] font-medium text-white hover:brightness-110"
           >
             <Plus size={14} />
-            New schedule
+            {t("botSettings.routines.new")}
           </button>
           <button
             type="button"
             onClick={() => dispatch({ type: "showRoutines" })}
             className="rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover"
           >
-            Manage
+            {t("botSettings.routines.manage")}
           </button>
         </div>
       </div>
 
       {routines.length === 0 ? (
-        <div className="rounded-xl bg-card p-4 text-[13px] text-ink-secondary">No schedules yet.</div>
+        <div className="rounded-xl bg-card p-4 text-[13px] text-ink-secondary">{t("botSettings.routines.empty")}</div>
       ) : (
         <div className="divide-y divide-hairline/40 overflow-hidden rounded-xl border border-hairline/40 bg-card">
           {routines.map((routine) => {
@@ -70,11 +71,11 @@ export function RoutinesSection({ bot, routines, runs }: { bot: Bot; routines: R
                     {capitalize(scheduleSentence(routine.schedule))} · {routine.name}
                   </div>
                   <div className="mt-0.5 text-[11.5px] text-ink-secondary">
-                    {routine.nextRunAt != null && <span>Next {niceTime(routine.nextRunAt)}</span>}
+                    {routine.nextRunAt != null && <span>{t("botSettings.routines.next", { time: niceTime(routine.nextRunAt) })}</span>}
                     {routine.nextRunAt != null && last && " · "}
                     {last && (
                       <span>
-                        Last {last.status} {niceTime(last.finishedAt ?? last.startedAt ?? last.scheduledFor)}
+                        {t("botSettings.routines.last", { status: last.status, time: niceTime(last.finishedAt ?? last.startedAt ?? last.scheduledFor) })}
                       </span>
                     )}
                   </div>
@@ -85,7 +86,7 @@ export function RoutinesSection({ bot, routines, runs }: { bot: Bot; routines: R
                     routine.enabled ? "bg-accent/15 text-accent-text" : "bg-control text-ink-secondary",
                   )}
                 >
-                  {routine.enabled ? "Active" : "Paused"}
+                  {routine.enabled ? t("common.active") : t("common.paused")}
                 </span>
               </div>
             );

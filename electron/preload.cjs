@@ -25,6 +25,10 @@ const REMOTE_SAFE = new Set(["platform", "getCapabilities", "onCapabilitiesChang
 const bridge = {
   /** Host platform ("darwin" | "win32" | "linux") — for platform-aware UI. */
   platform: process.platform,
+  ...(process.platform === "win32" && !desktopRemoteClient ? { feishu: {
+    state: () => ipcRenderer.invoke("tuantuan-feishu:state"),
+    invoke: (action, input) => ipcRenderer.invoke("tuantuan-feishu:invoke", action, input),
+  } } : {}),
   getCapabilities: () => ipcRenderer.invoke("desktop:capabilities"),
   onCapabilitiesChanged: (cb) => {
     const handler = (_event, capabilities) => cb(capabilities);

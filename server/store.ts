@@ -1399,7 +1399,7 @@ export class Store {
       ...(profile.mascotBody ? { mascotBody: profile.mascotBody } : {}),
       unread: false,
       modelSelection: profile.modelSelection ?? this.defaultSelection(),
-      computer: "local",
+      computer: "off",
       resumeCursors: {},
       createdAt: Date.now(),
     };

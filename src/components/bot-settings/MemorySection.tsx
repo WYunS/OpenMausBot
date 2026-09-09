@@ -8,6 +8,7 @@ import { useState } from "react";
 
 import { api, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 import { inputCls } from "./field";
 
 interface MemoryTopic {
@@ -85,15 +86,15 @@ export function MemorySection({ bot }: { bot: Bot }) {
         }}
       >
         <div>
-          <div className="text-[15px] font-medium text-ink">Memory</div>
+          <div className="text-[15px] font-medium text-ink">{t("botSettings.memory.title")}</div>
           <div className="mt-0.5 text-[13px] text-ink-secondary">
-            Notes this bot keeps between tasks — plain files you can edit.
+            {t("botSettings.memory.help")}
           </div>
         </div>
         <ChevronDown size={16} className={cn("shrink-0 text-ink-secondary transition-transform", open && "rotate-180")} />
       </button>
 
-      {open && loading && <div className="mt-3 text-[13px] text-ink-secondary">Loading…</div>}
+      {open && loading && <div className="mt-3 text-[13px] text-ink-secondary">{t("botSettings.overview.loading")}</div>}
 
       {open && !loading && topic && (
         <div className="mt-3">
@@ -103,7 +104,7 @@ export function MemorySection({ bot }: { bot: Bot }) {
               onClick={() => setTopic(null)}
               className="shrink-0 rounded-md px-2 py-1 text-[13px] text-ink-secondary hover:bg-control hover:text-ink"
             >
-              Back
+              {t("common.back")}
             </button>
           </div>
           <pre className="mt-2 max-h-[240px] overflow-auto whitespace-pre-wrap rounded-lg border border-hairline/40 bg-inset p-3 font-mono text-[12.5px] leading-relaxed text-ink">
@@ -117,8 +118,8 @@ export function MemorySection({ bot }: { bot: Bot }) {
           <textarea
             className={cn(inputCls, "min-h-[160px] resize-y font-mono text-[12.5px] leading-relaxed")}
             value={text}
-            placeholder="Nothing remembered yet. The bot writes durable notes here — or add your own."
-            aria-label="Bot memory"
+            placeholder={t("botSettings.memory.placeholder")}
+            aria-label={t("botSettings.memory.aria")}
             onChange={(e) => {
               setText(e.target.value);
               setDirty(true);
@@ -130,18 +131,18 @@ export function MemorySection({ bot }: { bot: Bot }) {
               disabled={saving || !dirty}
               className="rounded-lg bg-control px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
             >
-              {saving ? "Saving…" : "Save"}
+              {saving ? t("common.saving") : t("common.save")}
             </button>
             {truncated && (
               <span className="text-[11.5px] text-ink-secondary">
-                Over the budget — only the top of this file loads each turn.
+                {t("botSettings.memory.overBudget")}
               </span>
             )}
           </div>
           {topics.length > 0 && (
             <div className="mt-3">
               <div className="mb-1.5 text-[12px] font-medium uppercase tracking-[0.08em] text-ink-secondary">
-                Topic files
+                {t("botSettings.memory.topicFiles")}
               </div>
               <div className="overflow-hidden rounded-lg border border-hairline/40">
                 {topics.map((entry) => (

@@ -9,8 +9,9 @@ import { Search, X } from "lucide-react";
 import { api, useStore, type Bot } from "@/state/store";
 import type { BotOverview } from "@/lib/bot-overview-types";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { BOT_SECTIONS } from "./bot-settings/sections";
+import { botSettingsSections } from "./bot-settings/sections";
 import { useBotSettingsDerived } from "./bot-settings/useBotSettingsDerived";
 import { OverviewSection } from "./bot-settings/OverviewSection";
 import { IdentitySection } from "./bot-settings/IdentitySection";
@@ -26,7 +27,7 @@ import { HistorySection, type HistoryRow } from "./bot-settings/HistorySection";
 import { UsageSection } from "./bot-settings/UsageSection";
 import type { PromptPreviewData } from "./bot-settings/PromptPreview";
 
-function sectionMatches(entry: (typeof BOT_SECTIONS)[number], query: string): boolean {
+function sectionMatches(entry: ReturnType<typeof botSettingsSections>[number], query: string): boolean {
   if (!query) return true;
   return [entry.label, ...entry.keywords].some((part) => part.toLowerCase().includes(query));
 }
@@ -38,7 +39,8 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
-  const visibleSections = BOT_SECTIONS.filter((entry) => sectionMatches(entry, q));
+  const sections = botSettingsSections();
+  const visibleSections = sections.filter((entry) => sectionMatches(entry, q));
 
   const [overview, setOverview] = useState<BotOverview | null>(null);
   const [overviewError, setOverviewError] = useState(false);
@@ -174,7 +176,7 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
   };
 
   useEffect(() => {
-    const visible = BOT_SECTIONS.filter((entry) => sectionMatches(entry, q));
+    const visible = botSettingsSections().filter((entry) => sectionMatches(entry, q));
     if (visible.some((entry) => entry.id === section)) return;
     const first = visible[0];
     if (first) dispatch({ type: "toggleSettings", open: true, section: first.id });
@@ -238,7 +240,8 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6"
+      className="fixed inset-x-0 bottom-0 z-50 flex items-center justify-center bg-black/50 p-6"
+      style={{ top: "env(titlebar-area-height, 0px)" }}
       onMouseDown={(e) => e.target === e.currentTarget && dispatch({ type: "toggleSettings", open: false })}
     >
       <div
@@ -269,15 +272,15 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
                 if (query) setQuery("");
                 else dispatch({ type: "toggleSettings", open: false });
               }}
-              placeholder="Search"
-              aria-label="Search settings"
+              placeholder={t("botSettings.search")}
+              aria-label={t("botSettings.searchAria")}
               className="w-full bg-transparent text-[13px] text-ink placeholder:text-ink-secondary focus:outline-none"
             />
           </div>
           <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
             {visibleSections.length === 0 && (
               <div className="px-2.5 py-4 text-[12.5px] leading-relaxed text-ink-secondary">
-                Nothing matches “{query.trim()}”
+                {t("botSettings.noMatch", { query: query.trim() })}
               </div>
             )}
             {visibleSections.map(({ id, label, icon: Icon }) => (
@@ -305,12 +308,12 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex shrink-0 items-center justify-between px-5 py-3">
             <span className="text-[15px] font-semibold text-ink">
-              {BOT_SECTIONS.find((s) => s.id === section)?.label}
+              {sections.find((s) => s.id === section)?.label}
             </span>
             <button
               type="button"
               onClick={() => dispatch({ type: "toggleSettings", open: false })}
-              aria-label="Close settings"
+              aria-label={t("botSettings.close")}
               className="rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
             >
               <X size={18} className="pointer-events-none" />
@@ -367,7 +370,7 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
 
             {section === "history" &&
               (historyRows === null && historyError ? (
-                <div className="rounded-xl bg-card p-4 text-[13px] text-ink-secondary">Couldn’t load history.</div>
+                <div className="rounded-xl bg-card p-4 text-[13px] text-ink-secondary">{t("botSettings.history.loadError")}</div>
               ) : (
                 // Same precedence as the Overview: rows already on screen
                 // survive a failed reload (after an undo, say) with a quiet
@@ -389,9 +392,9 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
       </div>
       <ConfirmDialog
         open={rollbackTarget !== null}
-        title="Restore previous instructions?"
-        body="Replaces current SOUL with the version before this change. Current version stays in History."
-        confirmLabel="Restore instructions"
+        title={t("botSettings.history.restoreTitle")}
+        body={t("botSettings.history.restoreBody")}
+        confirmLabel={t("botSettings.history.restoreConfirm")}
         tone="neutral"
         returnFocusRef={dialogRef}
         onCancel={() => setRollbackTarget(null)}
