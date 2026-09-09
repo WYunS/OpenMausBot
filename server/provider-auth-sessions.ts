@@ -90,10 +90,8 @@ export class ProviderAuthSessions {
 
   /** Remove the server's stored sign-in for this provider. A login another
    * admin is still completing must not be pulled away underneath them, and
-   * nobody may start one while the credential is being removed. Running
-   * turns on the instance are stopped first, so none fails mid-flight on a
-   * credential that has just vanished. */
-  async signOut(instance: LoginInstance, owner: string, stopSessions?: () => Promise<void>): Promise<void> {
+   * nobody may start one while the credential is being removed. */
+  async signOut(instance: LoginInstance, owner: string): Promise<void> {
     if (!instance.signOut) throw failure("Sign-out is unavailable for this provider.", 404);
     const existing = this.flows.get(instance.instanceId);
     if (existing && (existing.busy || (existing.owner !== owner && existing.expiresAt > Date.now() && !existing.revoked))) {
@@ -105,7 +103,6 @@ export class ProviderAuthSessions {
     try {
       // This owner's own leftover flow is theirs to abandon.
       if (existing) await existing.instance.cancelAuthentication?.();
-      await stopSessions?.();
       await instance.signOut();
     } finally {
       if (this.flows.get(instance.instanceId) === flow) this.flows.delete(instance.instanceId);

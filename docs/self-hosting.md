@@ -295,7 +295,8 @@ On a hosted server, the engine CLIs sign in from Settings → Engines:
   subscription's usage limits. Once signed in, **Manage account and sign-in →
   Sign out of Claude** runs `claude auth logout` for that account's
   configuration directory, confirmed with `claude auth status`, so a different
-  person can sign in with their own subscription.
+  person can sign in with their own subscription. Stop running Claude tasks
+  before switching accounts: signing out does not cancel them.
 
 ## Using it from your computer
 

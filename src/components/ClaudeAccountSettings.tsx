@@ -98,7 +98,7 @@ export function AddClaudeAccount() {
 }
 
 export function ClaudeAccountSettings({ instance }: { instance: InstanceInfo }) {
-  const { state, refreshInstances } = useStore();
+  const { state, dispatch, refreshInstances } = useStore();
   const [busy, setBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
@@ -115,7 +115,7 @@ export function ClaudeAccountSettings({ instance }: { instance: InstanceInfo }) 
   const identity = authenticated ? [instance.snapshot.account?.email, instance.snapshot.account?.organization].filter(Boolean).join(" · ") : "";
 
   const refresh = async () => {
-    if (busy) return;
+    if (busy || signingOut) return;
     setBusy(true);
     setError(null);
     try { await refreshInstances(); }
@@ -125,7 +125,7 @@ export function ClaudeAccountSettings({ instance }: { instance: InstanceInfo }) 
 
   const remove = async () => {
     setConfirmRemove(false);
-    if (busy || account.isDefault || assigned) return;
+    if (busy || signingOut || account.isDefault || assigned) return;
     setBusy(true);
     setError(null);
     try {
@@ -144,9 +144,10 @@ export function ClaudeAccountSettings({ instance }: { instance: InstanceInfo }) 
     setSigningOut(true);
     setError(null);
     try {
-      await api(`/api/instances/${encodeURIComponent(instance.instanceId)}/auth/sign-out`, { method: "POST" });
-      // The credential is gone even if the status refresh fails.
-      await refreshInstances().catch(() => {});
+      const { instances } = await api(`/api/instances/${encodeURIComponent(instance.instanceId)}/auth/sign-out`, { method: "POST" });
+      // The response already contains the confirmed account state. A second
+      // request could fail and leave a signed-out account showing connected.
+      dispatch({ type: "instances", instances });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -162,7 +163,7 @@ export function ClaudeAccountSettings({ instance }: { instance: InstanceInfo }) 
           {identity && ` · ${identity}`}
         </span>
         {account.isDefault && <span className="text-[11px] text-ink-secondary">{t("engines.account.default")}</span>}
-        <button type="button" onClick={() => void refresh()} disabled={busy} className="flex items-center gap-1 text-ink-secondary hover:text-ink disabled:opacity-50">
+        <button type="button" onClick={() => void refresh()} disabled={busy || signingOut} className="flex items-center gap-1 text-ink-secondary hover:text-ink disabled:opacity-50">
           <RefreshCw size={12} className={cn(busy && "animate-spin")} />{t("engines.account.check")}
         </button>
       </div>
@@ -172,7 +173,9 @@ export function ClaudeAccountSettings({ instance }: { instance: InstanceInfo }) 
           <p className="leading-relaxed text-ink-secondary">{t("engines.account.signInHint")}</p>
           {account.signInShell === "powershell" && <p className="text-ink-secondary">{t("engines.account.powershell")}</p>}
           <CommandLine command={account.signInCommand} copyLabel={t("engineSetup.copyCommand")} />
-          <ClaudeAccountForm key={`${instance.displayName}:${account.configDir}`} instance={instance} onSaved={() => {}} />
+          <fieldset disabled={busy || signingOut} className="min-w-0">
+            <ClaudeAccountForm key={`${instance.displayName}:${account.configDir}`} instance={instance} onSaved={() => {}} />
+          </fieldset>
           {canSignOut && (
             <div className="border-t border-hairline/40 pt-2">
               <button type="button" onClick={() => setConfirmSignOut(true)} disabled={busy || signingOut} className="text-danger hover:underline disabled:no-underline disabled:opacity-50">
@@ -184,7 +187,7 @@ export function ClaudeAccountSettings({ instance }: { instance: InstanceInfo }) 
           )}
           {!account.isDefault && (
             <div className="border-t border-hairline/40 pt-2">
-              <button type="button" onClick={() => setConfirmRemove(true)} disabled={busy || assigned} className="text-danger hover:underline disabled:no-underline disabled:opacity-50">{t("engines.account.remove")}</button>
+              <button type="button" onClick={() => setConfirmRemove(true)} disabled={busy || signingOut || assigned} className="text-danger hover:underline disabled:no-underline disabled:opacity-50">{t("engines.account.remove")}</button>
               <p className="mt-1 text-[11.5px] leading-relaxed text-ink-secondary">{t(assigned ? "engines.account.assigned" : "engines.account.removeHint")}</p>
             </div>
           )}

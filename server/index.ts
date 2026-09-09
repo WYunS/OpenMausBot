@@ -12743,7 +12743,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (action === "auth/sign-out") {
           const instance = registry.get(instanceId);
           if (!instance) return json(res, 404, { error: "unknown instance" });
-          await providerAuthSessions.signOut(instance, owner, () => instance.adapter.stopAll());
+          await providerAuthSessions.signOut(instance, owner);
           return json(res, 200, { instances: await describeInstances() });
         }
         if (action === "auth/complete") {

@@ -1518,9 +1518,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       generateText: (prompt) => generateReview(prompt),
       reviewPermission: generateReview,
       dispose: async () => {
-        for (const { stop } of active.values()) stop();
-        for (const threadId of [...sessions.keys()]) closeSession(threadId, "dispose");
-        listeners.clear();
+        try {
+          await login.dispose();
+        } finally {
+          for (const { stop } of active.values()) stop();
+          for (const threadId of [...sessions.keys()]) closeSession(threadId, "dispose");
+          listeners.clear();
+        }
       },
     };
   },

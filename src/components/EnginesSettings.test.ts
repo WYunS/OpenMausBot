@@ -126,6 +126,9 @@ describe("Settings → Engines → Claude accounts", () => {
     expect(renderClaude(claude(true))).not.toContain("Sign out of Claude");
     expect(renderClaude({ ...claude(false), authentication: { method: "paste-code" as const, signOut: true } })).not.toContain("Sign out of Claude");
     expect(renderClaude(hosted, true)).toContain("1 bot(s) use this account");
+    expect(renderClaude(hosted, true)).toContain("Running tasks are not cancelled by signing out");
+    expect(html).toContain("Stop running Claude tasks before switching accounts");
+    expect(html).not.toContain("pause");
   });
 
   it("protects the default and assigned accounts and explains credential preservation", () => {

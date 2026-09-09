@@ -17,6 +17,7 @@ const args = process.argv.slice(2);
 appendFileSync(join(home, 'calls.jsonl'), JSON.stringify({ args, home, configDir: process.env.CLAUDE_CONFIG_DIR, browser: process.env.BROWSER }) + '\\n');
 if (args.join(' ') === 'auth status --json') {
   if (mode === 'status-broken') { process.stdout.write('not json\\n'); process.exit(0); }
+  if (mode === 'status-error-out') { process.stdout.write(JSON.stringify({ loggedIn: false }) + '\\n'); process.exit(2); }
   const signedIn = mode === 'already' || existsSync(join(home, 'authenticated'));
   process.stdout.write(JSON.stringify({ loggedIn: signedIn, authMethod: signedIn ? 'claude.ai' : undefined }) + '\\n');
   process.exit(signedIn ? 0 : 1);
@@ -44,7 +45,11 @@ if (args.join(' ') === 'auth status --json') {
     });
   }
 } else if (args.join(' ') === 'auth logout') {
-  if (mode === 'logout-hang') { setInterval(() => {}, 1000); }
+  if (mode === 'logout-hang' || mode === 'logout-ignore-term') {
+    if (mode === 'logout-ignore-term') process.on('SIGTERM', () => {});
+    writeFileSync(join(home, 'logout-pid'), String(process.pid));
+    setInterval(() => {}, 1000);
+  }
   else {
     if (mode !== 'logout-lies') { try { unlinkSync(join(home, 'authenticated')); } catch {} }
     process.stdout.write('Logged out\\n');
@@ -179,6 +184,49 @@ describe("Claude server-owned sign-in", () => {
       await expect(create("logout-hang", { startupTimeoutMs: 200 }).signOut()).rejects.toThrow("still reports a sign-in");
       await expect(create("success").signOut()).resolves.toBeUndefined();
       expect(existsSync(join(home, "authenticated"))).toBe(false);
+    });
+
+    it.skipIf(process.platform === "win32")("forcibly stops a logout that ignores graceful termination", async () => {
+      signedIn();
+      const controller = create("logout-ignore-term", { startupTimeoutMs: 1500 });
+      let outcome = "pending";
+      const pending = controller.signOut().then(() => { outcome = "succeeded"; }, () => { outcome = "failed"; });
+      let pid: number | undefined;
+      try {
+        await expect.poll(() => existsSync(join(home, "logout-pid")), { timeout: 2500 }).toBe(true);
+        pid = Number(readFileSync(join(home, "logout-pid"), "utf8"));
+        await expect.poll(() => outcome, { timeout: 4000 }).toBe("failed");
+        expect(alive(pid)).toBe(false);
+        await expect(create("success").signOut()).resolves.toBeUndefined();
+      } finally {
+        if (pid !== undefined && alive(pid)) process.kill(-pid, "SIGKILL");
+        await pending;
+      }
+    });
+
+    it("disposal stops an in-progress logout before returning", async () => {
+      signedIn();
+      const controller = create("logout-hang", { startupTimeoutMs: 10_000 });
+      const pending = controller.signOut().catch(() => {});
+      let pid: number | undefined;
+      try {
+        await expect.poll(() => existsSync(join(home, "logout-pid")), { timeout: 2500 }).toBe(true);
+        pid = Number(readFileSync(join(home, "logout-pid"), "utf8"));
+        await controller.dispose();
+        expect(alive(pid)).toBe(false);
+        await expect(create("success").signOut()).resolves.toBeUndefined();
+      } finally {
+        if (pid !== undefined && alive(pid)) {
+          if (process.platform === "win32") process.kill(pid, "SIGKILL");
+          else process.kill(-pid, "SIGKILL");
+        }
+        await pending;
+      }
+    });
+
+    it("does not accept a failed status command as proof of sign-out", async () => {
+      signedIn();
+      await expect(create("status-error-out").signOut()).rejects.toThrow("could not confirm the sign-out");
     });
 
     it("names a missing CLI and a removed provider plainly", async () => {
