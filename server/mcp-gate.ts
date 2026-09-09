@@ -137,7 +137,7 @@ function trimCallResult(result: Json, tool: string): boolean {
 const spec = upstreamSpec();
 if (SPILL_DIR) sweepSpill(SPILL_DIR);
 
-const childEnv: NodeJS.ProcessEnv = { ...process.env, ...(spec.env ?? {}) };
+const childEnv: NodeJS.ProcessEnv = { ...process.env, ...spec.env };
 for (const key of GATE_ENV_KEYS) delete childEnv[key];
 
 const child = spawn(spec.command, spec.args ?? [], {

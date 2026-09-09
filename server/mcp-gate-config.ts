@@ -61,7 +61,7 @@ export function gateServer(input: {
     command: input.execPath ?? process.execPath,
     args: [SPAWNED_PROXIES.mcpGate],
     env: {
-      ...(input.nodeEnv ?? {}),
+      ...input.nodeEnv,
       OMB_GATE_NAME: name,
       OMB_GATE_UPSTREAM: JSON.stringify({ command: spec.command, args: spec.args ?? [], env: spec.env ?? {} }),
       OMB_GATE_SPILL_DIR: spillDir(input.threadId),
