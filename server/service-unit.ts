@@ -5,7 +5,11 @@
 // commands that install it. Pure rendering lives here so it is testable;
 // the CLI decides where the file goes.
 import { homedir, userInfo } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { posix } from "node:path";
+
+// Unit files describe a Linux or macOS machine, so their paths are POSIX
+// whatever host renders them (the Windows CI runner included).
+const { basename, dirname, join } = posix;
 
 export interface ServiceSpec {
   /** How to start this same CLI: absolute node, then its script. */
