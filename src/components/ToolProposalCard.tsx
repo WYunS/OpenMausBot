@@ -1,7 +1,8 @@
-// "I found something that would do this." — rung 3 of the tool ladder.
+// "I found something that would do this." — rungs 3 and 4 of the tool ladder.
 //
-// The bot went looking and came back with a real package. This card is the
-// only thing standing between that and code running on the user's computer,
+// The bot went looking and came back with a real package, or found nothing and
+// built one. Either way this card is the only thing standing between that and
+// code running on the user's computer,
 // so it is built to be READ rather than clicked past:
 //
 //   - the exact command, in monospace, never summarised
@@ -55,15 +56,29 @@ export function ToolProposalCard({ threadId, message }: { threadId: string; mess
       <div className="flex items-baseline justify-between gap-3">
         <div className="text-[15px] font-semibold text-ink">{proposal.label}</div>
         <span className="shrink-0 rounded-full bg-control px-2 py-0.5 text-[11px] text-ink-secondary">
-          {proposal.kind === "mcp" ? t("proposal.kind.mcp") : t("proposal.kind.cli")}
+          {proposal.kind === "mcp"
+            ? t("proposal.kind.mcp")
+            : proposal.kind === "generated"
+              ? t("proposal.kind.generated")
+              : t("proposal.kind.cli")}
         </span>
       </div>
       <p className="mt-1 text-[13px] leading-relaxed text-ink-secondary">{proposal.summary}</p>
 
       <dl className="mt-3 space-y-1.5 text-[12.5px]">
-        <Row label={t("proposal.package")}>
-          <span className="font-mono text-ink">{proposal.packageId}@{proposal.packageVersion}</span>
-        </Row>
+        {/* A generated tool has no package and no publisher; what it was
+            built FROM is its provenance, and the user can open that. */}
+        {proposal.builtFrom ? (
+          <Row label={t("proposal.builtFrom")}>
+            <a href={proposal.builtFrom} target="_blank" rel="noreferrer noopener" className="text-accent hover:underline">
+              {proposal.builtFrom}
+            </a>
+          </Row>
+        ) : (
+          <Row label={t("proposal.package")}>
+            <span className="font-mono text-ink">{proposal.packageId}@{proposal.packageVersion}</span>
+          </Row>
+        )}
         {proposal.publisher && (
           <Row label={t("proposal.publisher")}>
             {/* said by the page the bot read, not checked by us — and the card
@@ -89,7 +104,7 @@ export function ToolProposalCard({ threadId, message }: { threadId: string; mess
         </pre>
       </div>
 
-      <div className="mt-2.5">
+      <div className="mt-2.5" hidden={proposal.sources.length === 0}>
         <div className="text-[11.5px] uppercase tracking-[0.14em] text-ink-secondary">{t("proposal.sources")}</div>
         <ul className="mt-1 space-y-0.5">
           {proposal.sources.map((source) => (

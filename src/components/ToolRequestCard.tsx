@@ -10,7 +10,7 @@
 // front because that is the moment it means something — it is the name the
 // bot will use when it asks you to approve an action later.
 import { useState } from "react";
-import { ArrowLeft, Check, Loader2, PlugZap, Search, SearchX } from "lucide-react";
+import { ArrowLeft, Check, Hammer, Loader2, PlugZap, Search, SearchX } from "lucide-react";
 
 import { api, type Message } from "@/state/store";
 import { cn } from "@/lib/cn";
@@ -72,7 +72,9 @@ export function ToolRequestCard({ threadId, message }: { threadId: string; messa
 
   // Settled: say how it ended and stop offering buttons for it.
   if (request.settled) {
-    const note = request.settled === "searching"
+    const note = request.settled === "building"
+      ? t("toolLadder.settled.building")
+      : request.settled === "searching"
       ? t("toolLadder.settled.searching")
       : request.settled === "connecting"
       ? t("toolLadder.settled.connecting", { app: chosen?.label ?? request.capability })
@@ -83,7 +85,7 @@ export function ToolRequestCard({ threadId, message }: { threadId: string; messa
           // Falling off the ladder is told, never shrugged off.
           : t("toolLadder.settled.none", { capability: request.capability });
     const missed = request.settled === "none";
-    const searching = request.settled === "searching";
+    const searching = request.settled === "searching" || request.settled === "building";
     return (
       <Shell dim={!missed}>
         {missed || searching ? (
@@ -102,7 +104,18 @@ export function ToolRequestCard({ threadId, message }: { threadId: string; messa
         {/* The ladder's next rung. A dead end is where this feature is most
             worth something: not "I can't", but "shall I go and look?" */}
         {missed && (
-          <div className="mt-3 flex justify-end">
+          <div className="mt-3 flex flex-wrap justify-end gap-2">
+            {/* Look first: something that already exists and is used by other
+                people beats something written on the spot. Building is the
+                answer when looking comes back empty. */}
+            <button
+              onClick={() => void post("build")}
+              disabled={busy}
+              className="flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[13.5px] text-ink-secondary hover:bg-control hover:text-ink disabled:opacity-40"
+            >
+              <Hammer size={13} />
+              {t("toolLadder.build")}
+            </button>
             <button
               onClick={() => void post("look")}
               disabled={busy}

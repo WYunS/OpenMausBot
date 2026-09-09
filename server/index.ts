@@ -8638,17 +8638,18 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           fromBotId: z.string().min(1).max(128),
           fromThreadId: z.string().min(1).max(128),
           capability: z.string().min(2).max(120),
-          kind: z.enum(["mcp", "cli"]),
+          kind: z.enum(["mcp", "cli", "generated"]),
           label: z.string().min(1).max(80),
-          summary: z.string().min(1).max(400),
-          packageId: z.string().min(1).max(200),
-          packageVersion: z.string().min(1).max(40),
+          summary: z.string().max(400),
+          packageId: z.string().max(200),
+          packageVersion: z.string().max(40),
+          builtFrom: z.string().max(400).optional(),
           publisher: z.string().max(120).optional(),
           homepage: z.string().max(400).optional(),
           command: z.string().min(1).max(120),
           args: z.array(z.string().max(200)).max(12).optional(),
           envNames: z.array(z.string().max(80)).max(12).optional(),
-          sources: z.array(z.object({ url: z.string().max(500), note: z.string().max(200).optional() })).max(MAX_SOURCES),
+          sources: z.array(z.object({ url: z.string().max(500), note: z.string().max(200).optional() })).max(MAX_SOURCES).optional(),
         }).strict().safeParse(await readInternalBody());
         if (!parsed.success) return json(res, 400, { error: "invalid tool proposal" });
         const body = parsed.data;
@@ -8666,10 +8667,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           packageVersion: body.packageVersion.trim(),
           ...(body.publisher?.trim() ? { publisher: body.publisher.trim() } : {}),
           ...(/^https:\/\//i.test(body.homepage ?? "") ? { homepage: body.homepage!.trim() } : {}),
+          ...(body.builtFrom?.trim() ? { builtFrom: body.builtFrom.trim() } : {}),
           command: body.command.trim(),
           args: body.args ?? [],
           ...(body.envNames?.length ? { envNames: body.envNames } : {}),
-          sources: body.sources,
+          sources: body.sources ?? [],
         };
         // Refused before anybody sees it: a proposal nobody can check is not
         // a proposal, it is a request to trust the model.
@@ -13832,7 +13834,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // The tool-ladder card's own buttons: pick an app, name the account, or
     // say "later". Answered by THREAD so a card raised inside a room works the
     // same way as one in a 1:1 chat.
-    m = path.match(/^\/api\/threads\/([\w-]+)\/tool-cards\/([\w-]+)\/(choose|connect|later|back|look)$/);
+    m = path.match(/^\/api\/threads\/([\w-]+)\/tool-cards\/([\w-]+)\/(choose|connect|later|back|look|build)$/);
     if (m && method === "POST") {
       const threadId = m[1]!;
       const messageId = m[2]!;
@@ -13857,6 +13859,23 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           resumeKey: newId(),
           labels: [request.capability],
           prompt: `OpenMausBot update: the user asked you to look for a way to do "${request.capability}", because there is no app OpenMausBot can connect for it. Research whether a real MCP server or CLI exists — read the actual package or repository page, do not answer from memory. If you find one you can vouch for, call propose_tool with the exact version and the pages you read. If you find nothing solid, say so plainly and do not invent one.`,
+        });
+        return json(res, 200, { ok: true });
+      }
+      // Rung 4: nothing exists, so make one. Same shape as "look" — a dead
+      // end offers it, and it runs before the settled guard for the same
+      // reason.
+      if (action === "build") {
+        if (request.settled !== "none" && request.settled !== "searching") {
+          return json(res, 409, { error: "there is nothing to build for on this card" });
+        }
+        patch({ ...request, settled: "building" });
+        dispatchConnectorResume({
+          botId: owner.id,
+          threadId,
+          resumeKey: newId(),
+          labels: [request.capability],
+          prompt: `OpenMausBot update: the user asked you to BUILD a tool for "${request.capability}", because nothing connectable answers it. cli-printing-press (https://github.com/mvanhorn/cli-printing-press) generates a CLI and an MCP server from an OpenAPI spec, a URL, or a HAR file. First check whether it is available on this computer; if it is not, tell the user exactly that and how to get it, and stop — do not improvise a substitute. If it is available, find the API's OpenAPI spec or documentation URL, generate the tool, and when it produces an MCP server call propose_tool with kind "generated", the command that runs it, and built_from set to the documentation URL you generated it from. Nothing you build runs until the user approves that card.`,
         });
         return json(res, 200, { ok: true });
       }

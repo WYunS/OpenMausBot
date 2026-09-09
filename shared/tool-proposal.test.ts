@@ -92,3 +92,43 @@ describe("consequenceLine", () => {
     expect(consequenceLine(proposal({ kind: "cli" }))).toContain("on this computer");
   });
 });
+
+describe("a tool the bot generated", () => {
+  const built = (patch: Partial<ToolProposalCardData> = {}): ToolProposalCardData => proposal({
+    kind: "generated",
+    label: "WeldLog CLI",
+    packageId: "",
+    packageVersion: "",
+    publisher: undefined,
+    builtFrom: "https://weldlog.example/docs/api",
+    command: "/Users/x/.openmausbot/tools/weldlog-pp-mcp",
+    args: [],
+    sources: [],
+    ...patch,
+  });
+
+  it("asks for the documentation it was built from instead of a package", () => {
+    // There is no package and no publisher, and inventing either would be the
+    // one dishonest field on a card built to be honest.
+    expect(proposalError(built())).toBeNull();
+    expect(proposalError(built({ builtFrom: undefined }))).toMatch(/built from/);
+    expect(proposalError(built({ builtFrom: "http://weldlog.example" }))).toMatch(/built from/);
+  });
+
+  it("still needs a name and a command", () => {
+    expect(proposalError(built({ label: "" }))).toMatch(/name/);
+    expect(proposalError(built({ command: "" }))).toMatch(/command/);
+  });
+
+  it("says who wrote it, because that is the part that differs", () => {
+    const line = consequenceLine(built());
+    expect(line).toContain("on this computer");
+    expect(line).toContain("generated this itself");
+    expect(line).toContain("nobody else has reviewed it");
+  });
+
+  it("binds the approval to what it was built from", () => {
+    expect(executableFingerprint(built({ builtFrom: "https://a.example/docs" })))
+      .not.toBe(executableFingerprint(built({ builtFrom: "https://b.example/docs" })));
+  });
+});

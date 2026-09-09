@@ -594,17 +594,25 @@ const TOOLS = [
   {
     name: "propose_tool",
     description:
-      "Propose an MCP server or CLI you FOUND that would let this bot do something it currently cannot. Use only after need_tool reported that OpenMausBot has no app to connect for the capability, and only after you have actually read the package or repository page — never from memory. You are proposing, not installing: OpenMausBot shows the user what you found, who publishes it, the exact version and the exact command that would run, and nothing happens unless they approve it. Give one exact version, never a range or \"latest\", and at least one https source you really read. Never propose credentials or environment VALUES — name the variables only. After calling this, end the turn and wait for the decision.",
+      "Propose an MCP server or CLI that would let this bot do something it currently cannot — one you FOUND, or one you BUILT with cli-printing-press (kind \"generated\"). Use only after need_tool reported that OpenMausBot has no app to connect for the capability, and only after you have actually read the package or repository page — never from memory. You are proposing, not installing: OpenMausBot shows the user what you found, who publishes it, the exact version and the exact command that would run, and nothing happens unless they approve it. Give one exact version, never a range or \"latest\", and at least one https source you really read. Never propose credentials or environment VALUES — name the variables only. After calling this, end the turn and wait for the decision.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
         capability: { type: "string", description: "The capability this answers, in the same plain words need_tool used." },
-        kind: { type: "string", enum: ["mcp", "cli"], description: "An MCP server the bot can call, or a command-line tool." },
+        kind: {
+          type: "string",
+          enum: ["mcp", "cli", "generated"],
+          description: "An MCP server, a command-line tool, or \"generated\" for one you built yourself with cli-printing-press.",
+        },
         label: { type: "string", description: "Human name, e.g. \"Fastmail Calendar MCP\"." },
         summary: { type: "string", description: "One or two lines on what it does." },
         package_id: { type: "string", description: "Package or repository id, e.g. @example/calendar-mcp." },
-        package_version: { type: "string", description: "One exact version. A range or \"latest\" is refused." },
+        package_version: { type: "string", description: "One exact version. A range or \"latest\" is refused. Omit for a generated tool." },
+        built_from: {
+          type: "string",
+          description: "Generated tools only: the https API documentation you generated it from. That is its provenance.",
+        },
         publisher: { type: "string", description: "Who publishes it, as the page says. Shown as unverified." },
         homepage: { type: "string", description: "https link to its page." },
         command: { type: "string", description: "The command that would run, e.g. npx." },
@@ -625,7 +633,7 @@ const TOOLS = [
           },
         },
       },
-      required: ["capability", "kind", "label", "summary", "package_id", "package_version", "command", "sources"],
+      required: ["capability", "kind", "label", "summary", "command"],
     },
   },
   {
@@ -1007,6 +1015,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
         summary: String(args.summary ?? ""),
         packageId: String(args.package_id ?? ""),
         packageVersion: String(args.package_version ?? ""),
+        ...(typeof args.built_from === "string" ? { builtFrom: args.built_from } : {}),
         ...(typeof args.publisher === "string" ? { publisher: args.publisher } : {}),
         ...(typeof args.homepage === "string" ? { homepage: args.homepage } : {}),
         command: String(args.command ?? ""),

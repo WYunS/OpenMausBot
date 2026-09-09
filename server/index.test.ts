@@ -7369,6 +7369,59 @@ describe("harness HTTP API", () => {
     }
   });
 
+  // Rung 4. Generated code has no package and no publisher, so the card asks
+  // for what it WAS built from instead — and still binds the approval to the
+  // command, because it still runs.
+  it("proposes a tool the bot built, with the docs it was built from as its provenance", async () => {
+    expect((await api("PUT", "/api/config", { composio: { apiKey: "ak_good" } })).status).toBe(200);
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    try {
+      const token = await mintTestCapability(BASE, bot.id, bot.threadId, { kind: "agents" });
+      const propose = async (patch: Record<string, unknown> = {}) => {
+        const response = await fetch(`${BASE}/api/internal/tool-proposals`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            fromBotId: bot.id,
+            fromThreadId: bot.threadId,
+            capability: "underwater welding",
+            kind: "generated",
+            label: "WeldLog CLI",
+            summary: "Generated from the WeldLog API docs.",
+            packageId: "",
+            packageVersion: "",
+            builtFrom: "https://weldlog.example/docs/api",
+            command: "/tmp/weldlog-pp-mcp",
+            args: [],
+            sources: [],
+            ...patch,
+          }),
+        });
+        return { status: response.status, body: await response.json() as any };
+      };
+
+      // No documentation URL means nothing to check it against.
+      expect((await propose({ builtFrom: undefined })).body.rejected).toMatch(/built from/);
+      expect((await propose({ builtFrom: "http://weldlog.example" })).body.rejected).toMatch(/built from/);
+
+      const shown = await propose();
+      const messageId = shown.body.messageId;
+      const read = async () => (await api("GET", `/api/threads/${bot.threadId}/messages`)).body.messages
+        .find((m: any) => m.id === messageId).card.toolProposal;
+      const proposal = await read();
+      expect(proposal).toMatchObject({ kind: "generated", builtFrom: "https://weldlog.example/docs/api" });
+      expect(proposal.sha256).toMatch(/^[a-f0-9]{64}$/);
+
+      const route = (action: string) => `/api/threads/${bot.threadId}/tool-proposals/${messageId}/${action}`;
+      // Same binding as a found tool: it runs, so it is approved by hash.
+      expect((await api("POST", route("approve"), { reviewedSha256: "c".repeat(64) })).status).toBe(409);
+      expect((await api("POST", route("approve"), { reviewedSha256: proposal.sha256 })).status).toBe(200);
+      expect((await read()).settled).toBe("approved");
+    } finally {
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
   it("keeps second-account cards separate and waits for the requested alias, not an existing account", async () => {
     expect((await api("PUT", "/api/config", { composio: { apiKey: "ak_good" } })).status).toBe(200);
     const bot = (await api("POST", "/api/bots")).body.bot;

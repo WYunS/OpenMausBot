@@ -87,25 +87,40 @@ downloaded from a stranger, and the generated skill goes through the existing
 hash-bound review card before it can run. It is also slow — research, codegen,
 a Go build — so it is offered, never assumed, and it reports progress.
 
-## Slices
+## Slices — all four built
 
-Each ships on its own, in this order.
+1. ✅ **Connect in the conversation** (rungs 1–2). `need_tool(capability)`, the
+   catalog-backed picker, the account-naming step, the escape hatches.
+2. ✅ **Onboarding** — smaller than planned. The suggested-first-jobs card was
+   dropped: #833 deliberately replaced the onboarding quiz with setup mode, and
+   four chips about calendars are the wrong question for a bot that does not
+   yet know what it is. What was actually missing was the END of the setup
+   prompt, which sent people to a settings panel to authorize apps by hand. It
+   calls `need_tool` now. The app marquee shipped.
+3. ✅ **Find** (rung 3): "Look for one" → research → `propose_tool` → a card
+   carrying package, exact version, publisher (marked unverified), the command
+   that would run, and the pages the bot read. Approval is hash-bound to what
+   executes.
+4. ✅ **Build** (rung 4): "Build one" → cli-printing-press → the generated MCP
+   server proposed on the same card, with the API documentation it was built
+   from standing in for a package that does not exist.
 
-1. **Connect in the conversation** (rungs 1–2). The recorded flow, generalized
-   to any missing tool rather than only first-run. Reuses the question card,
-   the connector card, and `composio.ts`. Adds: the catalog-backed picker, the
-   account-naming step, and the escape hatches.
-2. **Job-first onboarding.** Suggested first jobs and the marquee of
-   connectable apps, feeding slice 1. This is the part of the recording that is
-   pure onboarding.
-3. **Find** (rung 3): research, the proposal card, provenance, approval.
-4. **Build** (rung 4): printing press, the generated MCP server, review.
+## Answered along the way
 
-## Open questions
+- **What names the capability**: the model does, with `need_tool`. Harness
+  detection on a failed tool call is still worth adding as a backstop for when
+  the model does not realise it is stuck.
+- **The score floor** in `matchToolkits` exists because "veterinary records"
+  confidently offered Airtable and Salesforce. One late mention in a blurb is
+  not evidence, and a wrong offer costs a real sign-in.
 
-- What names the capability — a `need_tool(capability, why)` the model calls, or
-  harness detection when a tool call fails? The first is honest about intent;
-  the second catches the cases where the model does not realize it is stuck.
-- Rung 2 on the phones: the picker is the question card, which iOS and Android
-  are getting in #954/#955, so it should follow. The OAuth handoff on a phone
-  is a different problem and is not in slice 1.
+## Still open
+
+- **The phones.** Rungs 1–4 are desktop-only. The picker is close to the
+  question card (#954/#955); the OAuth handoff and the proposal card's
+  provenance are their own problems.
+- **Rung 4 needs cli-printing-press on the machine.** The bot checks and says
+  so if it is missing; it does not install it.
+- **Nothing re-checks an approved server.** An approved package is pinned to a
+  version, but nothing watches for that version being yanked or the package
+  changing hands.

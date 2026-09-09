@@ -41,7 +41,9 @@ export type ToolRequestOutcome =
   /** the catalog had nothing for this capability */
   | "none"
   /** …and the user asked the bot to go and look for one (rung 3) */
-  | "searching";
+  | "searching"
+  /** …or to build one, because nothing exists to find (rung 4) */
+  | "building";
 
 export interface ToolRequestCardData {
   version: 1;
