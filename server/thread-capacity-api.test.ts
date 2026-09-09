@@ -29,8 +29,19 @@ describe("per-bot thread capacity through an isolated HTTP fixture", () => {
   const messages = async (threadId: string) => (await api("GET", `/api/threads/${threadId}/messages?limit=50`)).body.messages as any[];
   const threadFile = (threadId: string, extension: string) => join(fixture.info.dataDir, `${threadId}.${extension}`);
   const dump = async (threadId: string) => {
-    await expect.poll(() => existsSync(threadFile(threadId, "json")), { timeout: 15_000 }).toBe(true);
-    return JSON.parse(readFileSync(threadFile(threadId, "json"), "utf8"));
+    let snapshot: any;
+    await expect.poll(() => {
+      try {
+        // The CLI writes in another process: existence alone can observe an
+        // empty or partial file between open() and its completed write.
+        snapshot = JSON.parse(readFileSync(threadFile(threadId, "json"), "utf8"));
+        return true;
+      } catch (error) {
+        if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === "ENOENT") return false;
+        throw error;
+      }
+    }, { timeout: 15_000 }).toBe(true);
+    return snapshot;
   };
   const finish = (threadId: string) => writeFileSync(threadFile(threadId, "gate"), "finish this isolated turn");
   const busyThreads = async (botId: string) => (await botState(botId)).tasks.filter((task: any) => task.busy).map((task: any) => task.threadId) as string[];
