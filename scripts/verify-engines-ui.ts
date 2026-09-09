@@ -6,7 +6,6 @@ import { createServer } from "vite";
 import type { InstanceInfo } from "../src/state/store.tsx";
 import { launchVerificationServer } from "./control-omb.ts";
 
-const fixture = await launchVerificationServer();
 const instances: InstanceInfo[] = [
   ["claude", "claudeAgent", "Claude", true, "2.1.8"],
   ["codex", "codex", "Codex", true, "0.122.0"],
@@ -35,8 +34,15 @@ instances[5].install!.server = { package: "kimi-fixture" };
 instances[3].install!.server = { package: "opencode-fixture" };
 instances[3].snapshot.update = { title: "OpenCode update available", message: "A sample update for this isolated preview.", command: "echo 'Preview only'" };
 instances.push({ ...instances[0], instanceId: "claude-local", displayName: "Claude · Local", access: "custom", claudeAccount: undefined, snapshot: { state: "available", authenticated: false } });
+const controller = new AbortController();
+const cancel = () => controller.abort();
+process.once("SIGINT", cancel);
+process.once("SIGTERM", cancel);
+let fixture: Awaited<ReturnType<typeof launchVerificationServer>> | undefined;
 let ui: Awaited<ReturnType<typeof createServer>> | undefined;
 try {
+  fixture = await launchVerificationServer(process.env, controller.signal);
+  controller.signal.throwIfAborted();
   ui = await createServer({
     root: fileURLToPath(new URL("..", import.meta.url)),
     cacheDir: join(fixture.info.dataDir, "vite-cache"),
@@ -60,10 +66,22 @@ try {
       });
     } }],
   });
+  controller.signal.throwIfAborted();
   await ui.listen();
   console.log(JSON.stringify({ ...fixture.info, previewUrl: `${ui.resolvedUrls!.local[0]}__engines.html` }));
-  await new Promise<void>((resolve) => { process.once("SIGINT", resolve); process.once("SIGTERM", resolve); });
+  await new Promise<void>((resolve) => {
+    if (controller.signal.aborted) return resolve();
+    controller.signal.addEventListener("abort", () => resolve(), { once: true });
+  });
 } finally {
-  await ui?.close();
-  await fixture.close();
+  try {
+    await ui?.close();
+  } finally {
+    try {
+      await fixture?.close();
+    } finally {
+      process.removeListener("SIGINT", cancel);
+      process.removeListener("SIGTERM", cancel);
+    }
+  }
 }
