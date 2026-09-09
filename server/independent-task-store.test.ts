@@ -45,6 +45,21 @@ describe("independent bot task state", () => {
     expect(new Store(selection).bot(bot.id)?.threadId).toBe(bot.threadId);
   });
 
+  it("leaves an opened internal run when a different visible task is deleted", () => {
+    const store = new Store(selection);
+    const bot = store.createBot({}, { seedMessages: false });
+    const original = bot.threadId;
+    const results = store.createTask(bot.id, "Results", false)!;
+    const execution = store.createTask(bot.id, "Execution", false)!;
+    store.patchTask(bot.id, execution.threadId, { routineRunId: "run-1" });
+    store.switchTask(bot.id, execution.threadId);
+
+    expect(store.deleteTask(bot.id, results.threadId)?.threadId).toBe(original);
+    expect(store.activeTask(bot.id)?.routineRunId).toBeUndefined();
+    expect(store.taskByThread(bot.id, execution.threadId)?.routineRunId).toBe("run-1");
+    expect(new Store(selection).bot(bot.id)?.threadId).toBe(original);
+  });
+
   it("caps new task titles before persistence and preserves the blank-title fallback", () => {
     const store = new Store(selection);
     const bot = store.createBot({}, { seedMessages: false });

@@ -211,6 +211,8 @@ interface RoutineFile {
 
 export type RoutineRequestOwner = Pick<RoutineRequestReceipt, "requestId" | "messageId" | "botId" | "threadId">;
 
+type ResultsThreadAllocation = { botId: string; threadId: string };
+
 function routineRequestOwnerKey(owner: RoutineRequestOwner): string {
   return JSON.stringify([owner.requestId, owner.messageId, owner.botId, owner.threadId]);
 }
@@ -226,9 +228,9 @@ export interface RoutineManagerOptions {
   createTask: (botId: string, title: string, activate?: boolean) => { threadId: string } | null;
   createGoalTask?: (groupId: string, title: string) => { threadId: string } | null;
   isResultsThread?: (botId: string, threadId: string) => boolean;
-  /** Reuse a valid destination, keep a trusted chat source, or create one. */
+  /** Reuse routine.resultsThreadId, keep a trusted chat source, or allocate a new ID. */
   resolveResultsThread?: (routine: Routine, forceNew: boolean) => string | undefined;
-  /** Compensate an uncommitted explicit allocation, only while still empty. */
+  /** Compensate an uncommitted allocation, only while still empty. */
   discardResultsThread?: (botId: string, threadId: string) => void;
   startTurn: (
     botId: string,
@@ -1082,13 +1084,16 @@ export class RoutineManager {
     const routine = this.routines.find((r) => r.id === id);
     if (!routine) return null;
     let run!: RoutineRun;
+    const allocations: ResultsThreadAllocation[] = [];
+    const previousDestination = routine.resultsThreadId;
     this.commitMutation(() => {
-      run = this.newRun(routine, this.now(), true, request?.threadId ?? routine.sourceThreadId);
+      run = this.newRun(routine, this.now(), true, allocations, request?.threadId ?? routine.sourceThreadId);
       // Preserve the invoking chat as provenance/fallback for this run.
       // An explicitly configured results destination continues to win.
       if (request) run.sourceThreadId = request.threadId;
       if (request) this.rememberRoutineRequest(request, run.id, this.now());
-    });
+    }, () => this.discardResultsThreads(allocations));
+    if (routine.resultsThreadId !== previousDestination) this.emitRoutine(routine);
     this.emitRun(run);
     queueMicrotask(() => void this.tick());
     return cloneRun(run);
@@ -1253,52 +1258,57 @@ export class RoutineManager {
           await this.options.interruptTurn?.(run.botId, threadId, run.runOn ?? "maus").catch(() => {});
         }
       }
-      let changed = false;
-      const missedRuns: RoutineRun[] = [];
-      for (const routine of this.routines) {
-        if (!routine.enabled || routine.nextRunAt == null || routine.nextRunAt > now) continue;
-        const pendingAt = routine.nextRunAt;
-        const late = now - pendingAt;
-        const scheduledFor = routine.schedule.type === "interval" && late <= CATCH_UP_MS
-          ? latestIntervalOccurrence(routine.schedule, now) ?? pendingAt
-          : pendingAt;
-        // One slow interval run must not build an unbounded queue of stale
-        // copies behind it. The series still advances on its original phase.
-        const overlapping = routine.schedule.type === "interval" && this.runs.some(
-          (run) => run.routineId === routine.id && ["queued", "running", "waiting"].includes(run.status),
-        );
-        if (!overlapping) {
-          if (late > CATCH_UP_MS) {
-            const missed = this.newRun(routine, scheduledFor, false);
-            missed.status = "missed";
-            missed.finishedAt = now;
-            missed.error = "This computer was offline for more than 12 hours after the scheduled time";
-            this.emitRun(missed);
-            missedRuns.push(cloneRun(missed));
-          } else {
-            const run = this.newRun(routine, scheduledFor, false);
-            this.emitRun(run);
+      const dueRoutines = this.routines.filter(
+        (routine) => routine.enabled && routine.nextRunAt != null && routine.nextRunAt <= now,
+      );
+      const scheduledRuns: RoutineRun[] = [];
+      const allocations: ResultsThreadAllocation[] = [];
+      if (dueRoutines.length > 0) {
+        this.commitMutation(() => {
+          for (const routine of dueRoutines) {
+            const pendingAt = routine.nextRunAt!;
+            const late = now - pendingAt;
+            const scheduledFor = routine.schedule.type === "interval" && late <= CATCH_UP_MS
+              ? latestIntervalOccurrence(routine.schedule, now) ?? pendingAt
+              : pendingAt;
+            // One slow interval run must not build an unbounded queue of stale
+            // copies behind it. The series still advances on its original phase.
+            const overlapping = routine.schedule.type === "interval" && this.runs.some(
+              (run) => run.routineId === routine.id && ["queued", "running", "waiting"].includes(run.status),
+            );
+            if (!overlapping) {
+              const run = this.newRun(routine, scheduledFor, false, allocations);
+              if (late > CATCH_UP_MS) {
+                run.status = "missed";
+                run.finishedAt = now;
+                run.error = "This computer was offline for more than 12 hours after the scheduled time";
+              }
+              scheduledRuns.push(run);
+            }
+            routine.nextRunAt =
+              routine.schedule.type === "once" ? null : nextOccurrence(routine.schedule, Math.max(now, scheduledFor));
+            // `updatedAt` is the optimistic definition revision carried by
+            // routine confirmation cards. Moving the scheduler cursor is runtime
+            // progress, not a definition edit, so recurring ticks must not make a
+            // still-accurate pending confirmation stale. A one-time routine does
+            // mutate its definition by auto-disabling after its occurrence.
+            if (routine.schedule.type === "once") {
+              routine.enabled = false;
+              routine.updatedAt = Math.max(now, routine.updatedAt + 1);
+            } else if (routine.schedule.type === "interval" && routine.nextRunAt === null) {
+              routine.enabled = false;
+              routine.updatedAt = Math.max(now, routine.updatedAt + 1);
+            }
           }
-        }
-        routine.nextRunAt =
-          routine.schedule.type === "once" ? null : nextOccurrence(routine.schedule, Math.max(now, scheduledFor));
-        // `updatedAt` is the optimistic definition revision carried by
-        // routine confirmation cards. Moving the scheduler cursor is runtime
-        // progress, not a definition edit, so recurring ticks must not make a
-        // still-accurate pending confirmation stale. A one-time routine does
-        // mutate its definition by auto-disabling after its occurrence.
-        if (routine.schedule.type === "once") {
-          routine.enabled = false;
-          routine.updatedAt = Math.max(now, routine.updatedAt + 1);
-        } else if (routine.schedule.type === "interval" && routine.nextRunAt === null) {
-          routine.enabled = false;
-          routine.updatedAt = Math.max(now, routine.updatedAt + 1);
-        }
-        this.emitRoutine(routine);
-        changed = true;
+        }, () => this.discardResultsThreads(allocations));
       }
-      if (changed) this.save();
-      for (const missed of missedRuns) this.options.onRunFailed?.(missed);
+      // Reporting may persist transcript cards, so publish only after the
+      // scheduler batch (including each destination) is durable.
+      for (const routine of dueRoutines) this.emitRoutine(routine);
+      for (const run of scheduledRuns) this.emitRun(run);
+      for (const run of scheduledRuns) {
+        if (run.status === "missed") this.options.onRunFailed?.(cloneRun(run));
+      }
 
       // Oldest queued requests have priority. New manual/webhook arrivals
       // must not continually overtake work that has already waited. Snapshot
@@ -1542,13 +1552,19 @@ export class RoutineManager {
     return nextOccurrence(schedule, now);
   }
 
-  private newRun(routine: Routine, scheduledFor: number, manual: boolean, sourceThreadId = routine.sourceThreadId): RoutineRun {
+  private newRun(
+    routine: Routine,
+    scheduledFor: number,
+    manual: boolean,
+    allocations: ResultsThreadAllocation[],
+    sourceThreadId = routine.sourceThreadId,
+  ): RoutineRun {
     if (routine.target === "bot" && this.options.resolveResultsThread) {
       const destination = this.options.resolveResultsThread({ ...routine, sourceThreadId }, false);
       if (destination !== routine.resultsThreadId) {
+        if (destination) allocations.push({ botId: routine.botId, threadId: destination });
         routine.resultsThreadId = destination;
         routine.updatedAt = Math.max(this.now(), routine.updatedAt + 1);
-        this.emitRoutine(routine);
       }
     }
     const run: RoutineRun = {
@@ -1573,6 +1589,16 @@ export class RoutineManager {
     };
     this.runs.push(run);
     return run;
+  }
+
+  private discardResultsThreads(allocations: ResultsThreadAllocation[]) {
+    for (const { botId, threadId } of allocations) {
+      try {
+        this.options.discardResultsThread?.(botId, threadId);
+      } catch (error) {
+        console.error("routine: could not discard uncommitted results thread", error);
+      }
+    }
   }
 
   private applyResultsInput(routine: Routine, value: RoutineInput["resultsThreadId"]) {

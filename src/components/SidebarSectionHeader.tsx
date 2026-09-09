@@ -97,6 +97,7 @@ export function SidebarSectionHeader({
           <span className="truncate text-[12px] font-semibold text-ink-secondary">
             {name}
           </span>
+          {attentionLabel && <span className="sr-only">{attentionLabel}</span>}
         </div>
       )}
       {reorderable && (

@@ -42,4 +42,22 @@ describe("SidebarSectionHeader", () => {
     expect(html).toContain("2 unread");
     expect(html).toContain("1 working");
   });
+
+  it("retains the accessible attention summary when the heading cannot collapse", () => {
+    const html = renderToStaticMarkup(
+      createElement(SidebarSectionHeader, {
+        name: "Bot Chats",
+        collapsed: false,
+        attention: { waiting: 1, unread: 2, working: 1 },
+        reorderable: false,
+        dragging: false,
+      }),
+    );
+
+    expect(html).not.toContain("<button");
+    expect(html).toContain('class="sr-only"');
+    expect(html).toContain("1 waiting for you");
+    expect(html).toContain("2 unread");
+    expect(html).toContain("1 working");
+  });
 });
