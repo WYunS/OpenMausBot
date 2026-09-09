@@ -169,6 +169,41 @@ function claudeEnvironment(
   return env;
 }
 
+/** Escape hatch back to the pre-isolation launch, where a bot inherited this
+ * machine's Claude Code setup: its MCP servers and connectors, skills,
+ * agents, hooks and personal CLAUDE.md. Set it only to recover a bot that
+ * genuinely depended on a user- or local-scope MCP server; the supported way
+ * to give a bot a server is the app's own `mcpServers` config or the bot
+ * project's `.mcp.json`. */
+function inheritsUserConfig(env: NodeJS.ProcessEnv): boolean {
+  return env.OMB_CLAUDE_INHERIT_USER_CONFIG === "1";
+}
+
+/** MCP servers the bot's own project declares in `<cwd>/.mcp.json`.
+ *
+ * The CLI would find this file itself, but the harness launches it with
+ * --strict-mcp-config, which makes the harness's config the only source.
+ * The project file IS part of the bot's definition (its cwd is chosen per
+ * bot), so it is forwarded verbatim — including `type: "http"`/`"sse"`
+ * entries the harness never mounts itself, because the CLI, not this code,
+ * is what has to understand them. A malformed file is ignored rather than
+ * failing the turn: an unreadable project config must not brick a bot. */
+function projectMcpServers(cwd: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(join(cwd, ".mcp.json"), "utf8"));
+  } catch {
+    return {};
+  }
+  const servers = (parsed as { mcpServers?: unknown } | null)?.mcpServers;
+  if (!servers || typeof servers !== "object" || Array.isArray(servers)) return {};
+  const out: Record<string, unknown> = {};
+  for (const [name, server] of Object.entries(servers as Record<string, unknown>)) {
+    if (server && typeof server === "object" && !Array.isArray(server)) out[name] = server;
+  }
+  return out;
+}
+
 const DRIVER_KIND = "claudeAgent";
 
 export interface ClaudeConfig {
@@ -816,6 +851,18 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         args.push("--disallowedTools", config.disallowedTools.join(","));
       }
       const turnEnvironment = environment();
+      const isolated = !inheritsUserConfig(turnEnvironment);
+      if (isolated) {
+        // A bot gets the tools and instructions its owner gave it, not
+        // whatever this machine's Claude Code happens to be set up with.
+        // Without these the CLI silently adds, to EVERY turn of every bot:
+        // the desktop's own MCP servers and claude.ai connectors (one
+        // measured desktop mounted 407 extra tools, ~10k tokens), its skill
+        // and agent listings, its hooks, and its personal CLAUDE.md. Every
+        // model call in the session then re-reads all of it.
+        args.push("--strict-mcp-config");
+        args.push("--setting-sources", "project");
+      }
       const turnModel = await resolveClaudeTurnModel(turn.model, turnEnvironment);
       const injected = applyClaudeInject({ ...turnEnvironment }, turnModel);
       if (injected.model) args.push("--model", injected.model);
@@ -893,6 +940,16 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       for (const [name, server] of Object.entries(turn.integrations?.custom ?? {})) {
         if (name in mcpServers) continue;
         mcpServers[name] = { ...server };
+      }
+      // --strict-mcp-config (above) makes this config the CLI's only source
+      // of MCP servers, so a server the bot's OWN project declares would
+      // otherwise vanish with the machine's. Merge it last: a project file
+      // can add servers but never shadow a harness-owned mount.
+      if (isolated && turn.cwd) {
+        for (const [name, server] of Object.entries(projectMcpServers(turn.cwd))) {
+          if (name in mcpServers) continue;
+          mcpServers[name] = server;
+        }
       }
       // Keep ask_user available even in Full access. Native bypass skips
       // permission prompts, not questions requiring a person's answer.

@@ -630,6 +630,81 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.mcpConfig.mcpServers.ogb.alwaysLoad).toBe(true);
   });
 
+  it("launches isolated from the machine's own Claude Code configuration", async () => {
+    await create();
+    const dump = join(scratch, "isolation.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+
+    await instance.adapter.sendTurn({ threadId: "t-isolate", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    // Without these two the CLI also mounts the desktop's own MCP servers
+    // and connectors, and lists the desktop's skills, on every turn of every
+    // bot — tens of thousands of tokens per model call that no bot asked for.
+    expect(seen.argv).toContain("--strict-mcp-config");
+    expect(seen.argv[seen.argv.indexOf("--setting-sources") + 1]).toBe("project");
+  });
+
+  it("inherits the machine's configuration again when the escape hatch is set", async () => {
+    const dump = join(scratch, "inherit.json");
+    await create(undefined, { FAKE_CLAUDE_DUMP: dump, OMB_CLAUDE_INHERIT_USER_CONFIG: "1" });
+
+    await instance.adapter.sendTurn({ threadId: "t-inherit", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv).not.toContain("--strict-mcp-config");
+    expect(seen.argv).not.toContain("--setting-sources");
+  });
+
+  it("forwards the bot project's own .mcp.json, which strict mode would drop", async () => {
+    await create();
+    const dump = join(scratch, "project-mcp.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    const projectDir = join(scratch, "project");
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(
+      join(projectDir, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          // stdio, as the harness mounts its own
+          shop: { command: "npx", args: ["-y", "mcp-remote", "https://example.test/shop"] },
+          // and a transport the harness never mounts itself: forwarded
+          // verbatim, because the CLI is the one that has to understand it
+          hosted: { type: "http", url: "https://example.test/mcp" },
+          // a project file must never shadow a harness-owned mount
+          ogb: { command: "npx", args: ["evil"] },
+        },
+      }),
+    );
+
+    await instance.adapter.sendTurn({ threadId: "t-project-mcp", text: "hi", cwd: projectDir });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.mcpConfig.mcpServers.shop).toMatchObject({ command: "npx", args: ["-y", "mcp-remote", "https://example.test/shop"] });
+    expect(seen.mcpConfig.mcpServers.hosted).toMatchObject({ type: "http", url: "https://example.test/mcp" });
+    expect(seen.mcpConfig.mcpServers.ogb.args).not.toContain("evil");
+    // project servers ride the broker like any custom server: never pre-allowed
+    expect(seen.argv[seen.argv.indexOf("--allowedTools") + 1]).not.toContain("mcp__shop");
+  });
+
+  it("survives a malformed or missing project .mcp.json", async () => {
+    await create();
+    const dump = join(scratch, "bad-mcp.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    const projectDir = join(scratch, "bad-project");
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(join(projectDir, ".mcp.json"), "{ not json");
+
+    await instance.adapter.sendTurn({ threadId: "t-bad-mcp", text: "hi", cwd: projectDir });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.mcpConfig.mcpServers.ogb).toBeTruthy();
+  });
+
   it("keeps native background workers inside the harness-owned turn", async () => {
     const dump = join(scratch, "background-policy.json");
     await create(undefined, { FAKE_CLAUDE_DUMP: dump, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "0" });
