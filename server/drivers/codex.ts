@@ -1157,7 +1157,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     });
     // Display identity only, so Settings can say whose ChatGPT account the
     // bots run on; the status command above stays the authority on sign-in.
-    const email = authenticated ? await codexAccountEmail(env) : null;
+    const email = authenticated ? await codexAccountEmail(config.cli, env) : null;
     // childEnv drops OPENAI_API_KEY on purpose — turns run on the ChatGPT login
     return {
       state: "available",

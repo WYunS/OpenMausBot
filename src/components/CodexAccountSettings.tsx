@@ -10,7 +10,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
  * connect their own account from the browser. Mirrors the Claude account
  * panel; sign-in itself stays on the setup card. */
 export function CodexAccountSettings({ instance }: { instance: InstanceInfo }) {
-  const { state, refreshInstances } = useStore();
+  const { state, dispatch, refreshInstances } = useStore();
   const [busy, setBusy] = useState<"check" | "signOut" | null>(null);
   const [confirm, setConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,10 +33,10 @@ export function CodexAccountSettings({ instance }: { instance: InstanceInfo }) {
     setBusy("signOut");
     setError(null);
     try {
-      await api(`/api/instances/${encodeURIComponent(instance.instanceId)}/auth/sign-out`, { method: "POST" });
-      // The credential is gone even if the status refresh fails; the row
-      // then swaps to the Connect ChatGPT card.
-      await refreshInstances().catch(() => {});
+      const { instances } = await api(`/api/instances/${encodeURIComponent(instance.instanceId)}/auth/sign-out`, { method: "POST" });
+      // Use the confirmed result: a second catalog request could fail and
+      // otherwise leave the signed-out account displayed as connected.
+      dispatch({ type: "instances", instances });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {

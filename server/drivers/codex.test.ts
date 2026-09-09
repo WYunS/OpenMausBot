@@ -107,10 +107,10 @@ describe("CodexDriver turns (fake app-server)", () => {
     await removeTempDir(scratch);
   });
 
-  it("names the signed-in ChatGPT account from Codex's own home and offers sign-out", async () => {
+  it("names the signed-in ChatGPT account from Codex's protocol and offers sign-out", async () => {
     const codexHome = join(scratch, ".codex");
     mkdirSync(codexHome, { recursive: true });
-    const claims = Buffer.from(JSON.stringify({ email: "ada@example.test" })).toString("base64url");
+    const claims = Buffer.from(JSON.stringify({ email: "stale-file@example.test" })).toString("base64url");
     writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
       tokens: { id_token: `header.${claims}.signature-fixture`, access_token: "access-fixture", refresh_token: "refresh-fixture" },
     }));
@@ -123,6 +123,11 @@ describe("CodexDriver turns (fake app-server)", () => {
     const signedOut = await instance.snapshot();
     expect(signedOut).toMatchObject({ state: "available", authenticated: false });
     expect(signedOut).not.toHaveProperty("account");
+  });
+
+  it.each(["api-key", "none", "unsupported", "error"])("omits ChatGPT identity when Codex account/read reports %s", async (mode) => {
+    await create({ environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_ACCOUNT_MODE: mode } });
+    expect(await instance.snapshot()).not.toHaveProperty("account");
   });
 
   it("runs the handshake and normalizes a full turn", async () => {

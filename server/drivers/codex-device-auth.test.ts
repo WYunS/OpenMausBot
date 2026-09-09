@@ -48,7 +48,11 @@ if (args.join(' ') === 'login status') {
   }
 } else if (args.join(' ') === 'logout') {
   if (mode === 'logout-fails') { console.error('error: could not remove credentials secret-token'); process.exit(1); }
-  if (mode === 'logout-hang') { setInterval(() => {}, 1000); }
+  if (mode === 'logout-hang' || mode === 'logout-ignore-term') {
+    if (mode === 'logout-ignore-term') process.on('SIGTERM', () => {});
+    writeFileSync(join(home, 'logout-pid'), String(process.pid));
+    setInterval(() => {}, 1000);
+  }
   else {
     const had = existsSync(join(home, 'authenticated'));
     if (mode !== 'logout-lies') try { unlinkSync(join(home, 'authenticated')); } catch {}
@@ -132,7 +136,7 @@ describe("Codex server-owned device authentication", () => {
       const controller = create("success");
       await controller.signOut();
       expect(existsSync(join(home, "authenticated"))).toBe(false);
-      expect(calls().map((call) => call.args)).toEqual([["logout"], ["login", "status"]]);
+      expect(calls().map((call) => call.args)).toEqual([["login", "status"], ["logout"], ["login", "status"]]);
       expect(calls().every((call) => call.home === home && call.codexHome === join(home, ".codex"))).toBe(true);
       const start = await controller.start();
       expect(start).toMatchObject({ phase: "waiting", userCode: "0CSG-0IXIM" });
@@ -159,15 +163,53 @@ describe("Codex server-owned device authentication", () => {
     it("fails closed when Codex still reports a login after logout", async () => {
       signedIn();
       await expect(create("logout-lies").signOut()).rejects.toThrow("still reports a sign-in");
-      expect(calls().map((call) => call.args)).toEqual([["logout"], ["login", "status"]]);
+      expect(calls().map((call) => call.args)).toEqual([["login", "status"], ["logout"], ["login", "status"]]);
     });
 
     it("stops a hung logout and releases the credential home", async () => {
       signedIn();
-      const controller = create("logout-hang", { startupTimeoutMs: 200 });
+      const controller = create("logout-hang", { startupTimeoutMs: 1000 });
       await expect(controller.signOut()).rejects.toThrow("could not remove the sign-in");
       // The lock is released: a later sign-out on the same home proceeds.
       await expect(create("success").signOut()).resolves.toBeUndefined();
+    });
+
+    it.skipIf(process.platform === "win32")("forcibly stops a logout that ignores graceful termination", async () => {
+      signedIn();
+      const controller = create("logout-ignore-term", { startupTimeoutMs: 1500 });
+      let outcome = "pending";
+      const pending = controller.signOut().then(() => { outcome = "succeeded"; }, () => { outcome = "failed"; });
+      let pid: number | undefined;
+      try {
+        await expect.poll(() => existsSync(join(home, "logout-pid")), { timeout: 2500 }).toBe(true);
+        pid = Number(readFileSync(join(home, "logout-pid"), "utf8"));
+        await expect.poll(() => outcome, { timeout: 4000 }).toBe("failed");
+        expect(alive(pid)).toBe(false);
+        await expect(create("success").signOut()).resolves.toBeUndefined();
+      } finally {
+        if (pid !== undefined && alive(pid)) process.kill(-pid, "SIGKILL");
+        await pending;
+      }
+    });
+
+    it("disposal stops an in-progress logout before returning", async () => {
+      signedIn();
+      const controller = create("logout-hang", { startupTimeoutMs: 10_000 });
+      const pending = controller.signOut().catch(() => {});
+      let pid: number | undefined;
+      try {
+        await expect.poll(() => existsSync(join(home, "logout-pid")), { timeout: 2500 }).toBe(true);
+        pid = Number(readFileSync(join(home, "logout-pid"), "utf8"));
+        await controller.dispose();
+        expect(alive(pid)).toBe(false);
+        await expect(create("success").signOut()).resolves.toBeUndefined();
+      } finally {
+        if (pid !== undefined && alive(pid)) {
+          if (process.platform === "win32") process.kill(pid, "SIGKILL");
+          else process.kill(-pid, "SIGKILL");
+        }
+        await pending;
+      }
     });
 
     it("names a missing CLI and a removed provider plainly", async () => {
@@ -175,6 +217,17 @@ describe("Codex server-owned device authentication", () => {
       const controller = create("success");
       await controller.dispose();
       await expect(controller.signOut()).rejects.toThrow("provider was removed");
+    });
+
+    it.each(["api", "unknown-status"])("preserves credentials when the current mode is %s", async (mode) => {
+      await expect(create(mode).signOut()).rejects.toThrow("did not confirm a ChatGPT sign-in");
+      expect(calls().map((call) => call.args)).toEqual([["login", "status"]]);
+      expect(calls().map((call) => call.args)).not.toContainEqual(["logout"]);
+    });
+
+    it("does not mutate credentials when already signed out", async () => {
+      await expect(create("success").signOut()).resolves.toBeUndefined();
+      expect(calls().map((call) => call.args)).toEqual([["login", "status"]]);
     });
   });
 

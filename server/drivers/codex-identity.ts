@@ -1,13 +1,11 @@
-// Display identity for the ChatGPT account Codex signed in on this server.
-// `codex login status` only reports "Logged in using ChatGPT", so the email
-// comes from the id token Codex keeps in CODEX_HOME/auth.json. Only the
-// email claim is decoded; access and refresh tokens never leave the file.
-import { readFile, stat } from "node:fs/promises";
+// Let Codex resolve its effective account, including keyring credentials.
+// Reading auth.json directly can label an API-key or keyring login with an
+// old file's email. Only the protocol's display email leaves this helper.
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { killCliTree, spawnCli } from "../procs.ts";
 
-const MAX_AUTH_FILE_BYTES = 256 * 1024;
-const MAX_CLAIMS_CHARS = 16_384;
+const MAX_OUTPUT = 16_384;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** Where this environment's Codex keeps its credentials, or null when the
@@ -18,32 +16,77 @@ export function codexHome(env: Record<string, string | undefined>): string | nul
   return isAbsolute(home) ? join(home, ".codex") : null;
 }
 
-function claimsOf(idToken: unknown): Record<string, unknown> | null {
-  if (typeof idToken !== "string") return null;
-  const parts = idToken.split(".");
-  if (parts.length !== 3 || parts[1]!.length > MAX_CLAIMS_CHARS) return null;
-  try {
-    const claims: unknown = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8"));
-    return claims && typeof claims === "object" ? (claims as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
-
-/** The signed-in ChatGPT email, or null when Codex is signed out, uses an
- * API key, or stores something this version does not recognise. */
-export async function codexAccountEmail(env: Record<string, string | undefined>): Promise<string | null> {
-  const dir = codexHome(env);
-  if (!dir) return null;
-  const file = join(dir, "auth.json");
-  try {
-    if ((await stat(file)).size > MAX_AUTH_FILE_BYTES) return null;
-    const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
-    const tokens = parsed && typeof parsed === "object" ? (parsed as { tokens?: unknown }).tokens : null;
-    if (!tokens || typeof tokens !== "object") return null;
-    const email = claimsOf((tokens as { id_token?: unknown }).id_token)?.email;
-    return typeof email === "string" && email.length <= 254 && EMAIL.test(email) && !/[\p{Cc}\p{Cf}]/u.test(email) ? email : null;
-  } catch {
-    return null;
-  }
+/** Read-only account metadata. Unsupported CLIs and uncertain responses stay
+ * unnamed; never fall back to a potentially inactive credential file. */
+export async function codexAccountEmail(
+  cli: string,
+  env: Record<string, string | undefined>,
+  timeoutMs = 3_000,
+): Promise<string | null> {
+  const cwd = env.HOME || env.USERPROFILE || homedir();
+  if (!isAbsolute(cwd) || !codexHome(env)) return null;
+  return new Promise((resolveEmail) => {
+    let child: ReturnType<typeof spawnCli>;
+    try {
+      child = spawnCli(cli, ["app-server"], { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+    } catch {
+      resolveEmail(null);
+      return;
+    }
+    let finishing = false;
+    let buffer = "";
+    let outputBytes = 0;
+    let initialized = false;
+    const finish = async (email: string | null) => {
+      if (finishing) return;
+      finishing = true;
+      clearTimeout(timer);
+      let stopped = await killCliTree(child, 1_000);
+      if (!stopped && child.pid) {
+        try {
+          if (process.platform === "win32") child.kill("SIGKILL");
+          else process.kill(-child.pid, "SIGKILL");
+        } catch {
+          try { child.kill("SIGKILL"); } catch { /* already gone */ }
+        }
+        stopped = await killCliTree(child, 1_000);
+      }
+      resolveEmail(stopped ? email : null);
+    };
+    const timer = setTimeout(() => { void finish(null); }, timeoutMs);
+    timer.unref();
+    const send = (message: unknown) => {
+      try { child.stdin.write(`${JSON.stringify(message)}\n`); } catch { void finish(null); }
+    };
+    child.stdin.on("error", () => { void finish(null); });
+    child.stderr.resume(); // Do not retain or log raw CLI errors or credentials.
+    child.on("error", () => { void finish(null); });
+    child.on("close", () => { void finish(null); });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      if (finishing) return;
+      outputBytes += Buffer.byteLength(chunk);
+      if (outputBytes > MAX_OUTPUT) { void finish(null); return; }
+      buffer += chunk;
+      let newline: number;
+      while (!finishing && (newline = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        if (!line.trim()) continue;
+        let message: any;
+        try { message = JSON.parse(line); } catch { void finish(null); return; }
+        if (!initialized && message?.id === 1) {
+          if (message.error || !message.result) { void finish(null); return; }
+          initialized = true;
+          send({ method: "initialized", params: {} });
+          send({ id: 2, method: "account/read", params: { refreshToken: false } });
+        } else if (initialized && message?.id === 2) {
+          const account = message.error ? null : message.result?.account;
+          const email = account?.type === "chatgpt" ? account.email : null;
+          void finish(typeof email === "string" && email.length <= 254 && EMAIL.test(email) && !/[\p{Cc}\p{Cf}]/u.test(email) ? email : null);
+        }
+      }
+    });
+    send({ id: 1, method: "initialize", params: { clientInfo: { name: "openmausbot", version: "1" } } });
+  });
 }

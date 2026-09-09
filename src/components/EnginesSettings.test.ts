@@ -45,7 +45,7 @@ describe("Settings → Engines → Codex", () => {
     const html = render(true, { email: "ada@example.test", signOut: true });
     expect(html).toContain("ada@example.test");
     expect(html).toContain("Sign out of ChatGPT");
-    expect(html).toContain("switch to a different ChatGPT account");
+    expect(html).toContain("Stop running Codex tasks before switching accounts");
     expect(html).toContain("Check account");
     expect(html).not.toContain("Connect ChatGPT");
     expect(html).not.toContain("codex logout");
@@ -53,9 +53,12 @@ describe("Settings → Engines → Codex", () => {
     expect(render(false, { signOut: true })).not.toContain("Sign out of ChatGPT");
   });
 
-  it("warns how many bots pause when the account is signed out", () => {
-    expect(render(true, { signOut: true, assigned: true })).toContain("1 bot(s) use Codex right now");
-    expect(render(true, { signOut: true })).not.toContain("use Codex right now");
+  it("names affected bots without promising to cancel their running tasks", () => {
+    const html = render(true, { signOut: true, assigned: true });
+    expect(html).toContain("1 bot(s) use this Codex connection");
+    expect(html).toContain("Running tasks are not cancelled by signing out");
+    expect(html).not.toContain("will pause");
+    expect(render(true, { signOut: true })).not.toContain("bot(s) use this Codex connection");
   });
 });
 

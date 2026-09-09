@@ -138,12 +138,14 @@ may need enabling in ChatGPT security settings or by your workspace admin; see
 Subscription limits still apply. This browser flow is currently for Codex;
 other providers retain their existing sign-in methods.
 
-Once connected, Settings shows the email of the ChatGPT account the bots run
-on. To switch accounts, open **Manage account and sign-in** under that line
+Once connected, Settings shows the account email when Codex can report it.
+To switch accounts, open **Manage account and sign-in** under that line
 and choose **Sign out of ChatGPT**: OMB runs `codex logout` on the server as
-the same user, confirms with `codex login status`, and bots using Codex pause
-until someone with owner access connects an account again. A sign-in another
-browser is still completing is never pulled away; finish or cancel it first.
+the same user and confirms with `codex login status`. New ChatGPT tasks need
+a connected account. Stop running Codex tasks before switching: sign-out does
+not cancel work already in progress. API-key logins are not removed by this
+ChatGPT-specific action. A sign-in another browser is still completing is never
+pulled away; finish or cancel it first.
 
 ## Connect a custom domain in Settings
 
