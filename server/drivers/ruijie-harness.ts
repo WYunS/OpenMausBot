@@ -222,11 +222,11 @@ function mcpPresetContent(base: string, integrations: NamedStdioIntegration[], k
     `    command: ${JSON.stringify(integration.command)}\n` +
     `    args: ${JSON.stringify(integration.args)}\n` +
     `    env: ${JSON.stringify(integration.env)}\n` +
-    // Harness snapshots the session tool set when the preset mounts. If the
-    // MCP handshake fails open, the prompt can run without computer tools and
-    // reconnecting later cannot repair that turn. Keep creation atomic; the
-    // caller retries with a fresh mount name before it sends any prompt.
-    `    failOnStartupError: true\n`
+    // Computer control is part of the requested work, so a missing computer
+    // bridge must stop the turn. Connected apps are optional: a broker outage
+    // must not prevent an otherwise ordinary Harness conversation from
+    // starting. A new task/session will resync its tools after recovery.
+    `    failOnStartupError: ${name === "computer" ? "true" : "false"}\n`
   ).join("");
   return `${base}${suffix}\n# Managed by OpenMausBot. This is user configuration, not Harness source.\n${entries}`;
 }

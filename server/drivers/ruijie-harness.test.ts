@@ -480,6 +480,7 @@ describe("Ruijie Harness driver", () => {
       expect(serverName!.length).toBeLessThanOrEqual(32);
       expect(preset).toContain('command: "C:\\\\OpenMaus\\\\electron.exe"');
       expect(preset).toContain('"OMB_CONNECTOR_TOKEN":"secret"');
+      expect(preset).toContain("failOnStartupError: false");
     } finally {
       await rm(dshHome, { recursive: true, force: true });
     }
