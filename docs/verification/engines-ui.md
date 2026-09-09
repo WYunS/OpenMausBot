@@ -59,3 +59,9 @@ temporary data. Keep the printed server log as evidence. Restore any temporary
 browser viewport override after responsive checks. This recipe does not prove
 real provider installations or sign-ins; use the separate
 [offline server sign-in recipe](server-settings.md) for the real auth boundary.
+
+Stopping during unfinished Vite dependency transforms can still report exit 13
+from `ui.close()`. The app server and its disposable data are cleaned first;
+verify those outcomes rather than treating that development-tool exit code as
+an installed-app failure. Ready preview shutdown exits 0; startup cancellation
+reports the launch-cancelled error.
