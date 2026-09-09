@@ -7299,6 +7299,76 @@ describe("harness HTTP API", () => {
     }
   });
 
+  // Rung 3. The claim under test is that nothing the model found can run
+  // until a person approved the exact command, with its provenance in front
+  // of them — and that a proposal nobody could check never reaches them.
+  it("proposes a found tool with provenance, and installs only what was approved", async () => {
+    expect((await api("PUT", "/api/config", { composio: { apiKey: "ak_good" } })).status).toBe(200);
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    try {
+      const token = await mintTestCapability(BASE, bot.id, bot.threadId, { kind: "agents" });
+      const propose = async (patch: Record<string, unknown> = {}) => {
+        const response = await fetch(`${BASE}/api/internal/tool-proposals`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            fromBotId: bot.id,
+            fromThreadId: bot.threadId,
+            capability: "underwater welding",
+            kind: "mcp",
+            label: "Weld MCP",
+            summary: "Logs weld inspections.",
+            packageId: "@example/weld-mcp",
+            packageVersion: "2.0.1",
+            publisher: "example",
+            command: "npx",
+            args: ["-y", "@example/weld-mcp@2.0.1"],
+            sources: [{ url: "https://www.npmjs.com/package/@example/weld-mcp" }],
+            ...patch,
+          }),
+        });
+        return { status: response.status, body: await response.json() as any };
+      };
+      const transcript = async () => (await api("GET", `/api/threads/${bot.threadId}/messages`)).body.messages;
+
+      // A version range is refused before anyone sees it: the approval would
+      // be for whatever that range resolved to tomorrow.
+      expect((await propose({ packageVersion: "^2.0.1" })).body.rejected).toMatch(/exact version/);
+      // So is a proposal with nothing to check.
+      expect((await propose({ sources: [] })).body.rejected).toMatch(/source/);
+      expect((await propose({ sources: [{ url: "http://example.com" }] })).body.rejected).toMatch(/https/);
+
+      const shown = await propose();
+      expect(shown.status).toBe(200);
+      const messageId = shown.body.messageId;
+      const read = async () => (await transcript()).find((m: any) => m.id === messageId).card.toolProposal;
+      const proposal = await read();
+      expect(proposal).toMatchObject({ packageId: "@example/weld-mcp", packageVersion: "2.0.1", command: "npx" });
+      expect(proposal.sha256).toMatch(/^[a-f0-9]{64}$/);
+
+      const route = (action: string) => `/api/threads/${bot.threadId}/tool-proposals/${messageId}/${action}`;
+      // Approving without echoing what was displayed is refused — that is the
+      // whole point of the hash.
+      expect((await api("POST", route("approve"), {})).status).toBe(409);
+      expect((await api("POST", route("approve"), { reviewedSha256: "b".repeat(64) })).status).toBe(409);
+      // Nothing has been installed by any of that.
+      expect((await api("GET", "/api/mcp/servers")).body.servers.some((s: any) => s.name.includes("weld"))).toBe(false);
+
+      expect((await api("POST", route("approve"), { reviewedSha256: proposal.sha256 })).status).toBe(200);
+      expect((await read()).settled).toBe("approved");
+      const installed = (await api("GET", "/api/mcp/servers")).body.servers.find((s: any) => s.name.includes("weld"));
+      expect(installed).toBeTruthy();
+      expect(installed.command).toBe("npx");
+      // …and it is on, because this one WAS reviewed: the person approved
+      // this exact command with its provenance on screen.
+      expect(installed.enabled).toBe(true);
+      // A settled proposal cannot be answered twice.
+      expect((await api("POST", route("decline"))).status).toBe(409);
+    } finally {
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
   it("keeps second-account cards separate and waits for the requested alias, not an existing account", async () => {
     expect((await api("PUT", "/api/config", { composio: { apiKey: "ak_good" } })).status).toBe(200);
     const bot = (await api("POST", "/api/bots")).body.bot;

@@ -39,7 +39,9 @@ export type ToolRequestOutcome =
   /** "I'll connect it later" */
   | "later"
   /** the catalog had nothing for this capability */
-  | "none";
+  | "none"
+  /** …and the user asked the bot to go and look for one (rung 3) */
+  | "searching";
 
 export interface ToolRequestCardData {
   version: 1;

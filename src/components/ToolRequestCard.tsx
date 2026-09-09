@@ -10,7 +10,7 @@
 // front because that is the moment it means something — it is the name the
 // bot will use when it asks you to approve an action later.
 import { useState } from "react";
-import { ArrowLeft, Check, Loader2, PlugZap, SearchX } from "lucide-react";
+import { ArrowLeft, Check, Loader2, PlugZap, Search, SearchX } from "lucide-react";
 
 import { api, type Message } from "@/state/store";
 import { cn } from "@/lib/cn";
@@ -72,7 +72,9 @@ export function ToolRequestCard({ threadId, message }: { threadId: string; messa
 
   // Settled: say how it ended and stop offering buttons for it.
   if (request.settled) {
-    const note = request.settled === "connecting"
+    const note = request.settled === "searching"
+      ? t("toolLadder.settled.searching")
+      : request.settled === "connecting"
       ? t("toolLadder.settled.connecting", { app: chosen?.label ?? request.capability })
       : request.settled === "ready"
         ? t("toolLadder.settled.ready", { app: chosen?.label ?? request.capability })
@@ -81,19 +83,37 @@ export function ToolRequestCard({ threadId, message }: { threadId: string; messa
           // Falling off the ladder is told, never shrugged off.
           : t("toolLadder.settled.none", { capability: request.capability });
     const missed = request.settled === "none";
+    const searching = request.settled === "searching";
     return (
-      <Shell dim>
-        {missed ? (
+      <Shell dim={!missed}>
+        {missed || searching ? (
           <div className="text-[15px] font-semibold text-ink">
-            {t("toolLadder.none.title", { capability: request.capability })}
+            {searching
+              ? t("toolLadder.title", { capability: request.capability })
+              : t("toolLadder.none.title", { capability: request.capability })}
           </div>
         ) : (
           <Header capability={request.capability} reason={request.reason} />
         )}
         <div className="mt-2 flex items-center gap-1.5 text-[13px] text-ink-secondary">
-          {missed ? <SearchX size={14} /> : <Check size={14} className="text-success" />}
+          {searching ? <Loader2 size={14} className="animate-spin" /> : missed ? <SearchX size={14} /> : <Check size={14} className="text-success" />}
           {note}
         </div>
+        {/* The ladder's next rung. A dead end is where this feature is most
+            worth something: not "I can't", but "shall I go and look?" */}
+        {missed && (
+          <div className="mt-3 flex justify-end">
+            <button
+              onClick={() => void post("look")}
+              disabled={busy}
+              className="flex items-center gap-1.5 rounded-full border border-hairline/50 px-3.5 py-1.5 text-[13.5px] text-ink hover:bg-control disabled:opacity-40"
+            >
+              {busy ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />}
+              {t("toolLadder.look")}
+            </button>
+          </div>
+        )}
+        {error && <p className="mt-2 text-[12.5px] text-danger">{error}</p>}
       </Shell>
     );
   }

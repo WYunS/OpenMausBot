@@ -48,6 +48,7 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { OptionCard, shouldHideOnboardingCard } from "./OptionCard";
 import { ApprovalCard } from "./ApprovalCard";
 import { ToolRequestCard } from "./ToolRequestCard";
+import { ToolProposalCard } from "./ToolProposalCard";
 import { ConnectableApps } from "./ConnectableApps";
 import { Composer } from "./Composer";
 import { ChatFindBar } from "./ChatFindBar";
@@ -756,6 +757,9 @@ const MessagesList = memo(function MessagesList({
               // so never the approval box.
               if (m.card?.toolRequest) {
                 return <ToolRequestCard threadId={bot.threadId} message={m} />;
+              }
+              if (m.card?.toolProposal) {
+                return <ToolProposalCard threadId={bot.threadId} message={m} />;
               }
               // a live permission ask gets the approval box; questions keep
               // the list card. The first-run quiz drops out once they talk.
