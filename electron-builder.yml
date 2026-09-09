@@ -76,16 +76,6 @@ extraResources:
     to: skills
   - from: dist-native/android-platform-tools
     to: android-platform-tools
-  # The release pipeline stages exactly one architecture-specific OCI archive
-  # plus its checksum here for offline/full installers. The directory remains
-  # absent from ordinary developer packages, which keep the dynamic fallback.
-  - from: vm-image/dist/${arch}
-    to: vm-image
-    filter:
-      - "*.oci.tar"
-      - "*.oci.tar.sha256"
-      - "manifest-*.json"
-
 mac:
   # Two single-arch artifacts rather than one universal binary: the app is
   # architecture-specific, and universal would make users download both halves.

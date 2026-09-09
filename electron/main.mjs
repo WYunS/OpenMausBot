@@ -1111,7 +1111,6 @@ async function startServerOn(port) {
     // the server advertises this to remote clients so version skew is visible
     OMB_APP_VERSION: app.getVersion(),
     OMB_USER_DATA: app.getPath("userData"),
-    OMB_LOCAL_VM_PROFILE: "installed",
     ...(secureCredentials.composioApiKey
       ? { COMPOSIO_API_KEY: secureCredentials.composioApiKey }
       : {}),

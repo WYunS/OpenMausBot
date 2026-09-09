@@ -16,7 +16,6 @@ $ruijieAppName = ([string][char]0x9510) + ([char]0x6377) + 'Bot'
 $env:OMB_USER_DATA = Join-Path $env:APPDATA $ruijieAppName
 $env:OMB_DATA_DIR = Join-Path $env:USERPROFILE '.openmausbot'
 $env:OMB_PORT = [string]$developmentServerPort
-$env:OMB_LOCAL_VM_PROFILE = 'development'
 # A source server is not Electron's utility child and must discover the
 # development bridge from the descriptor above.
 $env:OMB_DESKTOP_PARENT = $null

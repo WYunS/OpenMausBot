@@ -27,7 +27,6 @@ test("development services start from absolute paths in this checkout", async ()
   assert.match(source, /\$env:OMB_USER_DATA\s*=\s*Join-Path \$env:APPDATA \$ruijieAppName/);
   assert.match(source, /\$env:OMB_DATA_DIR\s*=\s*Join-Path \$env:USERPROFILE '\.openmausbot'/);
   assert.match(source, /\$env:OMB_PORT\s*=\s*\[string\]\$developmentServerPort/);
-  assert.match(source, /\$env:OMB_LOCAL_VM_PROFILE\s*=\s*'development'/);
   assert.match(source, /\$env:OMB_DESKTOP_PARENT\s*=\s*\$null/);
   assert.doesNotMatch(source, /\$env:OMB_USER_DATA\s*=.*'锐捷Bot'/);
 });
@@ -82,7 +81,6 @@ test("the development shortcut uses a branded native launcher", async () => {
   assert.equal(installerAppId, "com.openmausbot.app.localdev.source");
   assert.equal(mainAppId, installerAppId);
   assert.match(mainSource, /app\.isPackaged\) app\.setPath\("userData", path\.join\(app\.getPath\("appData"\), "锐捷Bot Installed"\)\)/);
-  assert.match(mainSource, /OMB_LOCAL_VM_PROFILE:\s*"installed"/);
   assert.match(mainSource, /server-data/);
   assert.match(mainSource, /title:\s*"锐捷Bot"/);
   assert.match(mainSource, /nativeTheme\.themeSource\s*=\s*nativeThemeSourceForSkin\(skin\)/);

@@ -14,9 +14,6 @@ electron/resources/speech-helper
 electron/resources/OpenMausBot Speech.app
 electron/resources/OpenMausBot Recorder.app
 release
-vm-image/dist/**/*.oci.tar
-vm-image/dist/**/*.oci.tar.sha256
-vm-image/dist/**/manifest-*.json
 .omb-scratch
 .wrangler/
 .dev.vars

@@ -62,6 +62,10 @@ const fixtureEnv = {
   XDG_DATA_HOME: join(home, ".local", "share"),
   OMB_DATA_DIR: join(home, ".openmausbot"),
   OMB_PORT: String(port),
+  // A package smoke test must never launch the user's installed Harness.
+  // Point discovery at an intentionally absent executable so this isolated
+  // home stays headless and cannot show a login window with an empty cache.
+  RUIJIE_HARNESS_EXECUTABLE: join(staging, "missing-ruijie-harness"),
   ...(browserBundle ? {
     OMB_RESOURCES_PATH: staging,
     // A global engine on the developer's PATH must not make this test pass.

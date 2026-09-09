@@ -52,6 +52,7 @@ const ENTRY_POINTS = [
   // package smoke probe also imports local-computer.js directly.
   "proxy-paths.ts",
   "local-computer.ts",
+  "local-computer-proxy.ts",
   "computer-proxy.ts",
   "ruijie-computer-proxy.ts",
   "container-mcp.ts",
@@ -60,6 +61,7 @@ const ENTRY_POINTS = [
   "connector-proxy.ts",
   "drivers/agents-proxy.ts",
   "drivers/dweb-proxy.ts",
+  "drivers/browser-proxy.ts",
   "drivers/phone-proxy.ts",
 ];
 

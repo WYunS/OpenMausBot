@@ -1,8 +1,3 @@
-import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
 import { describe, expect, it } from "vitest";
 
 import {
@@ -34,11 +29,9 @@ import {
   dockerSecurityIsHardened,
   localVmRecreatableOnDemand,
   managedImageDockerfile,
-  localVmImageArchiveName,
   resolveManagedBaseImage,
   perBotLocalVmTarget,
   podmanSecurityIsHardened,
-  prepareManagedImage,
   SHARED_LOCAL_VM_TARGET,
   setupCommands,
   type CommandRunner,
@@ -678,45 +671,8 @@ describe("Cua integration", () => {
   it("installs a Chinese-capable font and refreshes the font cache", () => {
     const dockerfile = managedImageDockerfile();
     expect(dockerfile).toContain("fonts-noto-cjk");
-    expect(dockerfile).toContain("fonts-noto-color-emoji");
-    expect(dockerfile).toContain("locale-gen zh_CN.UTF-8");
-    expect(dockerfile).toContain("ibus-libpinyin");
-    expect(dockerfile).toContain("GTK_IM_MODULE=ibus");
-    expect(dockerfile).toContain("--reinstall --no-install-recommends");
-    expect(dockerfile).toContain("xfce4-panel.mo");
-    expect(dockerfile).toContain("thunar.mo");
     expect(dockerfile).toContain("fc-cache -f");
-  });
-
-  it("uses architecture-specific immutable offline archive names", () => {
-    expect(localVmImageArchiveName("x64")).toBe(
-      `openmausbot-cua-local-vm-driver-${CUA_DRIVER_VERSION}-v${IMAGE_LAYER_VERSION}-linux-amd64.oci.tar`,
-    );
-    expect(localVmImageArchiveName("arm64")).toBe(
-      `openmausbot-cua-local-vm-driver-${CUA_DRIVER_VERSION}-v${IMAGE_LAYER_VERSION}-linux-arm64.oci.tar`,
-    );
-  });
-
-  it("checksum-verifies and imports a packaged OCI archive before using it", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "omb-image-import-"));
-    const archive = join(directory, localVmImageArchiveName());
-    const contents = Buffer.from("test OCI archive fixture");
-    await writeFile(archive, contents);
-    await writeFile(`${archive}.sha256`, `${createHash("sha256").update(contents).digest("hex")}  fixture\n`);
-    const previous = process.env.OPENMAUSBOT_LOCAL_VM_IMAGE_ARCHIVE;
-    process.env.OPENMAUSBOT_LOCAL_VM_IMAGE_ARCHIVE = archive;
-    const fake = runner({
-      [`podman load -i ${archive}`]: "Loaded image\n",
-      [`podman image inspect ${IMAGE}`]: preparedImageInspect(),
-    });
-    try {
-      await prepareManagedImage("podman", fake.run);
-      expect(fake.calls).toEqual([`podman load -i ${archive}`, `podman image inspect ${IMAGE}`]);
-    } finally {
-      if (previous === undefined) delete process.env.OPENMAUSBOT_LOCAL_VM_IMAGE_ARCHIVE;
-      else process.env.OPENMAUSBOT_LOCAL_VM_IMAGE_ARCHIVE = previous;
-      await rm(directory, { recursive: true, force: true });
-    }
+    expect(IMAGE_LAYER_VERSION).toBe("5");
   });
 
   it("reuses the pinned base by content digest when Docker Hub is unreachable", async () => {
