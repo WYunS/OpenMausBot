@@ -7,6 +7,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { extname, join } from "node:path";
 
 import { z } from "zod";
+import { matchToolkits, type ToolRequestCardData } from "../shared/tool-request.ts";
 import { botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
 import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
 import {
@@ -6847,6 +6848,62 @@ function connectorThread(botId: string, threadId: string) {
   return null;
 }
 
+/**
+ * Show connection cards for a set of toolkits and start the resume watch.
+ *
+ * Shared by the model's own MANAGE_CONNECTIONS interception and by the tool
+ * ladder's naming step, so a connection reached either way behaves the same:
+ * same card, same polling, same automatic continuation.
+ */
+async function createConnectorCards(
+  owner: NonNullable<ReturnType<typeof connectorThread>>,
+  threadId: string,
+  items: { slug: string; alias?: string }[],
+  resumeKey: string,
+  requireActive: () => void,
+): Promise<string[]> {
+  const cfg = loadConfig();
+  const slugs = [...new Set(items.map((item) => item.slug))];
+  const connectionState: Record<string, { connected?: boolean }> = await composio
+    .connectionStatus(cfg, slugs)
+    .catch(() => ({}));
+  requireActive();
+  const messageIds: string[] = [];
+  for (const item of items) {
+    const existing = store.messagesFor(threadId).find(
+      (message) => message.connector?.resumeKey === resumeKey && message.connector.slug === item.slug
+        && (message.connector.alias ?? "").toLowerCase() === (item.alias ?? "").toLowerCase(),
+    );
+    if (existing) {
+      messageIds.push(existing.id);
+      continue;
+    }
+    const toolkit = await composio.toolkitCard(cfg, item.slug);
+    requireActive();
+    const connected = connectionState[item.slug]?.connected === true;
+    const status = item.alias ? "required" : connected ? "connected" : "required";
+    const description = item.alias
+      ? `Connect ${toolkit.label} as “${item.alias}” so the bot can continue`
+      : toolkit.blurb || `Connect ${toolkit.label} so the bot can continue`;
+    const message = store.appendMessage(threadId, {
+      role: "bot",
+      kind: "connector",
+      ...(owner.group ? { from: { botId: owner.bot.id, name: owner.bot.name, color: owner.bot.color } } : {}),
+      connector: {
+        slug: item.slug,
+        label: toolkit.label,
+        description,
+        status,
+        resumeKey,
+        ...(item.alias ? { alias: item.alias } : {}),
+      },
+    });
+    messageIds.push(message.id);
+  }
+  maybeResumeConnectors(owner.bot.id, threadId, resumeKey);
+  return messageIds;
+}
+
 /** When a person last wrote into the room's current conversation, if one
  * ever has. The posting budget's ceiling counts only the bot posts nobody
  * has answered since, so this is read fresh on every attempt rather than
@@ -7249,11 +7306,20 @@ function markConnectorResumeFailed(threadId: string, resumeKey: string, error: s
   }
 }
 
-function dispatchConnectorResume(entry: { botId: string; threadId: string; resumeKey: string; labels: string[] }) {
+function dispatchConnectorResume(entry: {
+  botId: string;
+  threadId: string;
+  resumeKey: string;
+  labels: string[];
+  /** What to tell the bot. Defaults to "they connected it"; the tool ladder
+   * uses it to say "they chose not to", which resumes the same way. */
+  prompt?: string;
+}) {
   const owner = connectorThread(entry.botId, entry.threadId);
   if (!owner) return;
   const names = entry.labels.join(", ");
-  const prompt = `OpenMausBot connection update: the user securely connected ${names}. Continue the task that paused for this connection. Do not ask them to connect it again.`;
+  const prompt = entry.prompt
+    ?? `OpenMausBot connection update: the user securely connected ${names}. Continue the task that paused for this connection. Do not ask them to connect it again.`;
   if (owner.group ? owner.bot.busy : threadBusy(entry.botId, entry.threadId) || activeGroupTurnForBot(entry.botId)) {
     pendingConnectorResumes.set(`${entry.threadId}:${entry.resumeKey}`, entry);
     return;
@@ -8477,6 +8543,68 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         });
         return json(res, 201, proposed);
       }
+      // Rungs 1 and 2 of the tool ladder (docs/plans/tool-ladder.md): use what
+      // is already connected, or offer what the catalog can connect. The model
+      // sends a CAPABILITY in plain words; every slug on the card comes from
+      // the catalog, so a bot can never offer an app we cannot authorize.
+      if (method === "POST" && path === "/api/internal/tool-requests") {
+        const parsed = z.object({
+          fromBotId: z.string().min(1).max(128),
+          fromThreadId: z.string().min(1).max(128),
+          capability: z.string().min(2).max(120),
+          reason: z.string().max(240).optional(),
+        }).strict().safeParse(await readInternalBody());
+        if (!parsed.success) return json(res, 400, { error: "invalid tool request" });
+        const body = parsed.data;
+        const from = store.bot(body.fromBotId);
+        if (!from) return json(res, 403, { error: "unknown sender" });
+        const owner = connectorThread(from.id, body.fromThreadId);
+        if (!owner) return json(res, 403, { error: "source conversation does not belong to sender" });
+        if (!composio.configured(cfg) || from.composio === false) {
+          return json(res, 409, { error: "connected apps are not enabled for this bot" });
+        }
+        const capability = body.capability.trim();
+        const [catalog, connectedState] = await Promise.all([
+          composio.listToolkits(cfg).then((result) => result.cards).catch(() => []),
+          composio.connectedServices(cfg).catch(() => ({} as Record<string, { connected: boolean }>)),
+        ]);
+        requireActiveInternalCapability();
+        const connected = new Set(
+          Object.entries(connectedState).filter(([, state]) => state.connected).map(([slug]) => slug),
+        );
+        const candidates = matchToolkits(capability, catalog, { connected });
+        // Rung 1: something that answers this is already connected. No card —
+        // the best version of this feature is the one nobody has to look at.
+        const ready = candidates.filter((candidate) => candidate.connected);
+        if (ready.length) {
+          return json(res, 200, { ready: true, connected: ready.map((candidate) => candidate.label) });
+        }
+        const push = (toolRequest: ToolRequestCardData) => store.appendMessage(body.fromThreadId, {
+          role: "bot",
+          kind: "options",
+          ...(owner.group ? { from: { botId: from.id, name: from.name, color: from.color } } : {}),
+          card: {
+            title: `Connect ${capability}`,
+            subtitle: body.reason?.trim() || `${from.name} needs ${capability} to continue.`,
+            options: [],
+            toolRequest,
+          },
+        });
+        // Nothing in the catalog. Still a card: falling off a rung is a thing
+        // the person is told about, never a silent shrug from the bot.
+        if (!candidates.length) {
+          push({ version: 1, capability, ...(body.reason ? { reason: body.reason } : {}), candidates: [], step: "choose", settled: "none" });
+          return json(res, 200, { none: true });
+        }
+        const message = push({
+          version: 1,
+          capability,
+          ...(body.reason ? { reason: body.reason } : {}),
+          candidates,
+          step: "choose",
+        });
+        return json(res, 200, { messageId: message.id, candidates: candidates.map((candidate) => candidate.slug) });
+      }
       if (method === "POST" && path === "/api/internal/profile-requests") {
         const parsed = z.object({
           fromBotId: z.string().min(1).max(128),
@@ -9248,7 +9376,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           const alias = composio.normalizeAccountAlias((row.alias ?? row.account) as string | undefined);
           items.push({ slug: slug.toLowerCase(), ...(alias ? { alias } : {}) });
         }
-        const slugs = [...new Set(items.map((item) => item.slug))];
         const owner = connectorThread(botId, threadId);
         if (!owner) return json(res, 403, { error: "conversation does not belong to this bot" });
         if (!/^[\w-]{8,100}$/.test(resumeKey)) return json(res, 400, { error: "invalid resume key" });
@@ -9256,41 +9383,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (!composio.configured(cfg) || owner.bot.composio === false) {
           return json(res, 409, { error: "connected apps are not enabled for this bot" });
         }
-        const connectionState: Record<string, { connected?: boolean }> = await composio.connectionStatus(cfg, slugs).catch(() => ({}));
-        requireActiveInternalCapability();
-        const messageIds: string[] = [];
-        for (const item of items) {
-          const existing = store.messagesFor(threadId).find(
-            (message) => message.connector?.resumeKey === resumeKey && message.connector.slug === item.slug
-              && (message.connector.alias ?? "").toLowerCase() === (item.alias ?? "").toLowerCase(),
-          );
-          if (existing) {
-            messageIds.push(existing.id);
-            continue;
-          }
-          const toolkit = await composio.toolkitCard(cfg, item.slug);
-          requireActiveInternalCapability();
-          const connected = connectionState[item.slug]?.connected === true;
-          const status = item.alias ? "required" : connected ? "connected" : "required";
-          const description = item.alias
-            ? `Connect ${toolkit.label} as “${item.alias}” so the bot can continue`
-            : toolkit.blurb || `Connect ${toolkit.label} so the bot can continue`;
-          const message = store.appendMessage(threadId, {
-            role: "bot",
-            kind: "connector",
-            ...(owner.group ? { from: { botId: owner.bot.id, name: owner.bot.name, color: owner.bot.color } } : {}),
-            connector: {
-              slug: item.slug,
-              label: toolkit.label,
-              description,
-              status,
-              resumeKey,
-              ...(item.alias ? { alias: item.alias } : {}),
-            },
-          });
-          messageIds.push(message.id);
-        }
-        maybeResumeConnectors(botId, threadId, resumeKey);
+        const messageIds = await createConnectorCards(owner, threadId, items, resumeKey, requireActiveInternalCapability);
         return json(res, 200, { messageIds });
       }
       return json(res, 404, { error: "unknown internal endpoint" });
@@ -13593,6 +13686,66 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // Inline connection cards are bound to both the bot and the exact task
     // or room thread that created them. The browser auth URL is returned
     // only to this local UI and is never stored in the transcript.
+    // The tool-ladder card's own buttons: pick an app, name the account, or
+    // say "later". Answered by THREAD so a card raised inside a room works the
+    // same way as one in a 1:1 chat.
+    m = path.match(/^\/api\/threads\/([\w-]+)\/tool-cards\/([\w-]+)\/(choose|connect|later|back)$/);
+    if (m && method === "POST") {
+      const threadId = m[1]!;
+      const messageId = m[2]!;
+      const action = m[3]!;
+      const message = store.messagesFor(threadId).find((entry) => entry.id === messageId);
+      const request = message?.card?.toolRequest;
+      if (!message || !request) return json(res, 404, { error: "no such tool request" });
+      if (request.settled) return json(res, 409, { error: "this request has already been answered" });
+      const owner = message.from?.botId ? store.bot(message.from.botId) : store.botByThread(threadId);
+      if (!owner) return json(res, 404, { error: "this request has no valid owner" });
+      const patch = (toolRequest: ToolRequestCardData) =>
+        store.patchMessage(threadId, messageId, { card: { ...message.card!, toolRequest } });
+
+      // "Choose a different provider" — back to the list, nothing lost.
+      if (action === "back") {
+        patch({ ...request, step: "choose", chosen: undefined });
+        return json(res, 200, { ok: true, step: "choose" });
+      }
+
+      if (action === "later") {
+        patch({ ...request, settled: "later" });
+        // The bot is waiting on this. Tell it plainly rather than leaving the
+        // turn to time out into a guess.
+        dispatchConnectorResume({
+          botId: owner.id,
+          threadId,
+          resumeKey: newId(),
+          labels: [request.capability],
+          prompt: `OpenMausBot connection update: the user chose NOT to connect ${request.capability} for now. Do not ask again in this turn. Carry on with what you can do without it, and say plainly what you cannot.`,
+        });
+        return json(res, 200, { ok: true });
+      }
+
+      const body = await readBody(req);
+      const slug = String(body.slug ?? "").trim().toLowerCase();
+      const candidate = request.candidates.find((entry) => entry.slug === slug);
+      if (!candidate) return json(res, 400, { error: "that app was not offered on this card" });
+
+      if (action === "choose") {
+        // Second step, not a second card: the name is asked here because this
+        // is the moment it means something.
+        patch({ ...request, step: "name", chosen: candidate.slug });
+        return json(res, 200, { ok: true, step: "name" });
+      }
+
+      const alias = composio.normalizeAccountAlias(typeof body.alias === "string" ? body.alias : undefined);
+      const conversation = connectorThread(owner.id, threadId);
+      if (!conversation) return json(res, 403, { error: "conversation does not belong to this bot" });
+      try {
+        await createConnectorCards(conversation, threadId, [{ slug: candidate.slug, ...(alias ? { alias } : {}) }], newId(), () => {});
+      } catch (error) {
+        return json(res, 502, { error: error instanceof Error ? error.message : "could not start the connection" });
+      }
+      patch({ ...request, step: "name", chosen: candidate.slug, settled: "connecting" });
+      return json(res, 200, { ok: true });
+    }
     m = path.match(/^\/api\/bots\/([\w-]+)\/connector-cards\/([\w-]+)\/(authorize|status|resume|dismiss)$/);
     if (m) {
       const body = method === "POST" ? await readBody(req) : {};

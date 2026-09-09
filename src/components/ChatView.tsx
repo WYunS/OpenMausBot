@@ -47,6 +47,7 @@ import { liveActivityLabel } from "@/lib/live-activity";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { OptionCard, shouldHideOnboardingCard } from "./OptionCard";
 import { ApprovalCard } from "./ApprovalCard";
+import { ToolRequestCard } from "./ToolRequestCard";
 import { Composer } from "./Composer";
 import { ChatFindBar } from "./ChatFindBar";
 import { ReplyQuote } from "./ReplyQuote";
@@ -747,6 +748,11 @@ const MessagesList = memo(function MessagesList({
             case "connector":
               return m.connector ? <ConnectorCard botId={bot.id} threadId={bot.threadId} message={m} /> : null;
             case "options":
+              // The tool ladder's own card: not a decision about an action,
+              // so never the approval box.
+              if (m.card?.toolRequest) {
+                return <ToolRequestCard threadId={bot.threadId} message={m} />;
+              }
               // a live permission ask gets the approval box; questions keep
               // the list card. The first-run quiz drops out once they talk.
               if (m.card?.requestId && m.card.tool) {

@@ -571,6 +571,27 @@ const TOOLS = [
     },
   },
   {
+    name: "need_tool",
+    description:
+      "Ask the user to connect the app this job needs, when you do not already have a working tool for it. Say the CAPABILITY in plain words — \"calendar\", \"email\", \"spreadsheet\" — never a vendor and never a slug: OpenMausBot lists the apps it can actually connect for that capability, lets the user pick one and name the account, and runs the sign-in itself. Call this instead of telling the user you cannot do something, and instead of guessing which app they use. If a suitable account is already connected this returns immediately and you simply continue. Otherwise a card is shown: end the turn, and OpenMausBot resumes the task once the account is connected.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        capability: {
+          type: "string",
+          minLength: 2,
+          description: "What the job needs, in plain words a person would use. \"calendar\", not \"googlecalendar\".",
+        },
+        reason: {
+          type: "string",
+          description: "Optional one line on why this job needs it, shown on the card.",
+        },
+      },
+      required: ["capability"],
+    },
+  },
+  {
     name: "skills_list",
     description:
       "List this bot's imported skills (enabled and disabled) and any staged skill writes waiting for the user to confirm. Use this before skill_manage to avoid duplicate names. Listing does not enable anything.",
@@ -905,6 +926,34 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     }
     return {
       text: `A secure ${r.label ?? CREDENTIAL_TARGETS[credentialId].label} request is ready. The desktop app and a freshly QR-paired mobile app show its secure entry card; older mobile pairings explain how to pair again or finish on the computer. End this turn; OpenMausBot will resume the task after the user saves or declines. Never ask them to paste the key into chat.`,
+    };
+  }
+  if (name === "need_tool") {
+    const capability = typeof args.capability === "string" ? args.capability.trim().slice(0, 120) : "";
+    if (!capability) return { text: "need_tool needs a capability, in plain words — for example \"calendar\".", isError: true };
+    const reason = typeof args.reason === "string" ? args.reason.trim().slice(0, 240) : "";
+    const r = await api("/api/internal/tool-requests", {
+      method: "POST",
+      body: JSON.stringify({
+        fromBotId: BOT_ID,
+        fromThreadId: THREAD_ID,
+        capability,
+        ...(reason ? { reason } : {}),
+      }),
+    });
+    // Rung 1: something that answers this is already connected, so there is
+    // nothing to show and nothing to wait for.
+    if (r.ready) {
+      const names = Array.isArray(r.connected) ? r.connected.join(", ") : "";
+      return { text: `Already connected${names ? `: ${names}` : ""}. Use it and continue the task.` };
+    }
+    if (r.none) {
+      return {
+        text: `OpenMausBot has no app it can connect for "${capability}", and told the user so. Do not invent one or ask them to connect something by hand. Say what you cannot do and offer what you can.`,
+      };
+    }
+    return {
+      text: `OpenMausBot showed the user the apps it can connect for "${capability}". End this turn now; the task resumes automatically once they have picked one and connected it.`,
     };
   }
   if (name === "list_routines") {
