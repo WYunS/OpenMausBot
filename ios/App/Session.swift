@@ -730,7 +730,7 @@ final class Session: ObservableObject {
                         // the request dies halfway through replay/hydration,
                         // reconnecting must still ask for the missing gap.
                         if !resumed {
-                            try await hydrate()
+                            try await hydrate(using: client)
                             state.resetCursor(cursor)
                         }
                         status = .live
@@ -774,11 +774,15 @@ final class Session: ObservableObject {
         }
     }
 
-    private func hydrate() async throws {
-        guard let client else { return }
-        let fleet = try await client.fleet(messages: 50)
-        log.info("hydrated \(fleet.bots.count, privacy: .public) bots, \(fleet.groups.count, privacy: .public) rooms")
-        state.hydrate(fleet)
+    private func hydrate(using client: CompanionClient) async throws {
+        let generation = streamGeneration
+        let snapshot = try await client.fleetForHydration(messages: 50)
+        try Task.checkCancellation()
+        guard streamGeneration == generation, self.client?.connection.id == client.connection.id else {
+            throw CancellationError()
+        }
+        log.info("hydrated \(snapshot.fleet.bots.count, privacy: .public) bots, \(snapshot.fleet.groups.count, privacy: .public) rooms")
+        state.hydrate(snapshot.fleet, waitingThreads: snapshot.waitingThreads)
         NotificationCoordinator.shared.setBadge(state.unreadCount)
     }
 
@@ -1805,8 +1809,7 @@ final class Session: ObservableObject {
         do {
             var bot = state.bot(target.botId)
             if bot == nil {
-                let fleet = try await client.fleet(messages: 50)
-                state.hydrate(fleet)
+                try await hydrate(using: client)
                 bot = state.bot(target.botId)
             }
             // A room's approval/question notification carries the asker bot

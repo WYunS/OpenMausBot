@@ -183,7 +183,7 @@ public struct CompanionState: Sendable {
     // MARK: - Hydrating
 
     /// Replace everything from a `GET /api/bots` response.
-    public mutating func hydrate(_ fleet: Fleet) {
+    public mutating func hydrate(_ fleet: Fleet, waitingThreads: [String: ThreadPage] = [:]) {
         bots = fleet.bots
         rooms = fleet.groups
         messages.removeAll()
@@ -197,6 +197,9 @@ public struct CompanionState: Sendable {
         for room in fleet.groups {
             messages[room.threadId] = room.messages ?? []
             hasMore[room.threadId] = room.hasMore ?? false
+        }
+        for (threadId, page) in waitingThreads where bot(forThread: threadId) != nil {
+            merge(page, intoThread: threadId)
         }
     }
 
