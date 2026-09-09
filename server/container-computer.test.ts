@@ -32,7 +32,6 @@ import {
   containerRuntimeStatus,
   containerRunArgs,
   dockerSecurityIsHardened,
-  ensureLocalVmBrowserDefaults,
   localVmRecreatableOnDemand,
   managedImageDockerfile,
   localVmImageArchiveName,
@@ -637,20 +636,6 @@ describe("containerComputerStatus", () => {
 });
 
 describe("Cua integration", () => {
-  it("sets Bing as the managed search provider in existing Local VM browsers", async () => {
-    const fake = runner({});
-
-    await ensureLocalVmBrowserDefaults("docker", SHARED_LOCAL_VM_TARGET, fake.run).catch(() => {});
-
-    const command = fake.calls.find((call) => call.startsWith(`docker exec -u 0 ${CONTAINER} sh -c `));
-    expect(command).toContain("DefaultSearchProviderEnabled");
-    expect(command).toContain("https://www.bing.com/search?q={searchTerms}");
-    expect(command).toContain("/etc/opt/chrome/policies/managed");
-    expect(command).toContain("/etc/chromium/policies/managed");
-    expect(command).toContain("/usr/lib/firefox-esr/distribution/policies.json");
-    expect(command).not.toContain("google.com/search");
-  });
-
   it("hands cloud credentials only to the isolated remote adapter", () => {
     expect(computerProxyEnv({ boxId: "bx_1", token: "t" })).toEqual({
       OGB_BOX_ID: "bx_1",

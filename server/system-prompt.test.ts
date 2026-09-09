@@ -56,8 +56,6 @@ describe("computerPrompt", () => {
     const guard = " At a sign-in, password, MFA, CAPTCHA, or other protected-input step, stop and ask the user to complete it on the visible computer. Never type their password or ask them to paste a password or one-time code into chat.";
     expect(computerPrompt("vm-private")).toContain("your own isolated Cua sandbox");
     expect(computerPrompt("vm-shared")).toContain("a shared, isolated Cua sandbox");
-    expect(computerPrompt("vm-private")).toContain("use Bing");
-    expect(computerPrompt("vm-shared")).toContain("use Bing");
     expect(computerPrompt("box")).toContain("your own cloud computer");
     expect(computerPrompt("vps")).toContain("self-hosted remote Linux computer");
     expect(computerPrompt("ruijie")).toContain("pooled Ruijie Linux sandbox");

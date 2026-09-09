@@ -90,7 +90,6 @@ import {
   containerComputerScreenshot,
   containerComputerStatus,
   containerRuntimeStatus,
-  ensureLocalVmBrowserDefaults,
   localVmRecreatableOnDemand,
   localVmResumable,
   perBotLocalVmTarget,
@@ -2867,9 +2866,6 @@ function releaseLocalVmThread(threadId: string, ownerId?: string): void {
 void (async () => {
   if (localVmMode(cfg) !== "per-bot") {
     const status = await containerComputerStatus(undefined, undefined, SHARED_LOCAL_VM_TARGET).catch(() => null);
-    if (status?.ready && status.runtime) {
-      await ensureLocalVmBrowserDefaults(status.runtime, SHARED_LOCAL_VM_TARGET).catch(() => {});
-    }
     if (shouldArmLocalVmIdle(status)) localVmIdleFor(SHARED_LOCAL_VM_TARGET).touch();
     return;
   }
@@ -2882,12 +2878,6 @@ void (async () => {
   existing.forEach(({ target }, index) => {
     if (shouldArmLocalVmIdle(statuses[index])) localVmIdleFor(target).touch();
   });
-  await Promise.all(existing.map(({ target }, index) => {
-    const status = statuses[index];
-    return status?.ready && status.runtime
-      ? ensureLocalVmBrowserDefaults(status.runtime, target).catch(() => {})
-      : Promise.resolve();
-  }));
 })().catch(() => {
   // Startup inspection is a backstop, not a reason to keep the app offline.
   // The Settings inventory remains available for a later explicit retry.
@@ -7538,10 +7528,7 @@ async function localVmPayload(target: LocalVmTarget) {
 async function readyLocalVmForTurn(botId: string, target: LocalVmTarget, isCurrent = () => true) {
   let status = await containerComputerStatus(undefined, undefined, target);
   if (!isCurrent()) return status;
-  if (status.ready) {
-    if (status.runtime) await ensureLocalVmBrowserDefaults(status.runtime, target).catch(() => {});
-    return status;
-  }
+  if (status.ready) return status;
   const action = localVmResumable(status) ? "start" : localVmRecreatableOnDemand(status) ? "run" : null;
   if (!action) return status;
 
@@ -7574,9 +7561,6 @@ async function readyLocalVmForTurn(botId: string, target: LocalVmTarget, isCurre
     await new Promise((resolve) => setTimeout(resolve, 2_000));
     if (!isCurrent()) break;
     status = await containerComputerStatus(undefined, undefined, target);
-  }
-  if (status.ready && status.runtime) {
-    await ensureLocalVmBrowserDefaults(status.runtime, target).catch(() => {});
   }
   return status;
 }
