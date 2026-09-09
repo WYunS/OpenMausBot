@@ -1407,6 +1407,8 @@
   "computer.android.harnessNote": "Once connected, ask any compatible Maus to open an Android app or complete a task on your phone. The bundled Phone Harness skill loads automatically for phone requests.",
   "computer.android.step2": "Enable Developer options by tapping {buildNumber} seven times in About phone, then turn on {usbDebugging}.",
   "connectors.card.popupBlocked": "Your browser blocked the connection page. Allow pop-ups, then try again.",
+  "connectable.heading": "Apps I can connect",
+  "connectable.headingMore": "Apps I can connect \u2014 {count} in all",
   "toolLadder.title": "Connect {capability}",
   "toolLadder.connected": "Connected",
   "toolLadder.later": "I'll connect it later",

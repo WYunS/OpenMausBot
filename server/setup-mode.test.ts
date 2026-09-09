@@ -100,3 +100,16 @@ describe("setupSystemPrompt working-folder clause and card ordering", () => {
     expect(text).toContain("After the tool calls add at most one short line");
   });
 });
+
+describe("setup mode connects what the job needs", () => {
+  // Setup asks which apps the job touches, and used to end by pointing at a
+  // settings panel to go and authorize them. That is the chore the tool
+  // ladder exists to remove, so the prompt must not send anyone there.
+  it("reaches for need_tool instead of the settings panel", () => {
+    const prompt = setupSystemPrompt(true);
+    expect(prompt).toContain("need_tool");
+    expect(prompt).not.toContain("Access section");
+    // what genuinely cannot be done in chat is still named as manual work
+    expect(prompt).toContain("bot token");
+  });
+});

@@ -48,6 +48,7 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { OptionCard, shouldHideOnboardingCard } from "./OptionCard";
 import { ApprovalCard } from "./ApprovalCard";
 import { ToolRequestCard } from "./ToolRequestCard";
+import { ConnectableApps } from "./ConnectableApps";
 import { Composer } from "./Composer";
 import { ChatFindBar } from "./ChatFindBar";
 import { ReplyQuote } from "./ReplyQuote";
@@ -691,6 +692,9 @@ const MessagesList = memo(function MessagesList({
           </div>
         </div>
       )}
+      {/* Only until they say something: the breadth is worth showing on a
+          fresh thread and is noise on a working one. */}
+      {messages.length > 0 && !messages.some((message) => message.role === "user") && <ConnectableApps />}
       {items.map((item, i) => {
         const previous = items[i - 1];
         const prev = previous && (previous.kind === "message" ? previous.message : previous.messages.at(-1));

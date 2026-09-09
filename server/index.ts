@@ -264,6 +264,7 @@ import {
   mentionPrompt,
   COMPOSIO_PROMPT,
   CREDENTIAL_PROMPT,
+  NEED_TOOL_PROMPT,
   LEARN_PROMPT,
   PROFILE_PROMPT,
   ROUTINE_PROMPT,
@@ -1334,6 +1335,7 @@ function previewSystemPrompt(bot: BotRecord) {
     { id: "browser", label: "Browser", text: caps?.browserMcp && builtInBrowserEnabled(cfg) && bot.browser !== false && bot.computer !== "off" ? BUILT_IN_BROWSER_SYSTEM_PROMPT : "" },
     { id: "coordination", label: "Team", text: agentsMounted && coordination ? ` ${coordination}` : "" },
     { id: "credential", label: "Credentials", text: agentsMounted ? CREDENTIAL_PROMPT : "" },
+    { id: "need-tool", label: "Missing apps", text: agentsMounted && bot.composio !== false && composio.configured(cfg) ? NEED_TOOL_PROMPT : "" },
     { id: "routine", label: "Routines", text: agentsMounted ? ROUTINE_PROMPT : "" },
     { id: "profile", label: "Profile changes", text: agentsMounted ? PROFILE_PROMPT : "" },
     { id: "section-context", label: "Section context", text: sectionContextSystemPrompt(bot.section) },
@@ -4698,6 +4700,7 @@ async function startTurn(
           ? peerRosterSystemPrompt(sectionPeers)
           : "";
       const credentialPrompt = integrations.agents ? CREDENTIAL_PROMPT : "";
+      const needToolPrompt = integrations.agents && bot.composio !== false && composio.configured(cfg) ? NEED_TOOL_PROMPT : "";
       const routinePrompt = integrations.agents ? ROUTINE_PROMPT : "";
       const profilePrompt = integrations.agents ? PROFILE_PROMPT : "";
       const recallPrompt = integrations.agents ? SESSION_SEARCH_SYSTEM_PROMPT : "";
@@ -4781,6 +4784,7 @@ async function startTurn(
         { id: "browser", label: "Browser", text: integrations.browser ? BUILT_IN_BROWSER_SYSTEM_PROMPT : "" },
         { id: "coordination", label: "Team", text: coordinationPrompt ? ` ${coordinationPrompt}` : "" },
         { id: "credential", label: "Credentials", text: credentialPrompt },
+        { id: "need-tool", label: "Missing apps", text: needToolPrompt },
         { id: "recall", label: "Recall", text: recallPrompt },
         { id: "routine", label: "Routines", text: routinePrompt },
         { id: "routine-execution", label: "Routine execution", text: opts?.automationSource === "schedule" || opts?.automationSource === "manual" ? ROUTINE_EXECUTION_PROMPT : "" },
