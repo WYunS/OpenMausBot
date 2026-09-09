@@ -77,6 +77,51 @@ final class WaitingThreadHydrationTests: XCTestCase {
         XCTAssertTrue(state.pendingApprovals.isEmpty, "The fresh page, not the older activity label, decides whether a card is actionable.")
     }
 
+    func testLateSnapshotCannotOverwriteAnApprovalResolvedByTheLiveStream() async throws {
+        let snapshot = try await client.fleetForHydration()
+        var state = CompanionState()
+        state.hydrate(snapshot.fleet, waitingThreads: snapshot.waitingThreads)
+        state.resetCursor("stream:1")
+        let expectedCursor = state.cursor
+
+        // A notification refresh captured this page before the live stream
+        // answered the request. Its slower response must not revive the card.
+        var resolved = try XCTUnwrap(state.pendingApprovals.first?.message)
+        resolved.card?.answered = "Allow"
+        state.apply(.messagePatch(threadId: "thread-a", message: resolved))
+        state.advance(to: 2)
+        XCTAssertFalse(state.hydrate(snapshot.fleet, waitingThreads: snapshot.waitingThreads,
+                                     ifCursorMatches: expectedCursor))
+
+        XCTAssertEqual(state.cursor, "stream:2")
+        XCTAssertTrue(state.pendingApprovals.isEmpty)
+        XCTAssertEqual(state.transcript(forThread: "thread-a").last?.card?.answered, "Allow")
+
+        // A bounded retry against the new cursor may now commit the fresh,
+        // answered page without losing or replaying the stream's progress.
+        WaitingThreadStub.responses["/api/threads/thread-a/messages"] = (200, Data(
+            Self.pendingPage.replacingOccurrences(of: "\"tool\":\"Bash\"", with: "\"tool\":\"Bash\",\"answered\":\"Allow\"").utf8
+        ))
+        let retryCursor = state.cursor
+        let fresh = try await client.fleetForHydration()
+        XCTAssertTrue(state.hydrate(fresh.fleet, waitingThreads: fresh.waitingThreads,
+                                    ifCursorMatches: retryCursor))
+        XCTAssertEqual(state.cursor, "stream:2")
+        XCTAssertTrue(state.pendingApprovals.isEmpty)
+        XCTAssertEqual(state.transcript(forThread: "thread-a").last?.card?.answered, "Allow")
+    }
+
+    func testColdSnapshotAcceptsANilCursorButCannotOverwriteANewerHello() async throws {
+        let snapshot = try await client.fleetForHydration()
+        var state = CompanionState()
+        XCTAssertTrue(state.hydrate(snapshot.fleet, waitingThreads: snapshot.waitingThreads,
+                                   ifCursorMatches: nil))
+        state.resetCursor("stream:0")
+        XCTAssertFalse(state.hydrate(Fleet(bots: [], groups: []), ifCursorMatches: nil))
+        XCTAssertEqual(state.pendingApprovals.map(\.threadId), ["thread-a"])
+        XCTAssertEqual(state.cursor, "stream:0")
+    }
+
     func testReconnectDoesNotKeepAStaleBackgroundApproval() async throws {
         let first = try await client.fleetForHydration()
         var state = CompanionState()

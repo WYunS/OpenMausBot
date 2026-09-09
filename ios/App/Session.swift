@@ -776,14 +776,22 @@ final class Session: ObservableObject {
 
     private func hydrate(using client: CompanionClient) async throws {
         let generation = streamGeneration
-        let snapshot = try await client.fleetForHydration(messages: 50)
-        try Task.checkCancellation()
-        guard streamGeneration == generation, self.client?.connection.id == client.connection.id else {
-            throw CancellationError()
+        // Notification navigation can refresh while run() continues folding
+        // live events. Retry once if that makes the fetched snapshot stale.
+        for _ in 0..<2 {
+            let expectedCursor = state.cursor
+            let snapshot = try await client.fleetForHydration(messages: 50)
+            try Task.checkCancellation()
+            guard streamGeneration == generation, self.client?.connection.id == client.connection.id else {
+                throw CancellationError()
+            }
+            guard state.hydrate(snapshot.fleet, waitingThreads: snapshot.waitingThreads,
+                                ifCursorMatches: expectedCursor) else { continue }
+            log.info("hydrated \(snapshot.fleet.bots.count, privacy: .public) bots, \(snapshot.fleet.groups.count, privacy: .public) rooms")
+            NotificationCoordinator.shared.setBadge(state.unreadCount)
+            return
         }
-        log.info("hydrated \(snapshot.fleet.bots.count, privacy: .public) bots, \(snapshot.fleet.groups.count, privacy: .public) rooms")
-        state.hydrate(snapshot.fleet, waitingThreads: snapshot.waitingThreads)
-        NotificationCoordinator.shared.setBadge(state.unreadCount)
+        throw APIError.status(code: 409, message: "Conversations changed while loading. Please try opening this notification again.")
     }
 
     // MARK: - Which address to dial
@@ -1842,6 +1850,9 @@ final class Session: ObservableObject {
                 }
             }
             notificationChat = .bot(selected)
+        } catch is CancellationError {
+            // A refresh from the previous computer must not alert on the
+            // newly selected connection after its generation guard rejects it.
         } catch { actionError = error.localizedDescription }
     }
 
