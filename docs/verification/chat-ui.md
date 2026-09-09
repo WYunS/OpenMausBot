@@ -81,6 +81,10 @@ pnpm control:omb ui eval --ui $H --js "document.title"
 Keep the `wait-settle` JSON, both snapshots, the screenshot and the printed
 server log path. The console output must contain no `error` entries.
 
+What the screenshot looks like when the recipe passes (`evidence/chat-ui/chat-ui.png`):
+
+![The isolated app after the recipe: Pepper's greeting, the sent "hello", a passed Bash chip and the fake reply](evidence/chat-ui/chat-ui.png)
+
 The permanent form of this recipe is `scripts/testing/control-omb-ui.e2e.test.ts`:
 
 ```sh
