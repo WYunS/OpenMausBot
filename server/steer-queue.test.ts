@@ -19,6 +19,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   cancelSteeredMessage,
   drainSteeredMessages,
+  onSteeredQueueChange,
+  queuedSteerSnapshot,
   queuedSteeredMessage,
   queueSteeredMessage,
   _queuedCount,
@@ -70,6 +72,60 @@ function fakeStore(bots: BotRecord[]): SteerStore & { messages: Message[] } {
 }
 
 describe("steer-queue module", () => {
+  it("exports owned public receipts without sharing internal queue state", () => {
+    const owned = queueSteeredMessage("bot-public", "thread-public", "public words", {
+      prompt: "private provider context", replyToId: "private-reply", sendId: "private-send", reason: "capacity",
+    });
+    const orphan = queueSteeredMessage("bot-orphan", "thread-orphan", "deleted task");
+    try {
+      const ownsThread = (botId: string, threadId: string) => botId === "bot-public" && threadId === "thread-public";
+      const snapshot = queuedSteerSnapshot(ownsThread);
+      expect(snapshot).toEqual({ "thread-public": [{ queueId: owned.id, text: "public words", reason: "capacity" }] });
+      snapshot["thread-public"][0].text = "client mutation";
+      snapshot["thread-public"].pop();
+      expect(queuedSteerSnapshot(ownsThread)["thread-public"]).toEqual([{ queueId: owned.id, text: "public words", reason: "capacity" }]);
+    } finally {
+      cancelSteeredMessage("bot-public", owned.id);
+      cancelSteeredMessage("bot-orphan", orphan.id);
+    }
+  });
+
+  it("publishes enqueue/cancel/drain snapshots before a failed dispatch can leave stale chips", () => {
+    const bot = fakeBot("bot-publish", "thread-publish", true);
+    const snapshots: unknown[] = [];
+    const unsubscribe = onSteeredQueueChange(() => snapshots.push(queuedSteerSnapshot((id) => id === bot.id)));
+    try {
+      const first = queueSteeredMessage(bot.id, bot.threadId, "keep");
+      const second = queueSteeredMessage(bot.id, bot.threadId, "cancel");
+      expect(cancelSteeredMessage("other-bot", second.id)).toBe(false);
+      drainSteeredMessages(fakeStore([bot]), vi.fn());
+      expect(snapshots).toHaveLength(2);
+      expect(cancelSteeredMessage(bot.id, second.id)).toBe(true);
+      bot.busy = false;
+      expect(() => drainSteeredMessages(fakeStore([bot]), () => { throw new Error("failed dispatch"); })).toThrow("failed dispatch");
+      expect(snapshots).toEqual([
+        { [bot.threadId]: [{ queueId: first.id, text: "keep" }] },
+        { [bot.threadId]: [{ queueId: first.id, text: "keep" }, { queueId: second.id, text: "cancel" }] },
+        { [bot.threadId]: [{ queueId: first.id, text: "keep" }] },
+        {},
+      ]);
+    } finally { unsubscribe(); }
+    const later = queueSteeredMessage(bot.id, bot.threadId, "unsubscribed");
+    cancelSteeredMessage(bot.id, later.id);
+    expect(snapshots).toHaveLength(4);
+  });
+
+  it("publishes removal when an orphaned queue is discarded", () => {
+    queueSteeredMessage("bot-publish-orphan", "thread-publish-orphan", "gone");
+    const listener = vi.fn();
+    const unsubscribe = onSteeredQueueChange(listener);
+    try {
+      drainSteeredMessages(fakeStore([]), vi.fn());
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(queuedSteerSnapshot(() => true)).toEqual({});
+    } finally { unsubscribe(); }
+  });
+
   it("retains an idle task's queue until its runtime dispatch claim clears", () => {
     const bot = fakeBot("bot-handshake", "thread-handshake", false);
     const store = fakeStore([bot]);
