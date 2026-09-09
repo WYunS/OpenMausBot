@@ -192,7 +192,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         {step === 0 && (
           <div className="flex flex-col items-center">
             <MausAvatar color="red" ink="#BF3B31" state="happy" size={72} />
-            <h1 className="mt-4 text-[20px] font-semibold text-ink">登录 OpenMausBot</h1>
+            <h1 className="mt-4 text-[20px] font-semibold text-ink">登录 锐捷Bot</h1>
             <p className="mt-1.5 text-center text-[14px] leading-relaxed text-ink-secondary">
               {account.state.status === "checking"
                 ? "正在检查企业账号…"

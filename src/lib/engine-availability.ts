@@ -4,8 +4,7 @@ export function engineSelectable(_driverKind: string, enabled = true): boolean {
 }
 
 export function engineSelectableNow(instance: { driverKind: string; enabled?: boolean; snapshot: { state: string } }): boolean {
-  if (!engineSelectable(instance.driverKind, instance.enabled)) return false;
-  return instance.driverKind !== "ruijieHarness" || instance.snapshot.state === "available";
+  return engineSelectable(instance.driverKind, instance.enabled);
 }
 
 export function prioritizeEngines<T extends { driverKind: string }>(instances: readonly T[]): T[] {

@@ -2963,6 +2963,9 @@ const localVmUiStatuses = new LocalVmStatusCache(
     target,
     { desktopProbe: "quick" },
   ),
+  5_000,
+  Date.now,
+  (status) => status.ready,
 );
 
 function localVmLeaseFor(target: LocalVmTarget): LocalVmLease {

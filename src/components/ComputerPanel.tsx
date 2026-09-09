@@ -348,8 +348,7 @@ export function ComputerPanel({
     vmReadinessAttempts.current = 0;
   }, [bot.id, bot.computer]);
   const vmSupported = Boolean(
-    selectedInstance?.snapshot.state === "available" &&
-      selectedInstance.capabilities?.computerMcp &&
+    selectedInstance?.capabilities?.computerMcp &&
       selectedInstance.driverKind !== "boxAgent",
   );
   const computerToolSupported = selectedInstance?.capabilities?.computerMcp === true;

@@ -39,6 +39,7 @@ export const BASE_IMAGE_MIRRORS = [`dockerproxy.net/trycua/xfce-cua@${BASE_IMAGE
 export const IMAGE_REPOSITORY = "localhost/openmausbot/cua-local-vm";
 export const IMAGE_LAYER_VERSION = "5";
 export const IMAGE_LAYER_LABEL = "com.openmausbot.image-layer";
+const COMPATIBLE_LOCAL_VM_IMAGE_LAYERS = new Set([IMAGE_LAYER_VERSION, "6"]);
 export const IMAGE = `${IMAGE_REPOSITORY}:driver-${CUA_DRIVER_VERSION}-v${IMAGE_LAYER_VERSION}`;
 export const CONTAINER = "openmausbot-computer";
 export const MANAGED_LABEL = "com.openmausbot.local-vm";
@@ -391,7 +392,7 @@ function statusProblem(status: ContainerComputerStatus): string | null {
     return "Per-bot Local VMs require Docker or Podman because Apple container requires a fixed host port";
   }
   if (status.container === "missing") return "Create the Local VM";
-  if (!status.imageMatches) return "The existing Local VM uses an older desktop or Cua Driver; recreate it";
+  if (!status.imageMatches) return "The existing Local VM uses an incompatible desktop or Cua Driver; recreate it";
   if (!status.managed) return "The existing container was not created by OpenMausBot; recreate it";
   if (status.network === "unsafe") return "The existing Local VM exposes its viewer publicly; recreate it";
   if (status.security === "unsafe") return "The existing Local VM is missing safety limits; recreate it";
@@ -410,6 +411,15 @@ export function imageLabelsMatch(labels: Record<string, string> | undefined): bo
     labels?.[DRIVER_LABEL] === CUA_DRIVER_VERSION &&
     labels?.[BASE_IMAGE_LABEL] === BASE_IMAGE_DIGEST &&
     labels?.[IMAGE_LAYER_LABEL] === IMAGE_LAYER_VERSION
+  );
+}
+
+function localVmImageLabelsMatch(labels: Record<string, string> | undefined): boolean {
+  return (
+    labels?.[MANAGED_LABEL] === "1" &&
+    labels?.[DRIVER_LABEL] === CUA_DRIVER_VERSION &&
+    labels?.[BASE_IMAGE_LABEL] === BASE_IMAGE_DIGEST &&
+    COMPATIBLE_LOCAL_VM_IMAGE_LAYERS.has(labels?.[IMAGE_LAYER_LABEL] ?? "")
   );
 }
 
@@ -580,11 +590,28 @@ export async function containerComputerStatus(
       status.container = detail?.State?.Running ? "running" : "stopped";
       status.network = dockerPortsAreLocal(detail?.HostConfig?.PortBindings) ? "loopback" : "unsafe";
       status.viewer_port = dockerViewerPort(detail?.NetworkSettings?.Ports, target.viewerPort);
+      let containerImageId = detail?.Config?.Image === IMAGE && status.image ? status.image_id : null;
+      if (!containerImageId && detail?.Config?.Image && localVmImageLabelsMatch(detail.Config.Labels)) {
+        try {
+          const candidate = inspectedImage((await runner(
+            status.runtime,
+            ["image", "inspect", detail.Config.Image],
+          )).stdout);
+          if (localVmImageLabelsMatch(candidate.labels)) {
+            status.image = true;
+            status.image_ref = detail.Config.Image;
+            status.image_id = candidate.id;
+            containerImageId = candidate.id;
+          }
+        } catch {
+          // The container may outlive a removed image. It is owned but cannot
+          // be treated as a verified, reusable Local VM image.
+        }
+      }
       status.imageMatches =
-        detail?.Config?.Image === IMAGE &&
-        imageLabelsMatch(detail?.Config?.Labels) &&
-        status.image_id !== null &&
-        normalizeImageId(detail?.Image) === status.image_id;
+        localVmImageLabelsMatch(detail?.Config?.Labels) &&
+        containerImageId !== null &&
+        normalizeImageId(detail?.Image) === containerImageId;
       status.managed = containerOwnershipLabelsMatch(detail?.Config?.Labels, target);
       status.persistence = dockerWorkspaceMountIsSafe(
         detail?.Mounts,

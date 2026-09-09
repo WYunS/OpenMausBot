@@ -26,6 +26,7 @@ import { skillRecorderEnabled } from "@/lib/feature-flags";
 import { setLocale } from "@/lib/i18n";
 import { RuijieAccountProvider, useRuijieAccount } from "@/state/ruijie-account";
 import { shouldOpenKeyboardShortcuts } from "@/lib/keyboard-shortcuts";
+import { engineSelectableNow } from "@/lib/engine-availability";
 
 function Shell() {
   const { state, dispatch } = useStore();
@@ -66,7 +67,7 @@ function Shell() {
   const noEngines =
     state.connected &&
     state.instances.length > 0 &&
-    !state.instances.some((i) => i.snapshot.state === "available");
+    !state.instances.some(engineSelectableNow);
 
   // App-wide shortcuts: ⌘N new bot · ⌘1–9 jump to bot · ⌘⇧[ / ⌘⇧] prev/next · ⌘/ or ? shortcuts cheat sheet.
   // Kept deliberately small; every panel already closes on Esc.

@@ -21,6 +21,19 @@ $env:OMB_PORT = [string]$developmentServerPort
 $env:OMB_DESKTOP_SERVER = '1'
 $env:OMB_BROWSER_CONNECTION = $null
 
+# Use the adjacent Ruijie Harness checkout as a provider CLI while developing.
+# Engine discovery remains passive; the hidden Host starts only when a Harness
+# turn actually needs it.
+$ruijieHarnessRoot = 'D:\ChatGPT\RuijieDSH'
+$ruijieHarnessElectron = Join-Path $ruijieHarnessRoot 'dsh-plugin-desktop\node_modules\electron\dist\electron.exe'
+$ruijieHarnessMain = Join-Path $ruijieHarnessRoot 'dsh-plugin-desktop\lib\main.js'
+if ((Test-Path -LiteralPath $ruijieHarnessElectron) -and (Test-Path -LiteralPath $ruijieHarnessMain)) {
+  $env:RUIJIE_HARNESS_EXECUTABLE = $ruijieHarnessElectron
+  $env:RUIJIE_HARNESS_ARGUMENTS = ConvertTo-Json @($ruijieHarnessMain, '--openmaus-server') -Compress
+  $env:RUIJIE_HARNESS_HOME = Join-Path $ruijieHarnessRoot '.local-data\dsh-home'
+  $env:RUIJIE_HARNESS_USER_DATA_DIR = Join-Path $ruijieHarnessRoot '.local-data\electron-user-data'
+}
+
 function Set-NodeSystemProxy {
   # Node's fetch does not use the Windows proxy unless env-proxy support is
   # enabled explicitly. Mirror the current per-user proxy without hard-coding

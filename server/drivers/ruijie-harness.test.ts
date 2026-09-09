@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   computerActionRequested,
+  compatibleHarnessEffort,
+  parseLaunchArguments,
   RuijieHarnessDriver,
   defaultRuijieBridgePath,
   toolResultImageAttachment,
@@ -69,6 +71,15 @@ describe("Ruijie Harness driver", () => {
           result: { ok: false, error: { message: "preset failed to mount" } },
         });
       }
+      if (url.pathname.endsWith("session.selectModel")
+        && body.payload.provider === "deepseek-vision"
+        && body.payload.reasoningEffort === "medium") {
+        return Response.json({
+          type: "server-response",
+          rpcId: body.rpcId,
+          result: { ok: false, error: { code: "model-unavailable", message: "unsupported reasoning effort" } },
+        });
+      }
       let value: unknown = {};
       if (url.pathname.endsWith("host.describe")) value = { version: "0.0.1" };
       if (url.pathname.endsWith("llm.models")) value = {
@@ -82,9 +93,22 @@ describe("Ruijie Harness driver", () => {
             { id: "claude-opus-5", name: "Claude Opus 5" },
             { id: "claude-sonnet-5", name: "Claude Sonnet 5" },
           ] },
+          { id: "openai", name: "GPT", models: [
+            { id: "gpt-6-astra", name: "gpt-6-astra" },
+            { id: "gpt-5.6-sol", name: "gpt-5.6-sol 旗舰模型" },
+            { id: "gpt-5.6-terra", name: "gpt-5.6-terra 均衡模型" },
+            { id: "gpt-5.6-luna", name: "gpt-5.6-luna 经济模型" },
+            { id: "gpt-5.5", name: "gpt-5.5" },
+          ] },
           { id: "deepseek-vision", name: "DeepSeek Vision", models: [
-            { id: "deepseek-v4-flash", name: "DeepSeek-V4-Flash" },
-            { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro" },
+            { id: "deepseek-v4-flash", name: "DeepSeek-V4-Flash", reasoning: {
+              efforts: ["off", "low", "high", "max"].map((id) => ({ id, name: id })),
+              defaultEffort: "low",
+            } },
+            { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro", reasoning: {
+              efforts: ["off", "low", "high", "max"].map((id) => ({ id, name: id })),
+              defaultEffort: "low",
+            } },
           ] },
         ],
         failures: [],
@@ -142,6 +166,31 @@ describe("Ruijie Harness driver", () => {
       .toBe("C:\\Users\\test\\AppData\\Roaming\\锐捷 Harness\\openmaus-bridge.json");
   });
 
+  it("accepts only a JSON string array for development CLI arguments", () => {
+    expect(parseLaunchArguments('["D:\\\\Harness\\\\lib\\\\main.js","--openmaus-server"]')).toEqual([
+      "D:\\Harness\\lib\\main.js",
+      "--openmaus-server",
+    ]);
+    expect(parseLaunchArguments('{"unsafe":true}')).toEqual([]);
+    expect(parseLaunchArguments('not-json')).toEqual([]);
+  });
+
+  it("binds the Bot effort scale to each Harness model without invalid values", () => {
+    const deepseek = ["off", "low", "high", "max"] as const;
+    const gpt = ["off", "low", "medium", "high", "xhigh", "max"] as const;
+    expect(compatibleHarnessEffort("none", deepseek)).toBe("off");
+    expect(compatibleHarnessEffort("medium", deepseek)).toBe("high");
+    expect(compatibleHarnessEffort("xhigh", deepseek)).toBe("max");
+    expect(compatibleHarnessEffort("medium", gpt)).toBe("medium");
+    expect(compatibleHarnessEffort("high", [])).toBeUndefined();
+  });
+
+  it("keeps catalog refresh passive so startup cannot launch Harness", async () => {
+    const source = await readFile(new URL("./ruijie-harness.ts", import.meta.url), "utf8");
+    const refreshModels = source.match(/const refreshModels = async \(\) => \{[\s\S]*?\n    \};/u)?.[0];
+    expect(refreshModels).toContain("resolveEndpoint(input.config, false)");
+  });
+
   it("reports the same SSO identity and wallet as the running Harness", async () => {
     const instance = await RuijieHarnessDriver.create({
       instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
@@ -172,6 +221,11 @@ describe("Ruijie Harness driver", () => {
         { id: "anthropic::claude-fable-5", label: "Claude Fable 5", provider: "anthropic" },
         { id: "anthropic::claude-opus-5", label: "Claude Opus 5", provider: "anthropic" },
         { id: "anthropic::claude-sonnet-5", label: "Claude Sonnet 5", provider: "anthropic" },
+        { id: "openai::gpt-6-astra", label: "gpt-6-astra", provider: "openai" },
+        { id: "openai::gpt-5.6-sol", label: "gpt-5.6-sol 旗舰模型", provider: "openai" },
+        { id: "openai::gpt-5.6-terra", label: "gpt-5.6-terra 均衡模型", provider: "openai" },
+        { id: "openai::gpt-5.6-luna", label: "gpt-5.6-luna 经济模型", provider: "openai" },
+        { id: "openai::gpt-5.5", label: "gpt-5.5", provider: "openai" },
         { id: "deepseek-vision::deepseek-v4-flash", label: "DeepSeek-V4-Flash", provider: "deepseek-vision" },
         { id: "deepseek-vision::deepseek-v4-pro", label: "DeepSeek-V4-Pro", provider: "deepseek-vision" },
       ],
@@ -219,6 +273,59 @@ describe("Ruijie Harness driver", () => {
       expect.objectContaining({ type: "item.completed", itemType: "assistant_text", text: "完成" }),
       expect.objectContaining({ type: "turn.completed", ok: true, stopReason: "completed" }),
     ]));
+  });
+
+  it("sends GPT images as native Harness prompt parts and maps None reasoning to off", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openmaus-rjh-image-"));
+    const imagePath = join(root, "fixture.png");
+    await writeFile(imagePath, Buffer.from("fixture-image"));
+    try {
+      const instance = await RuijieHarnessDriver.create({
+        instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
+        config: { endpoint: "http://127.0.0.1:49724", expectedAccountEmail: "wangyunshang@ruijie.com.cn" },
+      });
+      await instance.adapter.sendTurn({
+        threadId: "thread-image",
+        text: "识别图片",
+        model: "openai::gpt-5.6-sol",
+        effort: "none",
+        images: [{ path: imagePath, mime: "image/png", bytes: 13 }],
+      });
+      expect(calls.find((call) => call.method === "session.selectModel")?.payload).toMatchObject({
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "off",
+      });
+      expect(calls.find((call) => call.method === "session.prompt")?.payload.content).toEqual([
+        { type: "text", text: "识别图片" },
+        { type: "image", mediaType: "image/png", data: Buffer.from("fixture-image").toString("base64") },
+      ]);
+      expect(instance.adapter.capabilities).toMatchObject({
+        images: true,
+        nativeImageInput: true,
+        effortLevels: ["none", "low", "medium", "high", "xhigh", "max"],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not forward an unsupported effort to a Harness model", async () => {
+    const instance = await RuijieHarnessDriver.create({
+      instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
+      config: { endpoint: "http://127.0.0.1:49724", expectedAccountEmail: "wangyunshang@ruijie.com.cn" },
+    });
+    await instance.refreshModels?.();
+
+    await expect(instance.adapter.sendTurn({
+      threadId: "thread-effort-fallback",
+      text: "你好",
+      model: "deepseek-vision::deepseek-v4-flash",
+      effort: "medium",
+    })).resolves.toBeDefined();
+
+    expect(calls.findLast((call) => call.method === "session.selectModel")?.payload)
+      .toMatchObject({ reasoningEffort: "high" });
   });
 
   it("does not report success when a selected computer turn never calls a computer tool", async () => {

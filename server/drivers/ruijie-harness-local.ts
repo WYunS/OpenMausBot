@@ -23,6 +23,8 @@ export interface RuijieHarnessEndpointOptions {
   executablePath?: string;
   startupTimeoutMs?: number;
   autoLaunch?: boolean;
+  executableArgs?: readonly string[];
+  launchEnvironment?: NodeJS.ProcessEnv;
 }
 
 interface ExecutableInspection {
@@ -40,7 +42,8 @@ export interface RuijieHarnessLocatorDependencies {
   executableForPid(pid: number): Promise<string | undefined>;
   inspectExecutable(path: string): Promise<ExecutableInspection>;
   probeEndpoint(endpoint: string): Promise<boolean>;
-  launchExecutable(path: string): Promise<void>;
+  launchExecutable(path: string, args: readonly string[], environment: NodeJS.ProcessEnv): Promise<void>;
+  stopLaunchedExecutable(): Promise<void>;
   now(): number;
   sleep(milliseconds: number): Promise<void>;
 }
@@ -162,7 +165,10 @@ async function usableEndpointForExecutable(
 
 export function createRuijieHarnessLocator(
   dependencies: RuijieHarnessLocatorDependencies = realDependencies(),
-): { ensureEndpoint(options: RuijieHarnessEndpointOptions): Promise<string> } {
+): {
+  ensureEndpoint(options: RuijieHarnessEndpointOptions): Promise<string>;
+  dispose(): Promise<void>;
+} {
   let pending: Promise<string> | undefined;
   let lastEndpoint: string | undefined;
 
@@ -182,7 +188,11 @@ export function createRuijieHarnessLocator(
     }
     if (!state.running) {
       try {
-        await dependencies.launchExecutable(executable);
+        await dependencies.launchExecutable(
+          executable,
+          options.executableArgs?.length ? options.executableArgs : ["--openmaus-server"],
+          options.launchEnvironment ?? {},
+        );
       } catch (cause) {
         const detail = cause instanceof Error ? cause.message : String(cause);
         throw new Error("锐捷 Harness 启动失败：" + detail);
@@ -215,6 +225,10 @@ export function createRuijieHarnessLocator(
       });
       pending = tracked;
       return tracked;
+    },
+    async dispose() {
+      lastEndpoint = undefined;
+      await dependencies.stopLaunchedExecutable();
     },
   };
 }
@@ -325,6 +339,7 @@ async function inspectPosixExecutable(path: string): Promise<ExecutableInspectio
 }
 
 function realDependencies(): RuijieHarnessLocatorDependencies {
+  let launchedChild: ReturnType<typeof spawn> | undefined;
   return {
     platform: process.platform,
     environment: process.env,
@@ -365,17 +380,24 @@ function realDependencies(): RuijieHarnessLocatorDependencies {
         return false;
       }
     },
-    launchExecutable: async (path) => {
-      const child = spawn(path, [], {
-        detached: true,
+    launchExecutable: async (path, args, environment) => {
+      const child = spawn(path, [...args], {
+        detached: false,
         stdio: "ignore",
         windowsHide: true,
+        env: { ...process.env, ...environment },
       });
       await new Promise<void>((resolve, reject) => {
         child.once("error", reject);
         child.once("spawn", resolve);
       });
-      child.unref();
+      launchedChild = child;
+    },
+    stopLaunchedExecutable: async () => {
+      const child = launchedChild;
+      launchedChild = undefined;
+      if (!child || child.exitCode !== null || child.killed) return;
+      child.kill();
     },
     now: () => Date.now(),
     sleep: async (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),

@@ -176,7 +176,7 @@ async function receiveAuthorizationCode({ state, redirectUri, authorizeUrl, port
       "cache-control": "no-store",
       connection: "close",
     });
-    response.end("<!doctype html><meta charset=utf-8><title>登录完成</title><style>body{font:16px system-ui;display:grid;place-items:center;height:100vh;margin:0;color:#111}main{text-align:center}h1{font-size:24px}</style><main><h1>OpenMaus 登录完成</h1><p>正在返回应用…</p></main><script>history.replaceState(null,'','/auth/callback');const closePage=()=>{window.open('','_self');window.close()};setTimeout(closePage,450);</script>");
+    response.end("<!doctype html><meta charset=utf-8><title>登录完成</title><style>body{font:16px system-ui;display:grid;place-items:center;height:100vh;margin:0;color:#111}main{text-align:center}h1{font-size:24px}</style><main><h1>锐捷Bot 登录完成</h1><p>正在返回应用…</p></main><script>history.replaceState(null,'','/auth/callback');const closePage=()=>{window.open('','_self');window.close()};setTimeout(closePage,450);</script>");
     finish(() => settle(code));
   });
   await new Promise((resolve, rejectListen) => {

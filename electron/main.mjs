@@ -101,6 +101,7 @@ const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.
 const { DESKTOP_VIEWER_USER_AGENT, desktopViewerUrl, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
 const { createDesktopWorkspaceManager } = require("./desktop-workspace.cjs");
 const { createTrustedApprovalModeCoordinator } = require("./approval-trusted-mode.cjs");
+const { startupSplashDataUrl } = require("./startup-splash.cjs");
 const { DESKTOP_MUTATION_HEADER, desktopServerHeaders, isDesktopMutationTarget } = require("./desktop-server-auth.cjs");
 const { createBrowserSurfaceManager } = require("./browser-surface.cjs");
 const { browserProfilePartition } = require("./browser-snapshot.cjs");
@@ -1897,6 +1898,31 @@ function createWindow() {
   mainWindow = win;
   attachUpdaterWindow(win);
   void startBrowserSurface(win);
+  const startupOverlay = waitsForSkinSync
+    ? new WebContentsView({ webPreferences: { contextIsolation: true, sandbox: true } })
+    : null;
+  let startupOverlayRemoved = false;
+  const sizeStartupOverlay = () => {
+    const contents = startupOverlay?.webContents;
+    if (startupOverlayRemoved || !contents || contents.isDestroyed() || win.isDestroyed()) return;
+    const [width, height] = win.getContentSize();
+    startupOverlay.setBounds({ x: 0, y: 0, width, height });
+  };
+  const removeStartupOverlay = () => {
+    if (!startupOverlay || startupOverlayRemoved) return;
+    startupOverlayRemoved = true;
+    win.removeListener("resize", sizeStartupOverlay);
+    if (!win.isDestroyed()) win.contentView.removeChildView(startupOverlay);
+    const contents = startupOverlay.webContents;
+    if (contents && !contents.isDestroyed()) contents.close();
+  };
+  if (startupOverlay) {
+    startupOverlay.setBackgroundColor("#070707");
+    win.contentView.addChildView(startupOverlay);
+    sizeStartupOverlay();
+    win.on("resize", sizeStartupOverlay);
+    win.once("closed", removeStartupOverlay);
+  }
   if (waitsForSkinSync) {
     // A broken renderer or preload must not strand the app as an invisible
     // process. Normal startup shows from desktop:skin almost immediately;
@@ -1969,6 +1995,14 @@ function createWindow() {
   win.webContents.on("did-finish-load", () => deliverPackageInstall(win));
   win.webContents.on("did-finish-load", () => {
     void desktopFeishu?.start().catch(() => {});
+  });
+  win.webContents.once("did-finish-load", () => {
+    // Keep the startup surface above the navigating renderer until React has
+    // had two paint opportunities. This avoids exposing Chromium's blank
+    // document between the splash and onboarding on a cold Vite compile.
+    void win.webContents.executeJavaScript(
+      "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+    ).catch(() => {}).finally(removeStartupOverlay);
   });
 
   // Native context menu for text inputs — without this, right-click does
@@ -2087,15 +2121,26 @@ function createWindow() {
   }
 
   const remote = activeEnvironment(environmentsState);
+  let targetUrl;
   if (desktopRemoteAccess) {
-    win.loadURL(serverReady ? `http://127.0.0.1:${SERVER_PORT}` : buildErrorPage({ allPortsOccupied: serverStartConflictOnly }));
+    targetUrl = serverReady ? `http://127.0.0.1:${SERVER_PORT}` : buildErrorPage({ allPortsOccupied: serverStartConflictOnly });
   } else if (remote) {
-    win.loadURL(remote.origin);
+    targetUrl = remote.origin;
   } else if (app.isPackaged) {
-    win.loadURL(serverReady ? `http://127.0.0.1:${SERVER_PORT}` : buildErrorPage({ allPortsOccupied: serverStartConflictOnly }));
+    targetUrl = serverReady ? `http://127.0.0.1:${SERVER_PORT}` : buildErrorPage({ allPortsOccupied: serverStartConflictOnly });
   } else {
-    win.loadURL(DEV_URL);
+    targetUrl = DEV_URL;
   }
+  void (async () => {
+    if (startupOverlay) {
+      await startupOverlay.webContents.loadURL(startupSplashDataUrl());
+      if (!win.isDestroyed() && !win.isVisible()) win.show();
+    }
+    if (!win.isDestroyed()) await win.loadURL(targetUrl);
+  })().catch((error) => {
+    slog(`initial renderer load failed: ${error?.stack ?? error}`);
+    if (!win.isDestroyed() && !win.isVisible()) win.show();
+  });
   return win;
 }
 

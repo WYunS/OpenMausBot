@@ -11,6 +11,7 @@ import {
   CUA_SOCKET,
   DRIVER_LABEL,
   IMAGE,
+  IMAGE_REPOSITORY,
   IMAGE_LAYER_LABEL,
   IMAGE_LAYER_VERSION,
   MANAGED_LABEL,
@@ -591,7 +592,7 @@ describe("containerComputerStatus", () => {
     expect(status.managed).toBe(true);
     expect(status.imageMatches).toBe(false);
     expect(status.ready).toBe(false);
-    expect(status.problem).toContain("older desktop or Cua Driver");
+    expect(status.problem).toContain("incompatible desktop or Cua Driver");
     expect(fake.calls).not.toContain(versionProbe);
   });
 
@@ -609,7 +610,37 @@ describe("containerComputerStatus", () => {
     expect(status.image_id).toBe("managed-image-id");
     expect(status.imageMatches).toBe(false);
     expect(status.ready).toBe(false);
-    expect(status.problem).toContain("older desktop or Cua Driver");
+    expect(status.problem).toContain("incompatible desktop or Cua Driver");
+  });
+
+  it("accepts the known compatible v6 image already used by an owned Local VM", async () => {
+    const v6Image = `${IMAGE_REPOSITORY}:driver-${CUA_DRIVER_VERSION}-v6`;
+    const detail = JSON.parse(readyInspect())[0];
+    detail.Config.Image = v6Image;
+    detail.Config.Labels[IMAGE_LAYER_LABEL] = "6";
+    detail.Image = "sha256:compatible-v6-image-id";
+    const v6Inspect = JSON.parse(preparedImageInspect());
+    v6Inspect[0].Id = "sha256:compatible-v6-image-id";
+    v6Inspect[0].Config.Labels[IMAGE_LAYER_LABEL] = "6";
+    const fake = runner({
+      "/usr/bin/which docker": "docker\n",
+      "/usr/bin/which podman": new Error("missing"),
+      "docker info --format {{.ServerVersion}}": "29\n",
+      [`docker image inspect ${IMAGE}`]: new Error("v5 image missing"),
+      [`docker inspect ${CONTAINER}`]: JSON.stringify([detail]),
+      [`docker image inspect ${v6Image}`]: JSON.stringify(v6Inspect),
+      [versionProbe]: `cua-driver ${CUA_DRIVER_VERSION}\n`,
+      [statusProbe]: "running\n",
+      [healthProbe]: JSON.stringify({ schema_version: "1", overall: "ok", checks: [] }),
+      [readinessProbe]: "{}\n",
+      [readinessRead]: validPng.toString("base64"),
+    });
+
+    const status = await containerComputerStatus(fake.run, "linux");
+
+    expect(status).toMatchObject({ image: true, imageMatches: true, ready: true });
+    expect(status.image_ref).toBe(v6Image);
+    expect(status.image_id).toBe("compatible-v6-image-id");
   });
 
   it("does not treat an unlabelled image under the local tag as prepared", async () => {

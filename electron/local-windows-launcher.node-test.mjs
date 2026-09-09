@@ -7,6 +7,7 @@ const windowlessLauncher = new URL("../scripts/start-local-windows.vbs", import.
 const nativeLauncher = new URL("../scripts/OpenMausBot.DevLauncher.cs", import.meta.url);
 const shortcutInstaller = new URL("../scripts/install-local-windows-shortcut.ps1", import.meta.url);
 const mainProcess = new URL("./main.mjs", import.meta.url);
+const onboarding = new URL("../src/components/Onboarding.tsx", import.meta.url);
 
 test("the desktop wrapper starts PowerShell without flashing a console", async () => {
   const source = await readFile(windowlessLauncher, "utf8");
@@ -100,4 +101,26 @@ test("the development shortcut uses a branded native launcher", async () => {
   assert.match(mainSource, /title:\s*"锐捷Bot"/);
   assert.match(mainSource, /nativeTheme\.themeSource\s*=\s*nativeThemeSourceForSkin\(skin\)/);
   assert.match(installerSource, /set-windows-shortcut-app-id\.ps1/);
+});
+
+test("the Windows shell shows a branded startup surface before the renderer is ready", async () => {
+  const source = await readFile(mainProcess, "utf8");
+  assert.match(source, /startupSplashDataUrl/);
+  assert.match(source, /new WebContentsView/);
+  assert.match(source, /startupOverlay\.webContents\.loadURL\(startupSplashDataUrl\(\)\)/);
+  assert.match(source, /win\.contentView\.addChildView\(startupOverlay\)/);
+  assert.match(source, /await win\.loadURL\(targetUrl\)/);
+  assert.match(source, /win\.contentView\.removeChildView\(startupOverlay\)/);
+  assert.match(source, /win\.removeListener\("resize", sizeStartupOverlay\)/);
+  assert.match(source, /startupOverlay\?\.webContents/);
+  assert.ok(
+    source.indexOf("startupOverlay.webContents.loadURL(startupSplashDataUrl())") <
+      source.indexOf("await win.loadURL(targetUrl)"),
+  );
+});
+
+test("the enterprise onboarding names the Ruijie product", async () => {
+  const source = await readFile(onboarding, "utf8");
+  assert.match(source, />登录 锐捷Bot</);
+  assert.doesNotMatch(source, />登录 OpenMausBot</);
 });

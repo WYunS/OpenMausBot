@@ -28,6 +28,7 @@ function dependencies(
     inspectExecutable: async () => ({ running: false, endpoints: [] }),
     probeEndpoint: async () => false,
     launchExecutable: async () => {},
+    stopLaunchedExecutable: async () => {},
     now: () => clock,
     sleep: async (milliseconds) => { clock += milliseconds; },
     ...overrides,
@@ -136,7 +137,37 @@ describe("installed Ruijie Harness discovery", () => {
       locator.ensureEndpoint(options),
     ])).resolves.toEqual(["http://127.0.0.1:54873", "http://127.0.0.1:54873"]);
     expect(launchExecutable).toHaveBeenCalledTimes(1);
-    expect(launchExecutable).toHaveBeenCalledWith(WINDOWS_EXECUTABLE);
+    expect(launchExecutable).toHaveBeenCalledWith(WINDOWS_EXECUTABLE, ["--openmaus-server"], {});
+  });
+
+  it("launches a development Electron entry with its isolated Harness environment", async () => {
+    let running = false;
+    const launchExecutable = vi.fn(async () => { running = true; });
+    const locator = createRuijieHarnessLocator(dependencies({
+      inspectExecutable: async () => ({
+        running,
+        endpoints: running ? ["http://127.0.0.1:54873"] : [],
+      }),
+      probeEndpoint: async (endpoint) => endpoint === "http://127.0.0.1:54873",
+      launchExecutable,
+    }));
+
+    await expect(locator.ensureEndpoint({
+      bridgePath: "bridge",
+      executableArgs: ["D:\\src\\lib\\main.js", "--openmaus-server"],
+      launchEnvironment: {
+        DSH_HOME: "D:\\src\\.local-data\\dsh-home",
+        RUIJIE_DSH_USER_DATA_DIR: "D:\\src\\.local-data\\electron-user-data",
+      },
+    })).resolves.toBe("http://127.0.0.1:54873");
+    expect(launchExecutable).toHaveBeenCalledWith(
+      WINDOWS_EXECUTABLE,
+      ["D:\\src\\lib\\main.js", "--openmaus-server"],
+      {
+        DSH_HOME: "D:\\src\\.local-data\\dsh-home",
+        RUIJIE_DSH_USER_DATA_DIR: "D:\\src\\.local-data\\electron-user-data",
+      },
+    );
   });
 
   it("shares only an in-flight lookup and rediscovers the port after Harness restarts", async () => {

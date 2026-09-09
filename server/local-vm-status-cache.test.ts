@@ -45,4 +45,21 @@ describe("LocalVmStatusCache", () => {
     finish("ready");
     await expect(Promise.all([first, second])).resolves.toEqual(["ready", "ready"]);
   });
+
+  it("awaits refresh instead of returning a stale unavailable snapshot", async () => {
+    let now = 0;
+    let calls = 0;
+    const cache = new LocalVmStatusCache(
+      async () => ({ ready: ++calls > 1 }),
+      5_000,
+      () => now,
+      (status) => status.ready,
+    );
+    const target = { key: "shared" };
+
+    expect(await cache.get(target)).toEqual({ ready: false });
+    now = 6_000;
+    expect(await cache.get(target)).toEqual({ ready: true });
+    expect(calls).toBe(2);
+  });
 });

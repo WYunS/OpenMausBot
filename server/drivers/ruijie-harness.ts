@@ -7,12 +7,13 @@
  * same authenticated account.
  */
 import { createHash } from "node:crypto";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type {
   DriverCreateInput,
+  EffortLevel,
   ModelCatalog,
   ProviderDriver,
   ProviderInstance,
@@ -34,7 +35,14 @@ export { defaultRuijieBridgePath } from "./ruijie-harness-local.ts";
 
 const DRIVER_KIND = "ruijieHarness";
 const DEFAULT_MODEL = "deepseek-vision::deepseek-v4-flash";
-const VISIBLE_MODEL_PROVIDERS = new Set(["deepseek-vision", "anthropic"]);
+const VISIBLE_MODEL_PROVIDERS = new Set(["deepseek-vision", "anthropic", "openai"]);
+const HARNESS_EFFORT_ORDER = ["off", "low", "medium", "high", "xhigh", "max"] as const;
+type HarnessEffort = (typeof HARNESS_EFFORT_ORDER)[number];
+const DEFAULT_PROVIDER_EFFORTS: Readonly<Record<string, readonly HarnessEffort[]>> = {
+  "deepseek-vision": ["off", "low", "high", "max"],
+  anthropic: [],
+  openai: HARNESS_EFFORT_ORDER,
+};
 const DEFAULT_MODELS: ModelCatalog = {
   default: DEFAULT_MODEL,
   options: [
@@ -43,6 +51,11 @@ const DEFAULT_MODELS: ModelCatalog = {
     { id: "anthropic::claude-fable-5", label: "Claude Fable 5", provider: "anthropic" },
     { id: "anthropic::claude-opus-5", label: "Claude Opus 5", provider: "anthropic" },
     { id: "anthropic::claude-sonnet-5", label: "Claude Sonnet 5", provider: "anthropic" },
+    { id: "openai::gpt-6-astra", label: "gpt-6-astra", provider: "openai" },
+    { id: "openai::gpt-5.6-sol", label: "gpt-5.6-sol 旗舰模型", provider: "openai" },
+    { id: "openai::gpt-5.6-terra", label: "gpt-5.6-terra 均衡模型", provider: "openai" },
+    { id: "openai::gpt-5.6-luna", label: "gpt-5.6-luna 经济模型", provider: "openai" },
+    { id: "openai::gpt-5.5", label: "gpt-5.5", provider: "openai" },
   ],
 };
 
@@ -153,8 +166,25 @@ async function resolveEndpoint(config: RuijieHarnessConfig, autoLaunch = true): 
     endpoint: config.endpoint ?? process.env.RUIJIE_HARNESS_ENDPOINT,
     bridgePath,
     executablePath: config.executablePath ?? process.env.RUIJIE_HARNESS_EXECUTABLE,
+    executableArgs: parseLaunchArguments(process.env.RUIJIE_HARNESS_ARGUMENTS),
+    launchEnvironment: {
+      ...(process.env.RUIJIE_HARNESS_HOME ? { DSH_HOME: process.env.RUIJIE_HARNESS_HOME } : {}),
+      ...(process.env.RUIJIE_HARNESS_USER_DATA_DIR
+        ? { RUIJIE_DSH_USER_DATA_DIR: process.env.RUIJIE_HARNESS_USER_DATA_DIR }
+        : {}),
+    },
     autoLaunch,
   });
+}
+
+export function parseLaunchArguments(value: string | undefined): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 async function resolveDshHome(config: RuijieHarnessConfig): Promise<string> {
@@ -424,6 +454,52 @@ function toModelCatalog(value: unknown, current: ModelCatalog): ModelCatalog {
   return { default: preferred, options };
 }
 
+function toModelEfforts(value: unknown): Map<string, readonly HarnessEffort[]> {
+  const result = new Map<string, readonly HarnessEffort[]>();
+  const groups = (value as { groups?: unknown } | undefined)?.groups;
+  if (!Array.isArray(groups)) return result;
+  for (const group of groups) {
+    if (!group || typeof group !== "object") continue;
+    const provider = (group as { id?: unknown }).id;
+    const models = (group as { models?: unknown }).models;
+    if (typeof provider !== "string" || !VISIBLE_MODEL_PROVIDERS.has(provider) || !Array.isArray(models)) continue;
+    for (const model of models) {
+      if (!model || typeof model !== "object") continue;
+      const id = (model as { id?: unknown }).id;
+      if (typeof id !== "string") continue;
+      const efforts = (model as { reasoning?: { efforts?: unknown } }).reasoning?.efforts;
+      const supported = Array.isArray(efforts)
+        ? efforts.flatMap((entry) => {
+            const effort = (entry as { id?: unknown } | undefined)?.id;
+            return typeof effort === "string" && (HARNESS_EFFORT_ORDER as readonly string[]).includes(effort)
+              ? [effort as HarnessEffort]
+              : [];
+          })
+        : DEFAULT_PROVIDER_EFFORTS[provider] ?? [];
+      result.set(`${provider}::${id}`, supported);
+    }
+  }
+  return result;
+}
+
+/** Bind the Bot's stable effort scale to the selected Harness model's legal levels. */
+export function compatibleHarnessEffort(
+  effort: EffortLevel | undefined,
+  supported: readonly HarnessEffort[],
+): HarnessEffort | undefined {
+  if (!effort || supported.length === 0) return undefined;
+  const requested: HarnessEffort = effort === "none" ? "off" : effort;
+  if (supported.includes(requested)) return requested;
+  if (requested === "off") return undefined;
+  const requestedIndex = HARNESS_EFFORT_ORDER.indexOf(requested);
+  return [...supported].sort((left, right) => {
+    const leftIndex = HARNESS_EFFORT_ORDER.indexOf(left);
+    const rightIndex = HARNESS_EFFORT_ORDER.indexOf(right);
+    return Math.abs(leftIndex - requestedIndex) - Math.abs(rightIndex - requestedIndex)
+      || rightIndex - leftIndex;
+  })[0];
+}
+
 async function pumpEvents(
   endpoint: string,
   signal: AbortSignal,
@@ -470,6 +546,10 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
 
   async create(input: DriverCreateInput<RuijieHarnessConfig>): Promise<ProviderInstance> {
     let catalog: ModelCatalog = { ...DEFAULT_MODELS, options: [...DEFAULT_MODELS.options] };
+    let modelEfforts = new Map(DEFAULT_MODELS.options.map((option) => [
+      option.id,
+      DEFAULT_PROVIDER_EFFORTS[option.provider ?? ""] ?? [],
+    ]));
     const listeners = new Set<RuntimeEventListener>();
     const sessions = new Map<string, HarnessSession>();
     const active = new Map<string, PendingTurn>();
@@ -488,12 +568,14 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
     const updateModelCatalog = async (endpoint: string) => {
       const result = await rpc<unknown>(endpoint, "llm.models", {});
       const next = toModelCatalog(result, catalog);
+      const nextEfforts = toModelEfforts(result);
       catalog.default = next.default;
       catalog.options.splice(0, catalog.options.length, ...next.options);
+      modelEfforts = nextEfforts;
     };
 
     const refreshModels = async () => {
-      const endpoint = await resolveEndpoint(input.config);
+      const endpoint = await resolveEndpoint(input.config, false);
       await matchingSsoSummary(endpoint, input.config.expectedAccountEmail);
       await updateModelCatalog(endpoint);
     };
@@ -647,6 +729,8 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
       capabilities: {
         sessionModelSwitch: "in-session",
         images: true,
+        nativeImageInput: true,
+        effortLevels: ["none", "low", "medium", "high", "xhigh", "max"],
         queueing: false,
         computerMcp: true,
         localComputerMcp: true,
@@ -698,9 +782,14 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
         }
         sessions.set(turn.threadId, { id: sessionId, integrationKey });
         const selected = decodeModel(turn.model);
+        const selectedId = `${selected.provider}::${selected.model}`;
+        const reasoningEffort = compatibleHarnessEffort(
+          turn.effort,
+          modelEfforts.get(selectedId) ?? DEFAULT_PROVIDER_EFFORTS[selected.provider] ?? [],
+        );
         await rpc(endpoint, "session.selectModel", {
           sessionId, provider: selected.provider, model: selected.model,
-          ...(turn.effort ? { reasoningEffort: turn.effort } : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
         });
 
         const pending: PendingTurn = {
@@ -731,8 +820,16 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
         emit({ type: "session.started", threadId: turn.threadId, turnId: pending.turnId, sessionId, model: turn.model ?? catalog.default });
         emit({ type: "turn.started", threadId: turn.threadId, turnId: pending.turnId });
         const prompt = turn.system ? `${turn.system}\n\n${turn.text}` : turn.text;
+        const content = [
+          { type: "text" as const, text: prompt },
+          ...await Promise.all((turn.images ?? []).map(async (image) => ({
+            type: "image" as const,
+            mediaType: image.mime,
+            data: (await readFile(image.path)).toString("base64"),
+          }))),
+        ];
         await rpc(endpoint, "session.prompt", {
-          sessionId, mode: "queue", content: [{ type: "text", text: prompt }],
+          sessionId, mode: "queue", content,
           clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         }, pending.abort.signal).catch((cause: unknown) => {
           if (!pending.interrupted) settle(turn.threadId, pending, false, "request_error", cause instanceof Error ? cause.message : String(cause));
@@ -794,7 +891,7 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
       async snapshot() {
         if (!input.enabled) return { state: "unavailable", reason: "disabled" };
         try {
-          const endpoint = await resolveEndpoint(input.config);
+          const endpoint = await resolveEndpoint(input.config, false);
           await rpc(endpoint, "host.describe", {});
           const sso = await matchingSsoSummary(endpoint, input.config.expectedAccountEmail);
           await updateModelCatalog(endpoint);
@@ -803,7 +900,11 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
           return { state: "unavailable", authenticated: false, reason: cause instanceof Error ? cause.message : String(cause) };
         }
       },
-      async dispose() { await adapter.stopAll(); listeners.clear(); },
+      async dispose() {
+        await adapter.stopAll();
+        await ruijieHarnessLocator.dispose();
+        listeners.clear();
+      },
     };
   },
 };

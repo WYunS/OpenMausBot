@@ -11,8 +11,8 @@ describe("user-controlled engine availability", () => {
     expect(engineSelectable("claudeAgent", false)).toBe(false);
   });
 
-  it("greys out Harness until the installed app reports the same signed-in account", () => {
-    expect(engineSelectableNow({ driverKind: "ruijieHarness", snapshot: { state: "unavailable" } })).toBe(false);
+  it("keeps unavailable engines selectable until the user explicitly disables them", () => {
+    expect(engineSelectableNow({ driverKind: "ruijieHarness", snapshot: { state: "unavailable" } })).toBe(true);
     expect(engineSelectableNow({ driverKind: "ruijieHarness", snapshot: { state: "available" } })).toBe(true);
     expect(engineSelectableNow({ driverKind: "codex", snapshot: { state: "available" } })).toBe(true);
     expect(engineSelectableNow({ driverKind: "claudeAgent", enabled: false, snapshot: { state: "available" } })).toBe(false);
