@@ -48,14 +48,14 @@ describe("matchToolkits", () => {
     expect(labels(matchToolkits("calendar", CATALOG))[0]).toBe("Google Calendar");
   });
 
-  it("does not offer an app that merely mentions the word in passing", () => {
+  it("ranks a name match above a mention, rather than hiding the mention", () => {
     const found = labels(matchToolkits("calendar", CATALOG));
-    // HubSpot's blurb ends "...and a calendar view". It is not a calendar, and
-    // connecting it would cost a real sign-in for nothing.
-    expect(found).not.toContain("HubSpot");
-    // Outlook's opens "Email, calendar and contacts" — that one counts.
-    expect(found).toContain("Outlook");
+    // HubSpot's blurb ends "...and a calendar view", so it is offered — last.
+    // Ranking is the right tool here, not exclusion: the person is choosing
+    // from a visible list, and a mediocre fourth option costs them a glance
+    // while a missing right one costs them the feature.
     expect(found.indexOf("Google Calendar")).toBeLessThan(found.indexOf("Outlook"));
+    expect(found.indexOf("Outlook")).toBeLessThan(found.indexOf("HubSpot"));
   });
 
   it("finds an app through a synonym the catalog uses instead", () => {
@@ -101,5 +101,35 @@ describe("matchToolkits", () => {
     const once = labels(matchToolkits("issues", CATALOG));
     const twice = labels(matchToolkits("issues", [...CATALOG].reverse()));
     expect(once).toEqual(twice);
+  });
+});
+
+// The catalog these actually run against writes SENTENCES, not the terse
+// phrases the curated fallback uses — and the first version of this matcher
+// was tuned on the terse ones. Asked for analytics against the live shape it
+// offered Google Analytics and Baremetrics and left out PostHog, which is the
+// one the user had. These blurbs are copied from the live catalog.
+describe("against live catalog blurbs", () => {
+  const LIVE: ToolCandidate[] = [
+    { slug: "posthog", label: "PostHog", blurb: "PostHog is an open-source product analytics platform tracking" },
+    { slug: "google_analytics", label: "Google Analytics", blurb: "Google Analytics is a web analytics service" },
+    { slug: "mixpanel", label: "Mixpanel", blurb: "Mixpanel is an analytics platform for product teams" },
+    { slug: "baremetrics", label: "Baremetrics", blurb: "Baremetrics provides subscription analytics and metrics" },
+    { slug: "salesforce", label: "Salesforce", blurb: "Salesforce is a customer relationship management platform with analytics" },
+  ];
+
+  it("offers the app whose name is not the capability but whose sentence says it is", () => {
+    expect(labels(matchToolkits("analytics", LIVE))).toContain("PostHog");
+    expect(labels(matchToolkits("analytics", LIVE))).toContain("Mixpanel");
+  });
+
+  it("still puts the one named for it first", () => {
+    expect(labels(matchToolkits("analytics", LIVE))[0]).toBe("Google Analytics");
+  });
+
+  it("reaches synonyms through a plural, which a singular-keyed table nearly missed", () => {
+    // searchTerms singularises before looking the word up, so a table keyed
+    // on "analytics" was unreachable and the synonyms silently did nothing.
+    expect(searchTerms("analytics")).toContain("metric");
   });
 });

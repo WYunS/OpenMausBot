@@ -8595,7 +8595,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const connected = new Set(
           Object.entries(connectedState).filter(([, state]) => state.connected).map(([slug]) => slug),
         );
-        const candidates = matchToolkits(capability, catalog, { connected });
+        // Composio is not the only way a bot has a tool. Its own enabled MCP
+        // servers count too — including anything rungs 3 and 4 installed,
+        // which otherwise would never satisfy rung 1 and would be offered a
+        // connection for a capability it had just gained.
+        const ownServers = listMcpServers(cfg.mcpServers)
+          .filter((entry) => entry.enabled)
+          .map((entry) => ({ slug: entry.name, label: entry.name, blurb: "", connected: true }));
+        const candidates = matchToolkits(capability, [...catalog, ...ownServers], { connected });
         // Rung 1: something that answers this is already connected. No card —
         // the best version of this feature is the one nobody has to look at.
         const ready = candidates.filter((candidate) => candidate.connected);

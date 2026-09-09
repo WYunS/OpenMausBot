@@ -63,6 +63,10 @@ export interface ToolRequestCardData {
  * catalog. Deliberately small and hand-written: a big generated ontology would
  * be worse, because every wrong entry here shows up as an app the user is
  * offered for a job it cannot do.
+ *
+ * Keys are SINGULAR, because that is what they are looked up with — a plural
+ * key is simply never reached, which is how "analytics" silently had no
+ * synonyms at all.
  */
 const SYNONYMS: Record<string, readonly string[]> = {
   calendar: ["calendar", "event", "scheduling", "meeting"],
@@ -90,7 +94,7 @@ const SYNONYMS: Record<string, readonly string[]> = {
   design: ["design", "prototype"],
   code: ["code", "repository", "git"],
   repository: ["code", "repository", "git"],
-  analytics: ["analytics", "metric", "event"],
+  analytic: ["analytic", "metric", "event"],
 };
 
 /** Split into lowercase word tokens; punctuation and case are noise here. */
@@ -109,17 +113,37 @@ function singular(word: string): string {
   return word;
 }
 
-/** Every term worth searching for, from what the bot actually said. */
-export function searchTerms(capability: string): string[] {
-  const out = new Set<string>();
+/** A word to search for, and whether the bot actually said it.
+ *
+ * A synonym is a guess on the user's behalf and is scored as one: "metric"
+ * is a fair expansion of "analytics", but Baremetrics — whose slug contains
+ * "metric" — should not outrank Google Analytics, whose NAME is the word
+ * that was asked for. */
+interface SearchTerm {
+  term: string;
+  /** 1 for the bot's own word, less for something we inferred from it. */
+  weight: number;
+}
+
+const SYNONYM_WEIGHT = 0.6;
+
+function weightedTerms(capability: string): SearchTerm[] {
+  const out = new Map<string, number>();
   for (const raw of tokens(capability)) {
     const word = singular(raw);
     // Single letters and "the"-class words match everything and mean nothing.
     if (word.length < 3) continue;
-    out.add(word);
-    for (const term of SYNONYMS[word] ?? []) out.add(term);
+    out.set(word, 1);
+    for (const term of SYNONYMS[word] ?? []) {
+      if (!out.has(term)) out.set(term, SYNONYM_WEIGHT);
+    }
   }
-  return [...out];
+  return [...out].map(([term, weight]) => ({ term, weight }));
+}
+
+/** Every term worth searching for, from what the bot actually said. */
+export function searchTerms(capability: string): string[] {
+  return weightedTerms(capability).map((entry) => entry.term);
 }
 
 /**
@@ -129,39 +153,49 @@ export function searchTerms(capability: string): string[] {
  * match is a hint. Ranking them the same is how "calendar" ends up offering
  * six apps that merely mention calendars in their description.
  */
-function score(candidate: ToolCandidate, terms: readonly string[]): number {
+function score(candidate: ToolCandidate, terms: readonly SearchTerm[]): number {
   if (!terms.length) return 0;
   const label = tokens(candidate.label).map(singular);
   const slug = candidate.slug.toLowerCase();
   const blurb = tokens(candidate.blurb ?? "").map(singular);
   let total = 0;
-  for (const term of terms) {
-    if (label.includes(term) || slug === term) total += 6;
-    else if (slug.includes(term)) total += 4;
-    else if (candidate.label.toLowerCase().includes(term)) total += 3;
+  for (const { term, weight } of terms) {
+    const add = (points: number) => {
+      total += points * weight;
+    };
+    if (label.includes(term) || slug === term) add(6);
+    else if (slug.includes(term)) add(4);
+    else if (candidate.label.toLowerCase().includes(term)) add(3);
     else {
-      // Within a blurb, WHERE the word appears is the only signal left, and
-      // it is a real one: these descriptions lead with what the app is for.
-      // Outlook's "Email, calendar and contacts" opens with it; HubSpot's
-      // "CRM with deals, contacts and a calendar view" mentions it in
-      // passing. Without this they tie, and a CRM is offered as a calendar.
+      // A mention in the blurb counts, wherever it is. Position is a ranking
+      // hint, never a gate: it looked like a real signal against the terse
+      // curated blurbs ("Email, calendar and contacts") and turned out to be
+      // an artefact of them. The live catalog writes sentences — "PostHog is
+      // an open-source product analytics platform" puts the word seventh —
+      // and gating on position dropped exactly the app the user asked for
+      // while keeping ones nobody wanted.
       const at = blurb.indexOf(term);
-      if (at >= 0) total += at < 4 ? 2 : 1;
+      if (at >= 0) add(at < 4 ? 3 : 2);
     }
   }
   return total;
 }
 
 /**
- * The weakest evidence worth offering someone.
+ * The weakest evidence worth offering someone: one real mention of the
+ * capability, anywhere.
  *
- * One late mention in a blurb scores 1, and that is not enough on its own:
- * "veterinary records" matched Airtable and Salesforce that way, because a
- * database does hold records. Offering the wrong app costs a real sign-in and
- * leaves the person worse off than being told we have nothing — and being told
- * is what the next rung of the ladder is for.
+ * This deliberately favours RECALL over precision, which is the opposite of
+ * where it started. The person is choosing from a visible, ranked list of at
+ * most six, so a mediocre option in fourth place costs them a glance —
+ * whereas omitting the right one costs them the feature. Asked for analytics,
+ * the strict version offered Google Analytics and Baremetrics and left out
+ * PostHog, which is what they actually use.
+ *
+ * In practice the bar is: one mention of the bot's OWN word anywhere, or one
+ * inferred synonym up front. A synonym mentioned in passing is not enough.
  */
-const MIN_SCORE = 2;
+const MIN_SCORE = 1.5;
 
 /**
  * The apps to offer for a capability, best first.
@@ -175,7 +209,7 @@ export function matchToolkits(
   catalog: readonly ToolCandidate[],
   options: { connected?: ReadonlySet<string>; limit?: number } = {},
 ): ToolCandidate[] {
-  const terms = searchTerms(capability);
+  const terms = weightedTerms(capability);
   const connected = options.connected ?? new Set<string>();
   const limit = options.limit ?? MAX_CANDIDATES;
   const scored = catalog

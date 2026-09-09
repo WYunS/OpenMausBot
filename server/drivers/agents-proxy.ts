@@ -573,7 +573,7 @@ const TOOLS = [
   {
     name: "need_tool",
     description:
-      "Ask the user to connect the app this job needs, when you do not already have a working tool for it. Say the CAPABILITY in plain words — \"calendar\", \"email\", \"spreadsheet\" — never a vendor and never a slug: OpenMausBot lists the apps it can actually connect for that capability, lets the user pick one and name the account, and runs the sign-in itself. Call this instead of telling the user you cannot do something, and instead of guessing which app they use. If a suitable account is already connected this returns immediately and you simply continue. Otherwise a card is shown: end the turn, and OpenMausBot resumes the task once the account is connected.",
+      "Ask the user to connect the app this job needs, when you do not already have a working tool for it. FIRST check the tools you already have — a connected app may reach you as an MCP tool OpenMausBot cannot see from its side, and asking to connect a second one is worse than not asking at all. Say the CAPABILITY in plain words — \"calendar\", \"email\", \"spreadsheet\" — never a vendor and never a slug: OpenMausBot lists the apps it can actually connect for that capability, lets the user pick one and name the account, and runs the sign-in itself. Call this instead of telling the user you cannot do something, and instead of guessing which app they use. If a suitable account is already connected this returns immediately and you simply continue. Otherwise a card is shown: end the turn, and OpenMausBot resumes the task once the account is connected.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
