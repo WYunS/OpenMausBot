@@ -133,3 +133,35 @@ describe("against live catalog blurbs", () => {
     expect(searchTerms("analytics")).toContain("metric");
   });
 });
+
+// The catalog is 500 entries sorted by usage, and the first version of this
+// threw that ordering away. Asked for email it offered Benchmark Email,
+// BlueFox Email and Bulk Email Checker — three apps whose NAME contains the
+// category — and left Gmail off the end entirely. For a category word, having
+// it in your name is weak evidence; being the one everybody uses is strong.
+describe("uses the catalog's own usage order", () => {
+  const popular: ToolCandidate[] = [
+    { slug: "gmail", label: "Gmail", blurb: "Gmail is an email service by Google" },
+    { slug: "outlook", label: "Outlook", blurb: "Outlook is a personal information manager with email" },
+  ];
+  const obscure: ToolCandidate[] = [
+    { slug: "benchmark_email", label: "Benchmark Email", blurb: "Benchmark Email is a marketing tool" },
+    { slug: "bulk_email_checker", label: "Bulk Email Checker", blurb: "Bulk Email Checker validates addresses" },
+  ];
+  // …as the catalog hands them to us: popular first.
+  const catalog = [...popular, ...Array.from({ length: 200 }, (_, i) => ({
+    slug: `filler${i}`, label: `Filler ${i}`, blurb: "unrelated",
+  })), ...obscure];
+
+  it("puts the app people use first, not the one named after the category", () => {
+    expect(labels(matchToolkits("email", catalog)).slice(0, 2)).toEqual(["Gmail", "Outlook"]);
+  });
+
+  it("still offers the obscure ones, ranked below", () => {
+    expect(labels(matchToolkits("email", catalog))).toContain("Benchmark Email");
+  });
+
+  it("never lets popularity alone qualify an app that does not match", () => {
+    expect(labels(matchToolkits("email", catalog))).not.toContain("Filler 0");
+  });
+});

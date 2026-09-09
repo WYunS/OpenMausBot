@@ -94,7 +94,7 @@ const SYNONYMS: Record<string, readonly string[]> = {
   design: ["design", "prototype"],
   code: ["code", "repository", "git"],
   repository: ["code", "repository", "git"],
-  analytic: ["analytic", "metric", "event"],
+  analytic: ["analytic", "metric"],
 };
 
 /** Split into lowercase word tokens; punctuation and case are noise here. */
@@ -111,6 +111,15 @@ function singular(word: string): string {
   if (word.length > 3 && word.endsWith("es") && !word.endsWith("ses")) return word.slice(0, -2);
   if (word.length > 3 && word.endsWith("s") && !word.endsWith("ss")) return word.slice(0, -1);
   return word;
+}
+
+/** How well one app answers the capability, split by what kind of evidence
+ * it is. A word the bot actually said and a word we inferred for it are not
+ * interchangeable, and collapsing them into one number is how an app that
+ * merely contains a synonym outranks one that contains the real thing. */
+interface Evidence {
+  direct: number;
+  inferred: number;
 }
 
 /** A word to search for, and whether the bot actually said it.
@@ -153,15 +162,15 @@ export function searchTerms(capability: string): string[] {
  * match is a hint. Ranking them the same is how "calendar" ends up offering
  * six apps that merely mention calendars in their description.
  */
-function score(candidate: ToolCandidate, terms: readonly SearchTerm[]): number {
-  if (!terms.length) return 0;
+function score(candidate: ToolCandidate, terms: readonly SearchTerm[]): Evidence {
   const label = tokens(candidate.label).map(singular);
   const slug = candidate.slug.toLowerCase();
   const blurb = tokens(candidate.blurb ?? "").map(singular);
-  let total = 0;
+  const evidence: Evidence = { direct: 0, inferred: 0 };
   for (const { term, weight } of terms) {
+    const bucket = weight === 1 ? "direct" : "inferred";
     const add = (points: number) => {
-      total += points * weight;
+      evidence[bucket] += points * weight;
     };
     if (label.includes(term) || slug === term) add(6);
     else if (slug.includes(term)) add(4);
@@ -178,7 +187,29 @@ function score(candidate: ToolCandidate, terms: readonly SearchTerm[]): number {
       if (at >= 0) add(at < 4 ? 3 : 2);
     }
   }
-  return total;
+  return evidence;
+}
+
+/** What the catalog's own order is worth.
+ *
+ * The catalog comes back sorted by usage, and ignoring that was how "email"
+ * offered Benchmark Email, BlueFox Email and Bulk Email Checker — three apps
+ * whose NAME contains the category — while Gmail, whose name does not, fell
+ * off the end. Being the one everybody actually uses is evidence, and it is
+ * evidence we were handed for free.
+ *
+ * It is weighted heavily enough to beat a name match, on purpose: for a
+ * CATEGORY word, having it in your name is weak evidence ("Bulk Email
+ * Checker" is not an email client) while for a brand word it is strong, and
+ * nothing here can tell those apart. Usage can. The filter has already
+ * thrown out everything that does not match at all, so this only ever
+ * reorders apps that genuinely answer the capability.
+ */
+function popularity(index: number): number {
+  if (index < 25) return 6;
+  if (index < 100) return 3;
+  if (index < 250) return 1;
+  return 0;
 }
 
 /**
@@ -212,16 +243,24 @@ export function matchToolkits(
   const terms = weightedTerms(capability);
   const connected = options.connected ?? new Set<string>();
   const limit = options.limit ?? MAX_CANDIDATES;
+  if (!terms.length) return [];
   const scored = catalog
-    .map((candidate) => ({
+    .map((candidate, index) => ({
       candidate: connected.has(candidate.slug) ? { ...candidate, connected: true } : candidate,
-      score: score(candidate, terms),
+      evidence: score(candidate, terms),
+      rank: popularity(index),
     }))
-    .filter((row) => row.score >= MIN_SCORE);
+    // A direct mention of the bot's own word, or a strong inferred one. A
+    // synonym glimpsed in passing is not enough on its own.
+    .filter((row) => row.evidence.direct >= MIN_SCORE || row.evidence.inferred >= MIN_SCORE);
   scored.sort((a, b) => {
     const connectedGap = Number(b.candidate.connected ?? false) - Number(a.candidate.connected ?? false);
     if (connectedGap) return connectedGap;
-    if (b.score !== a.score) return b.score - a.score;
+    // Direct evidence first, so a synonym can break a tie but never win one.
+    const direct = (b.evidence.direct + b.rank) - (a.evidence.direct + a.rank);
+    if (Math.abs(direct) > 0.001) return direct;
+    const inferred = b.evidence.inferred - a.evidence.inferred;
+    if (Math.abs(inferred) > 0.001) return inferred;
     // A stable last resort, so the same catalog always offers the same order.
     return a.candidate.label.localeCompare(b.candidate.label);
   });
