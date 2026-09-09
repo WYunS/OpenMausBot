@@ -29,9 +29,13 @@ const BUDGET = Number(process.env.OMB_GATE_BUDGET) > 0 ? Number(process.env.OMB_
 /** Spilled results older than this are swept at startup: they exist for the
  * turn that produced them, not forever. */
 const SPILL_MAX_AGE_MS = 24 * 60 * 60_000;
+/** Whether the model is told where the untrimmed result was saved. Off by
+ * default: offering the path measured WORSE than no trimming, because the
+ * model reads the file back in. See TrimInput.spillHint. */
+const SPILL_HINT = process.env.OMB_GATE_SPILL_HINT === "1";
 
 /** The gate's own settings never reach the upstream server's environment. */
-const GATE_ENV_KEYS = ["OMB_GATE_NAME", "OMB_GATE_SPILL_DIR", "OMB_GATE_BUDGET", "OMB_GATE_UPSTREAM"];
+const GATE_ENV_KEYS = ["OMB_GATE_NAME", "OMB_GATE_SPILL_DIR", "OMB_GATE_BUDGET", "OMB_GATE_UPSTREAM", "OMB_GATE_SPILL_HINT"];
 
 function fail(message: string): never {
   process.stderr.write(`mcp-gate(${NAME}): ${message}\n`);
@@ -117,7 +121,7 @@ function trimCallResult(result: Json, tool: string): boolean {
   const path = spill(tool, textBlocks.map((block) => block.text).join("\n"));
   let trimmed = false;
   for (const block of textBlocks) {
-    const outcome = trimResultText({ text: block.text, budget: share, spillPath: path, toolName: tool });
+    const outcome = trimResultText({ text: block.text, budget: share, spillPath: path, spillHint: SPILL_HINT, toolName: tool });
     if (!outcome.trimmed) continue;
     block.text = outcome.text;
     trimmed = true;

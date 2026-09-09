@@ -37,7 +37,10 @@ describe("trimResultText", () => {
     expect(kept.nextOffset).toBe("1");
 
     expect(out.text).toContain(`products ${kept.products.length} of 200`);
-    expect(out.text).toContain("/data/tool-results/7.json");
+    // the path is NOT offered: a model that reads it back costs more than no
+    // trimming at all, which is the whole point of the cut
+    expect(out.text).not.toContain("/data/tool-results/7.json");
+    expect(out.text).toContain("narrower query");
   });
 
   it("shares the budget across several bulk arrays", () => {
@@ -68,7 +71,15 @@ describe("trimResultText", () => {
     expect(out.text.length).toBeLessThan(DEFAULT_RESULT_BUDGET);
     // the model is told the prefix may not parse, so it does not trust it as JSON
     expect(out.text).toContain("may be incomplete");
-    expect(out.text).toContain("/data/tool-results/9.json");
+    expect(out.text).not.toContain("/data/tool-results/9.json");
+  });
+
+  it("names the saved file only when the caller asks for the hint", () => {
+    const text = JSON.stringify({ products: Array.from({ length: 200 }, (_, i) => product(i)) });
+    const out = trimResultText({ text, spillPath: "/data/tool-results/7.json", spillHint: true });
+    expect(out.text).toContain("/data/tool-results/7.json");
+    // and it still says reading it is not the cheap option
+    expect(out.text).toContain("costs as much as not trimming");
   });
 
   it("falls back to a text cut when one record is bigger than the whole budget", () => {

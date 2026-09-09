@@ -34,6 +34,14 @@ export interface TrimInput {
   budget?: number;
   /** absolute path where the untrimmed text was saved, if it was */
   spillPath?: string;
+  /** Put that path in front of the model. Off by default, and measured:
+   * with the path offered, a model reading a 136 KB search result answered
+   * the same question for MORE context than no trimming at all (210,913 vs
+   * 196,183 tokens) — it read the file straight back in. An invitation to
+   * undo the trim is not a safety net, it is a slower way to pay. The file
+   * is still written; it is for the person and the harness, and this flag
+   * exists for debugging. */
+  spillHint?: boolean;
   /** for the marker's wording only */
   toolName?: string;
 }
@@ -90,6 +98,7 @@ function marker(input: {
   keptChars: number;
   dropped: Array<{ key: string; kept: number; total: number }>;
   spillPath?: string;
+  spillHint?: boolean;
   structural: boolean;
 }): string {
   const counts = input.dropped
@@ -99,9 +108,11 @@ function marker(input: {
   const what = input.structural
     ? counts ? ` Kept ${counts}.` : ""
     : " Cut mid-text, so what is above may be incomplete JSON.";
-  const where = input.spillPath
-    ? ` The whole result is at ${JSON.stringify(input.spillPath)} — read or grep that file for anything cut.`
-    : " The rest was discarded.";
+  // What a model should do about it: ask the tool a better question. Never
+  // "go and read the whole thing", which costs more than not trimming.
+  const where = input.spillHint && input.spillPath
+    ? ` The whole result is at ${JSON.stringify(input.spillPath)}; reading it costs as much as not trimming, so narrow the call first.`
+    : " If you need more, call the tool again with a narrower query, a filter, or the next page.";
   return `\n\n[OpenMausBot trimmed this tool result to fit the conversation: ${fmt(input.originalChars)} → ${fmt(input.keptChars)} characters.${what}${where}]`;
 }
 
@@ -187,7 +198,7 @@ export function trimResultText(input: TrimInput): TrimOutcome {
       // still overflows, the text cut below is the honest answer.
       if (json !== null && json.length <= room) {
         return {
-          text: json + marker({ originalChars: text.length, keptChars: json.length, dropped, spillPath: input.spillPath, structural: true }),
+          text: json + marker({ originalChars: text.length, keptChars: json.length, dropped, spillPath: input.spillPath, spillHint: input.spillHint, structural: true }),
           trimmed: true,
           originalChars: text.length,
         };
@@ -197,7 +208,7 @@ export function trimResultText(input: TrimInput): TrimOutcome {
 
   const cut = cutAt(text, room);
   return {
-    text: cut + marker({ originalChars: text.length, keptChars: cut.length, dropped: [], spillPath: input.spillPath, structural: false }),
+    text: cut + marker({ originalChars: text.length, keptChars: cut.length, dropped: [], spillPath: input.spillPath, spillHint: input.spillHint, structural: false }),
     trimmed: true,
     originalChars: text.length,
   };

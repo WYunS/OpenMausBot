@@ -120,8 +120,9 @@ describe("mcp-gate", () => {
     const [file] = readdirSync(spillDir);
     expect(file).toContain("search_products");
     expect(readFileSync(join(spillDir, file), "utf8")).toBe(full);
-    // the model is told where the rest is, by a path it can actually open
-    expect(text).toContain(join(spillDir, file));
+    // …but the model is not pointed at it: reading it back costs more than
+    // never trimming. It is there for the person and the harness.
+    expect(text).not.toContain(join(spillDir, file));
 
     const kept = JSON.parse(text.slice(0, text.indexOf("\n\n[OpenMausBot")));
     expect(kept.products[0]).toEqual(products[0]);
