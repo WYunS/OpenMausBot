@@ -486,12 +486,14 @@ describe("drainDelegations", () => {
   it("reports pre-dispatch denials after removing the pending handoff", async () => {
     store.patchBot(from.id, { approvePeerComms: true });
     const queued = queueDelegation(commsBus, from, { toBotId: target.id, message: "do this", depth: 0 }, 1);
-    const settled = vi.fn(() => expect(_pendingCount(from.threadId)).toBe(0));
+    const pendingAtSettle: number[] = [];
+    const settled = vi.fn(() => void pendingAtSettle.push(_pendingCount(from.threadId)));
     const runTarget = vi.fn();
     drainDelegations(commsBus, approvalBus, from.threadId, runTarget, settled);
     const card = await waitFor(() => store.messagesFor(from.threadId).find((m) => m.card?.requestId));
     resolvePeerComms(approvalBus, card.card!.requestId!, "deny");
     await waitFor(() => settled.mock.calls.length === 1);
+    expect(pendingAtSettle).toEqual([0]);
     expect(settled).toHaveBeenCalledWith(expect.objectContaining({ id: queued.id, status: "denied" }));
     expect(runTarget).not.toHaveBeenCalled();
   });

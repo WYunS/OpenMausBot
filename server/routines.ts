@@ -1198,7 +1198,14 @@ export class RoutineManager {
     // protocol, never the routine receipt's result.
     if (
       run.target === "room-goal" &&
-      (event.type === "turn.completed" || (event.type === "item.completed" && event.itemType === "assistant_text"))
+      (
+        // These outcomes ended the goal operation. Later room traffic is
+        // not a resume of that run; only the goal lifecycle can change its
+        // receipt. In-flight provider approvals have no goalStatus and
+        // continue to resolve normally below.
+        run.goalStatus === "needs-input" || run.goalStatus === "paused" ||
+        event.type === "turn.completed" || (event.type === "item.completed" && event.itemType === "assistant_text")
+      )
     ) return null;
     if (event.type === "turn.started") {
       run.status = "running";

@@ -107,6 +107,46 @@ describe("routine delegation through the isolated harness", () => {
     evidence.push({ deniedHandoffResumed: true, transcript });
   }, 45_000);
 
+  it("charges a logical wake once while a full bot retries after unrelated completions", async () => {
+    writeFileSync(join(fixture.info.dataDir, "gate-peer"), "hold the delegated peer");
+    const run = await start();
+    await delegate(run.threadId);
+    finish(run.threadId);
+    await dump("probe");
+    await expect.poll(async () => (await runState(run.id))?.status).toBe("waiting");
+
+    // The source thread is idle, but startTurn's later bot-wide admission
+    // check rejects its wake. Keep that condition deterministic across drains.
+    const occupiedThreads: string[] = [];
+    for (let index = 0; index < 3; index++) {
+      const { task } = await api("POST", `/api/bots/${source.id}/tasks`, { title: `Occupied ${index}` });
+      occupiedThreads.push(task.threadId);
+      await api("POST", `/api/bots/${source.id}/messages`, { threadId: task.threadId, text: "Hold this task open." });
+      await dump(task.threadId);
+    }
+    finish("probe");
+    await expect.poll(async () => (await messages(run.threadId)).some(
+      (message) => message.text?.includes("@Routine peer replied to the delegated task"),
+    ), { timeout: 15_000 }).toBe(true);
+
+    const observer = (await control(["new-bot", "--name", "Unrelated observer"]) as any).bot;
+    const observerThread = (await api("GET", "/api/bots")).bots.find((bot: any) => bot.id === observer.id).threadId;
+    // More retries than the three-wake burst budget must not exhaust it:
+    // these completions retry one held wake, not new logical follow-ups.
+    for (let index = 0; index < 4; index++) {
+      await api("POST", `/api/bots/${observer.id}/messages`, { threadId: observerThread, text: `Unrelated work ${index}` });
+      await dump(observerThread);
+      finish(observerThread);
+      await control(["wait", "--bot", observer.id, "--task", observerThread]);
+      expect((await runState(run.id)).status).toBe("waiting");
+    }
+
+    finish(occupiedThreads[0]);
+    await expect.poll(async () => (await runState(run.id))?.status, { timeout: 15_000 }).toBe("completed");
+    expect((await runState(run.id)).output).toContain("[A delegated task just completed]");
+    evidence.push({ busyRetriesPreservedWakeBudget: true, runId: run.id, transcript: await messages(run.threadId) });
+  }, 60_000);
+
   it("resumes a new user's delegation on a completed routine's execution thread", async () => {
     const run = await start();
     finish(run.threadId);

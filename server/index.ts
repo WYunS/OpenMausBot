@@ -3529,7 +3529,7 @@ const delegationWatch = new Map<string, {
 // fold the result in and answer the user instead of sitting idle. Mirrors
 // the cardContinuation resume pattern used for connector/credential cards.
 const delegationWakeBudget = new DelegationWakeBudget();
-const pendingDelegationWakes = new Map<string, { botId: string; targetName: string; failureReason?: string; routineRunId?: string }>();
+const pendingDelegationWakes = new Map<string, { botId: string; targetName: string; failureReason?: string; routineRunId?: string; budgetAcquired?: boolean }>();
 
 function activeRoutineRunForThread(threadId: string): RoutineRun | null {
   const run = routines?.runForThread(threadId);
@@ -3540,9 +3540,13 @@ function routineDelegationCanResume(threadId: string, routineRunId?: string): bo
   return !routineRunId || activeRoutineRunForThread(threadId)?.id === routineRunId;
 }
 
-function dispatchDelegationWake(botId: string, threadId: string, targetName: string, failureReason?: string, routineRunId?: string): void {
+function dispatchDelegationWake(botId: string, threadId: string, targetName: string, failureReason?: string, routineRunId?: string, budgetAcquired = false): void {
   if (!store.taskByThread(botId, threadId)) return;
   if (!routineDelegationCanResume(threadId, routineRunId)) return;
+  if (!budgetAcquired && !delegationWakeBudget.tryAcquire(threadId)) {
+    routines?.failThread(threadId, "Delegation follow-up limit reached; review the run before retrying");
+    return;
+  }
   const prompt = failureReason
     ? buildDelegationFailurePrompt(targetName, failureReason)
     : buildDelegationRevivalPrompt(targetName);
@@ -3556,8 +3560,9 @@ function dispatchDelegationWake(botId: string, threadId: string, targetName: str
       if (!store.taskByThread(botId, threadId)) return;
       const message = error instanceof Error ? error.message : String(error);
       // Raced with a user turn claiming the bot — retry once it settles.
+      // This is the same logical wake, so keep its original budget charge.
       if (/already working/i.test(message)) {
-        pendingDelegationWakes.set(threadId, { botId, targetName, failureReason, routineRunId });
+        pendingDelegationWakes.set(threadId, { botId, targetName, failureReason, routineRunId, budgetAcquired: true });
         return;
       }
       store.appendMessage(threadId, {
@@ -3583,10 +3588,6 @@ function wakeDelegationSource(source: BotRecord, threadId: string, targetName: s
     pendingDelegationWakes.set(threadId, { botId: source.id, targetName, failureReason, routineRunId });
     return;
   }
-  if (!delegationWakeBudget.tryAcquire(threadId)) {
-    routines?.failThread(threadId, "Delegation follow-up limit reached; review the run before retrying");
-    return;
-  }
   dispatchDelegationWake(source.id, threadId, targetName, failureReason, routineRunId);
 }
 
@@ -3598,11 +3599,7 @@ function drainDelegationWakes(): void {
     }
     if (threadBusy(entry.botId, threadId) || activeGroupTurnForBot(entry.botId)) continue;
     pendingDelegationWakes.delete(threadId);
-    if (!delegationWakeBudget.tryAcquire(threadId)) {
-      routines?.failThread(threadId, "Delegation follow-up limit reached; review the run before retrying");
-      continue;
-    }
-    dispatchDelegationWake(entry.botId, threadId, entry.targetName, entry.failureReason, entry.routineRunId);
+    dispatchDelegationWake(entry.botId, threadId, entry.targetName, entry.failureReason, entry.routineRunId, entry.budgetAcquired);
   }
 }
 

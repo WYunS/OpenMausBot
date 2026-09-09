@@ -1445,8 +1445,58 @@ describe("RoutineManager", () => {
       expect(finished).toMatchObject({ status: "waiting", goalStatus: status, attention: `${status} detail` });
       expect(finished?.finishedAt).toBeUndefined();
       expect(h.failed).toEqual([]);
+
+      const base = {
+        eventId: "later-room-turn", provider: "fake", threadId: run.threadId!,
+        createdAt: new Date().toISOString(),
+      };
+      const before = h.manager.runForThread(run.threadId!);
+      const changes = h.changed.length;
+      expect(h.manager.handleRuntimeEvent({ ...base, type: "turn.started" })).toBeNull();
+      expect(h.manager.handleRuntimeEvent({
+        ...base, type: "request.opened", requestType: "permission", tool: "run",
+        summary: "An unrelated later room turn asks for permission",
+      })).toBeNull();
+      expect(h.manager.handleRuntimeEvent({
+        ...base, type: "request.resolved", behavior: "allow", source: "user",
+      })).toBeNull();
+      expect(h.manager.handleRuntimeEvent({ ...base, type: "runtime.error", message: "Later room failure" })).toBeNull();
+      expect(h.manager.runForThread(run.threadId!)).toEqual(before);
+      expect(h.changed).toHaveLength(changes);
+      expect(JSON.parse(readFileSync(h.options.file!, "utf8")).runs[0]).toMatchObject({
+        status: "waiting", goalStatus: status, attention: `${status} detail`,
+      });
+
+      // Authority stays with the goal lifecycle, not generic provider
+      // events; a goal-owned transition can still settle the same receipt.
+      expect(h.manager.finishGoalRun(run.id, "completed", "Goal-owned completion")).toMatchObject({
+        status: "completed", goalStatus: "completed", output: "Goal-owned completion", attention: undefined,
+      });
     },
   );
+
+  it("still resumes an in-flight room goal after a provider approval is answered", async () => {
+    const h = harness();
+    const routine = h.manager.create({
+      name: "Active room goal", prompt: "Complete the goal", target: "room-goal",
+      botId: "chief-1", groupId: "room-1", enabled: false,
+      schedule: { type: "daily", time: "09:00", weekdays: [1] },
+    });
+    h.manager.runNow(routine.id);
+    await h.manager.tick();
+    const run = h.manager.listRuns()[0]!;
+    const base = { eventId: "active-goal-approval", provider: "fake", threadId: run.threadId!, createdAt: new Date().toISOString() };
+    const waiting = h.manager.handleRuntimeEvent({
+      ...base, type: "request.opened", requestType: "permission", tool: "run", summary: "Approve the next step",
+    });
+    expect(waiting).toMatchObject({ status: "waiting", attention: "Approve the next step" });
+    expect(waiting?.goalStatus).toBeUndefined();
+    expect(h.manager.handleRuntimeEvent({
+      ...base, type: "request.resolved", behavior: "allow", source: "user",
+    })).toMatchObject({ status: "running", attention: undefined });
+    expect(h.manager.handleRuntimeEvent({ ...base, type: "turn.started" })).toMatchObject({ status: "running" });
+    expect(h.manager.finishGoalRun(run.id, "completed", "Approved work completed")).toMatchObject({ status: "completed" });
+  });
 
   it.each(["blocked", "limit-reached"] satisfies GroupGoalRunStatus[])(
     "records a %s room outcome as a failed routine run with the goal's own detail",

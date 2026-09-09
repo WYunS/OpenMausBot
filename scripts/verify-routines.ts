@@ -62,8 +62,12 @@ try {
       const timer = setTimeout(() => reject(new Error("MCP proposal timed out")), 15_000);
       const lines = createInterface({ input: proxy.stdout });
       lines.on("line", (line) => {
-        const response = JSON.parse(line);
-        if (response.id === 1) { clearTimeout(timer); lines.close(); resolve(response); }
+        try {
+          const response = JSON.parse(line);
+          if (response.id === 1) { clearTimeout(timer); lines.close(); resolve(response); }
+        } catch (error) {
+          clearTimeout(timer); lines.close(); reject(error);
+        }
       });
       proxy.once("error", (error) => { clearTimeout(timer); reject(error); });
       proxy.once("exit", () => { clearTimeout(timer); reject(new Error("MCP exited before replying")); });

@@ -125,7 +125,10 @@ it("recovers queued/due work without resurrecting an interrupted routine after r
       return current.messages.some((message: { role: string; text?: string }) =>
         message.role === "user" && message.text?.includes("This later user request must survive the restart"));
     }, { timeout: 15_000 }).toBe(true);
-    expect(JSON.parse(readFileSync(join(dataDir, "delegations.json"), "utf8"))).toEqual({});
+    await expect.poll(
+      () => JSON.parse(readFileSync(join(dataDir, "delegations.json"), "utf8")),
+      { timeout: 10_000 },
+    ).toEqual({});
     const scheduledRun = runs.find((run) => run.routineId === scheduled.id)!;
     const wait = await runControlOmb(["wait", "--bot", scheduledBot.id, "--task", scheduledRun.threadId!, "--url", url]);
     const messages = await runControlOmb(["messages", "--bot", scheduledBot.id, "--task", scheduledRun.threadId!, "--url", url]);
