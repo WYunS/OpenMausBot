@@ -157,6 +157,32 @@ describe("mcp-gate", () => {
     expect(JSON.parse(JSON.stringify(process.env.OMB_GATE_UPSTREAM ?? null))).toBe(null);
   });
 
+  it("spawns an upstream named as a bare command on PATH", async () => {
+    // The CLI spawned these servers itself on every platform, so the gate has
+    // to as well: `npx -y mcp-remote ...` is an npm shim on Windows, which
+    // CreateProcess cannot exec directly. Proven here through the same
+    // resolver the drivers use, on a bare name rather than an absolute path.
+    const script = join(scratch, "reply.json");
+    writeFileSync(script, JSON.stringify({ content: [{ type: "text", text: "ok" }] }));
+    const upstreamJs = join(scratch, "upstream.cjs");
+    writeFileSync(upstreamJs, UPSTREAM);
+    gate = spawn(process.execPath, ["--experimental-strip-types", "--no-warnings", GATE], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        OMB_GATE_NAME: "shop",
+        OMB_GATE_UPSTREAM: JSON.stringify({ command: "node", args: [upstreamJs], env: { SCRIPT: script } }),
+      },
+    }) as ChildProcessWithoutNullStreams;
+    createInterface({ input: gate.stdout }).on("line", (line) => {
+      const next = waiting.shift();
+      if (next) next(line);
+      else lines.push(line);
+    });
+
+    expect((await call("get_food_cart")).result).toEqual({ content: [{ type: "text", text: "ok" }] });
+  });
+
   it("relays a result whole when it is a shape the trimmer cannot cut", async () => {
     // no content array at all: nothing to trim, and dropping it would lose the
     // tool's answer

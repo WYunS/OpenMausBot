@@ -19,7 +19,9 @@ import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
+import { resolveCliSpawn } from "./env-path.ts";
 import { DEFAULT_RESULT_BUDGET, trimResultText, trimStructured } from "./mcp-trim.ts";
+import { killCliTree } from "./procs.ts";
 
 type Json = Record<string, unknown>;
 
@@ -144,16 +146,42 @@ if (SPILL_DIR) sweepSpill(SPILL_DIR);
 const childEnv: NodeJS.ProcessEnv = { ...process.env, ...spec.env };
 for (const key of GATE_ENV_KEYS) delete childEnv[key];
 
-const child = spawn(spec.command, spec.args ?? [], {
+// The CLI used to spawn this server itself, on every platform, so the gate
+// has to spawn it exactly as well. On Windows CreateProcess cannot exec an
+// npm .cmd shim or a node-shebang script, which is what `npx -y mcp-remote`
+// is — resolveCliSpawn rewrites it to the real executable without a shell, so
+// quoting-sensitive JSON argv survives. A shell here would re-interpret the
+// server's own arguments.
+const resolved = resolveCliSpawn(spec.command, spec.args ?? []);
+const child = spawn(resolved.command, resolved.args, {
   stdio: ["pipe", "pipe", "pipe"],
   env: childEnv,
-  // A shell would re-interpret the server's own arguments; the CLI would have
-  // spawned this command directly, and so does the gate.
   shell: false,
+  // a console app spawned from the desktop shell flashes a window otherwise
+  ...(process.platform === "win32" ? { windowsHide: true } : {}),
 });
 
+// The gate owns this process. If the gate is killed rather than closed —
+// the CLI reaping its MCP servers at the end of a turn — the real server
+// must not be left behind, and on Windows only taskkill /T reaps a tree.
+let reaping = false;
+const reapChild = () => {
+  if (reaping) return;
+  reaping = true;
+  void killCliTree(child);
+};
+process.on("SIGTERM", () => {
+  reapChild();
+  process.exit(0);
+});
+process.on("SIGINT", () => {
+  reapChild();
+  process.exit(0);
+});
+process.on("exit", reapChild);
+
 child.on("error", (error) => {
-  process.stderr.write(`mcp-gate(${NAME}): could not start ${spec.command}: ${String(error)}\n`);
+  process.stderr.write(`mcp-gate(${NAME}): could not start ${resolved.command}: ${String(error)}\n`);
   process.exit(1);
 });
 child.stderr.pipe(process.stderr);
