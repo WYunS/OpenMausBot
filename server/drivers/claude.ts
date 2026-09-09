@@ -30,6 +30,7 @@ import type {
   SendTurnInput,
 } from "../contracts.ts";
 import { computerProxyEnv } from "../container-computer.ts";
+import { gateServer, resultBudget } from "../mcp-gate-config.ts";
 import { newEventId, newId } from "../contracts.ts";
 import { classifyError, computeBackoff, interruptibleDelay, RETRY_MAX_ATTEMPTS } from "./retry.ts";
 import {
@@ -953,9 +954,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // routes every custom tool call through the ogb permission broker
       // into an Allow/Deny card. Reserved names were filtered upstream;
       // skip any residual collision instead of clobbering a built-in.
+      // Bot-owned servers, gated below: they are the ones that answer for a
+      // machine rather than for a context window.
+      const botOwned = new Set<string>();
       for (const [name, server] of Object.entries(turn.integrations?.custom ?? {})) {
         if (name in mcpServers) continue;
         mcpServers[name] = { ...server };
+        botOwned.add(name);
       }
       // --strict-mcp-config (above) makes this config the CLI's only source
       // of MCP servers, so a server the bot's OWN project declares would
@@ -965,7 +970,20 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         for (const [name, server] of Object.entries(projectMcpServers(turn.cwd))) {
           if (name in mcpServers) continue;
           mcpServers[name] = server;
+          botOwned.add(name);
         }
+      }
+      // One tool call can put more into the conversation than the whole rest
+      // of the session: a single product search measured 60-140 KB of JSON,
+      // and the CLI re-reads it on every later model call. The harness never
+      // sees these calls — the CLI runs the server itself — so the only place
+      // to stand is between the two processes. Harness-owned mounts (the
+      // permission broker, computer, browser, agents, dweb) are already
+      // bounded and are deliberately left alone.
+      const budget = resultBudget(turnEnvironment);
+      for (const name of botOwned) {
+        const gated = gateServer({ name, server: mcpServers[name], threadId, budget, nodeEnv: NODE_ENV_FLAG });
+        if (gated) mcpServers[name] = gated;
       }
       // Keep ask_user available even in Full access. Native bypass skips
       // permission prompts, not questions requiring a person's answer.

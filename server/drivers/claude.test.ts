@@ -762,11 +762,74 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await recorder.until((e) => e.type === "turn.completed");
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
-    expect(seen.mcpConfig.mcpServers.shop).toMatchObject({ command: "npx", args: ["-y", "mcp-remote", "https://example.test/shop"] });
+    // a project stdio server arrives behind the gate, its own spec intact
+    expect(JSON.parse(seen.mcpConfig.mcpServers.shop.env.OMB_GATE_UPSTREAM)).toMatchObject({
+      command: "npx",
+      args: ["-y", "mcp-remote", "https://example.test/shop"],
+    });
     expect(seen.mcpConfig.mcpServers.hosted).toMatchObject({ type: "http", url: "https://example.test/mcp" });
     expect(seen.mcpConfig.mcpServers.ogb.args).not.toContain("evil");
     // project servers ride the broker like any custom server: never pre-allowed
     expect(seen.argv[seen.argv.indexOf("--allowedTools") + 1]).not.toContain("mcp__shop");
+  });
+
+  it("mounts a bot's own MCP server behind the result gate", async () => {
+    await create();
+    const dump = join(scratch, "gate.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-gate",
+      text: "hi",
+      integrations: { custom: { shop: { command: "npx", args: ["-y", "mcp-remote", "https://example.test/shop"], env: { SHOP_TOKEN: "secret" } } } },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    const shop = seen.mcpConfig.mcpServers.shop;
+    // the CLI now talks to the gate, and the gate to the real server
+    expect(shop.args[0]).toContain("mcp-gate");
+    expect(JSON.parse(shop.env.OMB_GATE_UPSTREAM)).toMatchObject({
+      command: "npx",
+      args: ["-y", "mcp-remote", "https://example.test/shop"],
+      env: { SHOP_TOKEN: "secret" },
+    });
+    expect(shop.env.OMB_GATE_NAME).toBe("shop");
+    expect(Number(shop.env.OMB_GATE_BUDGET)).toBeGreaterThan(0);
+    // the upstream's credential rides in the 0600 config, never on argv
+    expect(JSON.stringify(seen.argv)).not.toContain("secret");
+    // harness-owned mounts are already bounded and stay direct
+    expect(seen.mcpConfig.mcpServers.ogb.args[0]).not.toContain("mcp-gate");
+  });
+
+  it("mounts bot servers directly when the result budget is turned off", async () => {
+    const dump = join(scratch, "gate-off.json");
+    await create(undefined, { FAKE_CLAUDE_DUMP: dump, OMB_MCP_RESULT_BUDGET: "0" });
+
+    await instance.adapter.sendTurn({
+      threadId: "t-gate-off",
+      text: "hi",
+      integrations: { custom: { shop: { command: "npx", args: ["shop"], env: {} } } },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.mcpConfig.mcpServers.shop).toMatchObject({ command: "npx", args: ["shop"] });
+  });
+
+  it("leaves an http project server unmounted by the gate rather than mangling it", async () => {
+    await create();
+    const dump = join(scratch, "gate-http.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    const projectDir = join(scratch, "http-project");
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(join(projectDir, ".mcp.json"), JSON.stringify({ mcpServers: { hosted: { type: "http", url: "https://example.test/mcp" } } }));
+
+    await instance.adapter.sendTurn({ threadId: "t-gate-http", text: "hi", cwd: projectDir });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.mcpConfig.mcpServers.hosted).toEqual({ type: "http", url: "https://example.test/mcp" });
   });
 
   it("survives a malformed or missing project .mcp.json", async () => {
@@ -841,8 +904,9 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await recorder.until((e) => e.type === "turn.completed");
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
-    // the server reaches the CLI through the private mcp-config file…
-    expect(seen.mcpConfig.mcpServers.notes).toMatchObject({
+    // the server reaches the CLI through the private mcp-config file, now
+    // behind the result gate (see the gate tests below)…
+    expect(JSON.parse(seen.mcpConfig.mcpServers.notes.env.OMB_GATE_UPSTREAM)).toMatchObject({
       command: "npx",
       args: ["-y", "@x/notes-mcp"],
       env: { NOTES_TOKEN: "tok-notes" },
