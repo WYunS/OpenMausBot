@@ -187,7 +187,7 @@ export interface SendTurnInput {
    * (memory today): `systemStable` is everything else, `systemVolatile` is
    * those sections' text. A driver that keeps one CLI process per thread keys
    * that process on the stable half, so a memory edit no longer respawns the
-   * session and make the provider re-cache the entire prompt; the changed half
+   * session and makes the provider re-cache the entire prompt; the changed half
    * is delivered inside the next turn instead. Drivers that rebuild their
    * request every turn ignore both and keep reading `system`. */
   systemStable?: string;
