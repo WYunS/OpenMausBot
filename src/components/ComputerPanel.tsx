@@ -62,14 +62,6 @@ import {
 import { approvalModeFor } from "../../shared/approval-mode";
 import { activeLocale, t } from "@/lib/i18n";
 import type { LocaleKey } from "@/locales";
-import {
-  ensureLocalVmReady,
-  localVmLaunchAction,
-  localVmLifecyclePath,
-  localVmSelectionStartsBootstrap,
-  localVmSetupAvailable,
-  localVmTarget,
-} from "@/lib/local-vm-bootstrap";
 
 class LocalizedPanelError extends Error {
   constructor(
@@ -328,7 +320,6 @@ export function ComputerPanel({
   // the only way a person can actually drive the VM.
   const [vmViewerUrl, setVmViewerUrl] = useState<string | null>(null);
   const [vmStatus, setVmStatus] = useState<LocalVmStatus | null>(null);
-  const [vmBootstrap, setVmBootstrap] = useState<LocalVmBootstrapState | null>(null);
   const [vpsStatus, setVpsStatus] = useState<VpsComputerStatus | null>(null);
   const [localFrame, setLocalFrame] = useState<string | null>(null);
   const [pending, setPending] = useState<
@@ -340,10 +331,6 @@ export function ComputerPanel({
   const errorText = panelErrorText(error);
   const [creatingRoutine, setCreatingRoutine] = useState(false);
   const [panelView, setPanelView] = useState<ComputerPanelView>(() => readComputerPanelView(bot.id));
-
-  useEffect(() => window.ogb?.localVmBootstrap?.onState((next) => {
-    if (!next.target?.botId || next.target.botId === bot.id) setVmBootstrap(next);
-  }), [bot.id]);
   const androidStatus = useAndroidUsbDevices();
   const androidConnected = androidStatus.devices.length > 0;
   // Keep installation reachable before the engine is ready. Actual browser
@@ -1122,30 +1109,14 @@ export function ComputerPanel({
     setVmStatus(null);
     vmReadinessAttempts.current = 0;
     try {
-      if (action === "vm-create" && window.ogb?.localVmBootstrap) {
-        const outcome = await ensureLocalVmReady(
-          window.ogb.localVmBootstrap,
-          localVmTarget(vmStatus?.mode ?? "per-bot", bot.id),
-          () => window.confirm(t("vm.setup.confirmOneClick")),
-        );
-        if (outcome.kind === "cancelled") return;
-        if (outcome.kind === "reboot-required") {
-          setError(t("vm.setup.reboot"));
-          return;
-        }
-        const status: LocalVmStatus = await api(`/api/bots/${bot.id}/local-computer`);
-        setVmStatus(status);
-        setPhase(status.ready ? "vm" : "checking");
-        return;
-      }
       if (action !== "vm-create") {
-        await api(localVmLifecyclePath(vmStatus?.mode ?? "per-bot", bot.id, "remove"), {
+        await api(`/api/bots/${bot.id}/local-computer/remove`, {
           method: "POST",
           body: "{}",
         });
       }
       if (action !== "vm-delete") {
-        const status: LocalVmStatus = await api(localVmLifecyclePath(vmStatus?.mode ?? "per-bot", bot.id, "run"), {
+        const status: LocalVmStatus = await api(`/api/bots/${bot.id}/local-computer/run`, {
           method: "POST",
           body: "{}",
         });
@@ -1217,7 +1188,6 @@ export function ComputerPanel({
     off: "This bot's computer is off",
     error: "Couldn't reach the computer",
   } satisfies Record<Exclude<Phase, "ready" | "local" | "vm">, string>;
-  const vmNeedsReplacement = Boolean(vmStatus && localVmLaunchAction(vmStatus) === "vm-recreate");
 
   return (
     <>
@@ -1404,36 +1374,19 @@ export function ComputerPanel({
                 </button>
               )}
               {phase === "vm-unavailable" && (
-                vmStatus && localVmSetupAvailable(vmStatus, Boolean(window.ogb?.localVmBootstrap)) ? (
-                  <div>
+                vmStatus?.mode === "per-bot" && vmStatus.image && vmStatus.create_supported ? (
                   <button
-                    onClick={() => void runVmAction(vmNeedsReplacement ? "vm-recreate" : "vm-create")}
+                    onClick={() => void runVmAction(vmStatus.container === "missing" ? "vm-create" : "vm-recreate")}
                     disabled={pending !== null}
                     className="mt-1 rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white hover:brightness-110 disabled:opacity-50"
                   >
                     {(pending === "vm-create" || pending === "vm-recreate") && (
                       <Loader2 size={13} className="mr-1.5 inline animate-spin" />
                     )}
-                    {vmNeedsReplacement
-                      ? t("computer.replaceVm", { name: bot.name })
-                      : vmStatus.container === "stopped"
-                        ? t("vm.setup.start")
-                        : t("computer.createVm", { name: bot.name })}
+                    {vmStatus.container === "missing"
+                      ? t("computer.createVm", { name: bot.name })
+                      : t("computer.replaceVm", { name: bot.name })}
                   </button>
-                  {vmBootstrap && vmBootstrap.status !== "idle" && vmBootstrap.target?.botId === bot.id && (
-                    <div className="mt-2 w-56" role="status" aria-live="polite">
-                      <div className="h-1.5 overflow-hidden rounded-full bg-control">
-                        <div className="h-full bg-accent transition-[width]" style={{ width: `${vmBootstrap.progress}%` }} />
-                      </div>
-                      <div className="mt-1 text-[11.5px] text-ink-secondary">{vmBootstrap.message}</div>
-                      {vmBootstrap.status === "running" && (
-                        <button type="button" onClick={() => void window.ogb?.localVmBootstrap?.cancel()} className="mt-1 text-[11.5px] text-accent hover:underline">
-                          {t("vm.setup.cancelOneClick")}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                  </div>
                 ) : (
                   <button
                     onClick={openVmSettings}
@@ -1697,14 +1650,6 @@ export function ComputerPanel({
                   // a browser-only bot must actually have its browser: flip
                   // the per-bot switch on with the destination
                   else if (mode === "browser") updateComputerSelection({ computer: mode, browser: true });
-                  else if (mode === "vm") {
-                    const startBootstrap = localVmSelectionStartsBootstrap(
-                      bot.computer,
-                      Boolean(window.ogb?.localVmBootstrap),
-                    );
-                    updateComputerSelection({ computer: mode });
-                    if (startBootstrap) void runVmAction("vm-create");
-                  }
                   else updateComputerSelection({ computer: mode });
                 }}
                 type="button"

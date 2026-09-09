@@ -284,35 +284,13 @@ LABEL ${MANAGED_LABEL}="1" \\
 `;
 }
 
-/** Build the environment used by a host container CLI.
- *
- * Podman treats CONTAINER_CONNECTION as a hard connection override. Desktop
- * apps can inherit a stale value from the shell which launched Electron; in
- * that case even a healthy, running Podman machine is reported as stopped.
- * OpenMausBot owns the local-machine selection, so do not let that ambient
- * override leak into its Podman calls. CONTAINER_HOST remains supported for
- * the explicitly isolated verification fixture.
- */
-export function containerCliEnv(
-  cmd: string,
-  source: NodeJS.ProcessEnv = process.env,
-): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...source, PATH: augmentedPath() };
-  if (cmd.toLowerCase() === "podman") {
-    for (const key of Object.keys(env)) {
-      if (key.toUpperCase() === "CONTAINER_CONNECTION") delete env[key];
-    }
-  }
-  return env;
-}
-
 async function sh(cmd: string, args: string[], timeout = 8000): Promise<{ stdout: string }> {
   const resolved = resolveCliSpawn(cmd, args);
   const { stdout } = await run(resolved.command, resolved.args, {
     timeout,
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
-    env: containerCliEnv(cmd),
+    env: { ...process.env, PATH: augmentedPath() },
   });
   return { stdout };
 }

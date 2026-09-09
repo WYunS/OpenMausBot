@@ -23,12 +23,6 @@ for (const expected of [
   "com.openmausbot.local-vm=\"1\"",
   "COPY prepare-workspace.sh",
   "COPY start-cua-driver.sh",
-  "DefaultSearchProviderName",
-  "https://www.bing.com/search?q={searchTerms}",
-  "COPY vendor/",
-  "REQUIRE_ENTERPRISE_APPS",
-  "FEISHU_DEB_SHA256",
-  "FEILIAN_DEB_SHA256",
 ]) assert.ok(containerfile.includes(expected), `Containerfile is missing ${expected}`);
 
 console.log("Local VM image source is synchronized with runtime constants.");

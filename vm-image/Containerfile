@@ -9,11 +9,8 @@ ARG CUA_WHEEL_AMD64_URL=https://files.pythonhosted.org/packages/fa/d7/a43008a328
 ARG CUA_WHEEL_AMD64_SHA256=f60c35696a37f37ac954935e478ae4754f220856d022036625c9400d72185961
 ARG CUA_WHEEL_ARM64_URL=https://files.pythonhosted.org/packages/94/9d/1c1838b69067e83266c3d2aae02d74eef353a43dc8644884ccf03fe7f933/cua_driver-0.20.0-py3-none-manylinux_2_31_aarch64.whl
 ARG CUA_WHEEL_ARM64_SHA256=48833bc5e4c60e701fc9eefb57dbac36ec77ef3990f816fbbe85b4e954af2c77
-ARG APT_DEBIAN_MIRROR=""
-ARG APT_SECURITY_MIRROR=""
-ARG REQUIRE_ENTERPRISE_APPS=0
-ARG FEISHU_DEB_SHA256
-ARG FEILIAN_DEB_SHA256
+ARG APT_DEBIAN_MIRROR
+ARG APT_SECURITY_MIRROR
 
 RUN set -eux; \
     if [ -n "$APT_DEBIAN_MIRROR" ]; then \
@@ -45,37 +42,6 @@ RUN set -eux; \
     locale -a | grep -qi '^zh_CN\.utf8$'; \
     test -s /usr/share/locale/zh_CN/LC_MESSAGES/xfce4-panel.mo; \
     test -s /usr/share/locale/zh_CN/LC_MESSAGES/thunar.mo
-
-# Keep browser defaults correct in the immutable image. Runtime startup also
-# re-asserts these policies so older preserved containers receive the fix.
-RUN set -eux; \
-    install -d -m 0755 /etc/opt/chrome/policies/managed /etc/chromium/policies/managed /usr/lib/firefox-esr/distribution; \
-    printf '%s\n' '{"DefaultSearchProviderEnabled":true,"DefaultSearchProviderName":"Bing","DefaultSearchProviderKeyword":"bing.com","DefaultSearchProviderSearchURL":"https://www.bing.com/search?q={searchTerms}","DefaultSearchProviderSuggestURL":"https://www.bing.com/osjson.aspx?query={searchTerms}"}' \
-      > /etc/opt/chrome/policies/managed/openmausbot-search.json; \
-    cp /etc/opt/chrome/policies/managed/openmausbot-search.json /etc/chromium/policies/managed/openmausbot-search.json; \
-    printf '%s\n' '{"policies":{"SearchEngines":{"Default":"Bing"}}}' > /usr/lib/firefox-esr/distribution/policies.json
-
-# Feishu publishes Linux clients, while Feilian enterprise packages may be
-# tenant-scoped. Reviewed packages are supplied out-of-band under vendor/ and
-# are never fetched from an unpinned "latest" URL. Production image builds can
-# require both; source/development builds remain usable without private files.
-COPY vendor/ /tmp/openmausbot-vendor/
-RUN set -eux; \
-    arch="$(dpkg --print-architecture)"; \
-    feishu="/tmp/openmausbot-vendor/feishu-${arch}.deb"; \
-    feilian="/tmp/openmausbot-vendor/feilian-${arch}.deb"; \
-    if [ "$REQUIRE_ENTERPRISE_APPS" = 1 ]; then \
-      test -n "$FEISHU_DEB_SHA256"; test -n "$FEILIAN_DEB_SHA256"; \
-      test -s "$feishu"; test -s "$feilian"; \
-      echo "$FEISHU_DEB_SHA256  $feishu" | sha256sum -c -; \
-      echo "$FEILIAN_DEB_SHA256  $feilian" | sha256sum -c -; \
-      test "$(dpkg-deb -f "$feishu" Architecture)" = "$arch"; \
-      test "$(dpkg-deb -f "$feilian" Architecture)" = "$arch"; \
-      apt-get update; \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$feishu" "$feilian"; \
-      rm -rf /var/lib/apt/lists/*; \
-    fi; \
-    rm -rf /tmp/openmausbot-vendor
 
 RUN set -eux; \
     arch="$(uname -m)"; \

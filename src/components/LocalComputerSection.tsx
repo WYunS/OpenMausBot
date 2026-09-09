@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 import { Card, CommandLine } from "./SettingsPrimitives";
 import { cn } from "@/lib/cn";
-import { ensureLocalVmReady } from "@/lib/local-vm-bootstrap";
 
 type Action = "pull" | "run" | "start" | "stop" | "remove" | "recreate";
 
@@ -816,9 +815,6 @@ export function LocalComputerSection() {
   const [vpsRemovingName, setVpsRemovingName] = useState<string | null>(null);
   const [vpsRefreshKey, setVpsRefreshKey] = useState(0);
   const [announcement, setAnnouncement] = useState("");
-  const [bootstrap, setBootstrap] = useState<LocalVmBootstrapState | null>(null);
-
-  useEffect(() => window.ogb?.localVmBootstrap?.onState(setBootstrap), []);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const response = await fetch(...computerInventoryRequest("status", signal));
@@ -1010,34 +1006,6 @@ export function LocalComputerSection() {
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setPending(null);
-    }
-  };
-
-  const oneClickSetup = async () => {
-    const bridge = window.ogb?.localVmBootstrap;
-    if (!bridge) {
-      setError(t("vm.setup.step1Detail"));
-      return;
-    }
-    setPending("run");
-    setError(null);
-    try {
-      const outcome = await ensureLocalVmReady(
-        bridge,
-        {},
-        () => window.confirm(t("vm.setup.confirmOneClick")),
-        { prepareOnly: status?.mode === "per-bot" },
-      );
-      if (outcome.kind === "reboot-required") setError(t("vm.setup.reboot"));
-      if (outcome.kind === "ready") {
-        await refresh();
-        setInventoryRefreshKey((key) => key + 1);
-        setAnnouncement(t("vm.announce.updated"));
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setPending(null);
     }
@@ -1295,34 +1263,6 @@ export function LocalComputerSection() {
 
       <Card title={t("vm.setup.title")} subtitle={t("vm.setup.subtitle")}>
         <div className="flex flex-col gap-4">
-          {!headerReady && window.ogb?.localVmBootstrap && (
-            <div className="rounded-lg border border-accent/30 bg-accent/5 p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void oneClickSetup()}
-                  disabled={pending !== null || bootstrap?.status === "running"}
-                  className="rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50"
-                >
-                  {(pending === "run" || bootstrap?.status === "running") && <Loader2 size={13} className="mr-1.5 inline animate-spin" />}
-                  {t("vm.setup.oneClick")}
-                </button>
-                {bootstrap?.status === "running" && (
-                  <button type="button" onClick={() => void window.ogb?.localVmBootstrap?.cancel()} className="text-[12px] text-ink-secondary hover:text-ink">
-                    {t("vm.setup.cancelOneClick")}
-                  </button>
-                )}
-              </div>
-              {bootstrap && bootstrap.status !== "idle" && (
-                <div className="mt-2" role="status" aria-live="polite">
-                  <div className="h-1.5 overflow-hidden rounded-full bg-control">
-                    <div className="h-full bg-accent transition-[width]" style={{ width: `${bootstrap.progress}%` }} />
-                  </div>
-                  <div className="mt-1.5 text-[12px] text-ink-secondary">{bootstrap.message}</div>
-                </div>
-              )}
-            </div>
-          )}
           <Step n={1} title={t("vm.setup.step1")} done={Boolean(status?.runtime)}>
             <div className="text-[13px] leading-relaxed text-ink-secondary">
               {t("vm.setup.step1Detail")}
