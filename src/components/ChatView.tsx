@@ -596,7 +596,7 @@ function ActivityChip({ message }: { message: Message }) {
     <div className="flex justify-start">
       <div
         className={cn(
-          "flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px]",
+          "flex max-w-[min(480px,100%)] min-w-0 items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px]",
           failed ? "text-danger" : "text-ink-secondary",
         )}
       >
@@ -607,7 +607,11 @@ function ActivityChip({ message }: { message: Message }) {
         ) : (
           <Check size={13} className="text-success" />
         )}
-        <span className="max-w-[480px] truncate font-mono">{tool.name}</span>
+        <span className="shrink-0 max-w-[480px] truncate font-mono">{tool.name}</span>
+        {/* beside a bare tool name only — Codex and ACP already title the chip with the command */}
+        {tool.summary && tool.summary !== tool.name && !/[\s/]/.test(tool.name) && (
+          <span className="min-w-0 flex-1 truncate font-mono" title={tool.summary}>{tool.summary}</span>
+        )}
       </div>
     </div>
   );
