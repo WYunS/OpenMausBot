@@ -45,6 +45,7 @@ import { stateForBot } from "@/lib/mascot";
 import { showWorkingDots } from "@/lib/turn-tail";
 import { liveActivityLabel } from "@/lib/live-activity";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { RawMarkdownView, RawToggleAction } from "./RawMarkdownToggle";
 import { ThreadChip } from "./ThreadChip";
 import { ThreadRefText } from "./ThreadRefs";
 import { OptionCard, shouldHideOnboardingCard } from "./OptionCard";
@@ -325,6 +326,7 @@ function Bubble({
   const user = message.role === "user";
   const mentionPeers = useMemo(() => state.bots.filter((peer) => peer.id !== bot.id), [state.bots, bot.id]);
   const [expanded, setExpanded] = useState(false);
+  const [viewRaw, setViewRaw] = useState(false);
   const text = message.text ?? "";
   const webhookView = user ? webhookMessageView(text) : null;
   const attachments = user && !webhookView ? splitTranscriptAttachments(text) : null;
@@ -465,7 +467,7 @@ function Bubble({
               )}
             </>
           ) : (
-            <MessageBoundary fallbackText={text || t("chat.generatedImage")}>
+            <MessageBoundary key={viewRaw ? "raw" : "rendered"} fallbackText={text || t("chat.generatedImage")}>
               {message.attachments?.length ? (
                 <AttachedImageGallery
                   paths={message.attachments.map((attachment) => attachment.path)}
@@ -473,7 +475,11 @@ function Bubble({
                   eager={eagerAttachments}
                 />
               ) : null}
-              {text ? <ChatMarkdown text={text} mentionPeers={mentionPeers} message={{ threadId: bot.threadId, messageId: message.id }} /> : null}
+              {viewRaw && text ? (
+                <RawMarkdownView text={text} />
+              ) : text ? (
+                <ChatMarkdown text={text} mentionPeers={mentionPeers} message={{ threadId: bot.threadId, messageId: message.id }} />
+              ) : null}
             </MessageBoundary>
           )}
         </div>
@@ -481,6 +487,7 @@ function Bubble({
           <>
             <div className="flex flex-col gap-0.5 self-end pb-0.5">
               {text && <CopyButton text={text} />}
+              {text && <RawToggleAction active={viewRaw} onToggle={() => setViewRaw((r) => !r)} />}
               {message.kind === "text" && text && (
                 <SpeakButton text={text} botId={bot.id} messageId={message.id} voiceId={bot.voice} />
               )}
@@ -1117,6 +1124,10 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
     });
   };
 
+  const routineExecution = state.routineRuns.find((run) => run.target === "bot" && run.botId === bot.id && run.threadId === bot.threadId);
+  const resultsThreadId = routineExecution?.resultsThreadId ?? routineExecution?.sourceThreadId;
+  const canOpenResults = resultsThreadId && [...state.bots, ...state.groups].some((owner) => owner.threadId === resultsThreadId || owner.tasks?.some((task) => task.threadId === resultsThreadId));
+
   return (
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       {/* Call mode covers the thread while the bot is on the line */}
@@ -1231,6 +1242,11 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
       </div>
 
       <BotActivityPicker bot={bot} />
+      {routineExecution && <div className="mx-5 mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[11.5px] text-ink-secondary">
+        <span className="min-w-0 flex-1 truncate">{t("routines.executionDetails", { name: routineExecution.routineName })}</span>
+        {canOpenResults && resultsThreadId && <button type="button" onClick={() => openNotificationTarget(dispatch, { botId: bot.id, threadId: resultsThreadId }, state)} className="rounded px-2 py-1 text-accent hover:bg-raised">{t("routines.results.back")}</button>}
+        <button type="button" onClick={() => dispatch({ type: "showRoutines", section: "logs", routineId: routineExecution.routineId, botId: bot.id })} className="rounded px-2 py-1 hover:bg-raised hover:text-ink">{t("routines.logs")}</button>
+      </div>}
       {findOpen && <ChatFindBar threadId={bot.threadId} onClose={() => setFindOpen(false)} />}
 
       {/* Error banner */}
