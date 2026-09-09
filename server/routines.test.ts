@@ -620,6 +620,63 @@ describe("RoutineManager", () => {
     expect(h.started).toHaveLength(2);
   });
 
+  it("dispatches queued manual runs in request order after a busy bot settles", async () => {
+    const h = harness();
+    h.setBot("busy");
+    const routine = h.manager.create({
+      name: "Ordered work", prompt: "Run in order", botId: "maus-1",
+      schedule: { type: "daily", time: "09:00", weekdays: [1] },
+    });
+    const first = h.manager.runNow(routine.id)!;
+    const second = h.manager.runNow(routine.id)!;
+    await h.manager.tick();
+    const start = h.options.startTurn;
+    h.options.startTurn = async (...args) => {
+      h.setBot("busy");
+      await start(...args);
+    };
+    h.setBot("ready");
+    await h.manager.tick();
+    expect(h.manager.listRuns().find((run) => run.id === first.id)?.status).toBe("running");
+    expect(h.manager.listRuns().find((run) => run.id === second.id)?.status).toBe("queued");
+  });
+
+  it("keeps an overdue occurrence when only instructions or the name change", async () => {
+    const h = harness();
+    const routine = h.manager.create({
+      name: "Daily work", prompt: "Original", botId: "maus-1",
+      schedule: { type: "daily", time: "09:00", weekdays: [1] },
+    });
+    h.setNow(routine.nextRunAt! + 60_000);
+    expect(h.manager.update(routine.id, { name: "Renamed", prompt: "Updated" })?.nextRunAt).toBe(routine.nextRunAt);
+    await h.manager.tick();
+    expect(h.manager.listRuns()[0]).toMatchObject({ scheduledFor: routine.nextRunAt, status: "running" });
+    expect(h.started[0]?.prompt).toBe("Updated");
+  });
+
+  it("keeps delegated work active through its continuation and accumulates turn costs", async () => {
+    const h = harness();
+    let pending = true;
+    h.options.hasPendingDelegations = () => pending;
+    const routine = h.manager.create({
+      name: "Team report", prompt: "Ask a teammate", botId: "maus-1",
+      schedule: { type: "daily", time: "09:00", weekdays: [1] },
+    });
+    const queued = h.manager.runNow(routine.id)!;
+    await h.manager.tick();
+    const base = { eventId: "delegating", provider: "fake", threadId: "thread-1", createdAt: new Date().toISOString() };
+    h.manager.handleRuntimeEvent({ ...base, type: "turn.completed", ok: true, cost: 0.02 });
+    expect(h.manager.runForThread("thread-1")).toMatchObject({ id: queued.id, status: "waiting", attention: "Waiting for delegated work to finish" });
+    expect(h.manager.runForThread("thread-1")?.finishedAt).toBeUndefined();
+    expect(h.manager.isActiveThread("thread-1")).toBe(true);
+    pending = false;
+    h.manager.handleRuntimeEvent({ ...base, type: "turn.started" });
+    expect(h.manager.runForThread("thread-1")).toMatchObject({ status: "running", attention: undefined });
+    h.manager.handleRuntimeEvent({ ...base, type: "item.completed", itemType: "assistant_text", text: "Reviewed the teammate's result." });
+    h.manager.handleRuntimeEvent({ ...base, type: "turn.completed", ok: true, cost: 0.03 });
+    expect(h.manager.runForThread("thread-1")).toMatchObject({ status: "completed", output: "Reviewed the teammate's result.", cost: 0.05 });
+  });
+
   it("catches up at most the latest interval occurrence without a backlog", async () => {
     const h = harness();
     const anchorAt = new Date(2026, 7, 17, 8, 5).getTime();
