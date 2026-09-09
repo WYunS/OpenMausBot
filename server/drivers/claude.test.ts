@@ -310,6 +310,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   afterEach(async () => {
     delete process.env.FAKE_CLAUDE_MODE;
     delete process.env.FAKE_CLAUDE_DUMP;
+    delete process.env.FAKE_CLAUDE_PROMPTS;
     delete process.env.FAKE_CLAUDE_TRANSIENTS;
     delete process.env.FAKE_CLAUDE_PARTIAL_FAILS;
     delete process.env.FAKE_CLAUDE_STATE;
@@ -628,6 +629,84 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     const allowed = seen.argv[seen.argv.indexOf("--allowedTools") + 1];
     expect(allowed).toContain("mcp__agents");
     expect(seen.mcpConfig.mcpServers.ogb.alwaysLoad).toBe(true);
+  });
+
+  it("keeps the session alive when only the volatile half of the prompt changed", async () => {
+    await create();
+    const dump = join(scratch, "volatile.json");
+    const prompts = join(scratch, "volatile-prompts.jsonl");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    process.env.FAKE_CLAUDE_PROMPTS = prompts;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-volatile",
+      text: "one",
+      system: "You are Testy.\n\nYour memory:\nlikes tea",
+      systemStable: "You are Testy.",
+      systemVolatile: "Your memory:\nlikes tea",
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+    const firstPid = JSON.parse(readFileSync(dump, "utf8")).pid;
+
+    recorder.events.length = 0;
+    await instance.adapter.sendTurn({
+      threadId: "t-volatile",
+      text: "two",
+      system: "You are Testy.\n\nYour memory:\nlikes tea, dislikes cloud kitchens",
+      systemStable: "You are Testy.",
+      systemVolatile: "Your memory:\nlikes tea, dislikes cloud kitchens",
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    // Same process: a memory edit used to change the spawn contract, which
+    // relaunched the CLI and made the provider re-cache the whole session.
+    expect(seen.pid).toBe(firstPid);
+    // and the model still learns what changed, inside this turn
+    const sent = readFileSync(prompts, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(sent).toHaveLength(2);
+    expect(sent[0].message.content).toBe("one");
+    expect(sent[1].message.content).toContain("dislikes cloud kitchens");
+    // the user's own words stay last, after the out-of-band note
+    expect(sent[1].message.content.endsWith("two")).toBe(true);
+  });
+
+  it("still relaunches when the stable half of the prompt changes", async () => {
+    await create();
+    const dump = join(scratch, "stable.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+
+    await instance.adapter.sendTurn({ threadId: "t-stable", text: "one", system: "You are Testy.", systemStable: "You are Testy." });
+    await recorder.until((e) => e.type === "turn.completed");
+    const firstPid = JSON.parse(readFileSync(dump, "utf8")).pid;
+
+    recorder.events.length = 0;
+    await instance.adapter.sendTurn({ threadId: "t-stable", text: "two", system: "You are Grumpy.", systemStable: "You are Grumpy." });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    expect(JSON.parse(readFileSync(dump, "utf8")).pid).not.toBe(firstPid);
+  });
+
+  it("launches a new session with the volatile half already in the system prompt", async () => {
+    await create();
+    const dump = join(scratch, "volatile-spawn.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-volatile-spawn",
+      text: "hi",
+      system: "You are Testy.\n\nYour memory:\nlikes tea",
+      systemStable: "You are Testy.",
+      systemVolatile: "Your memory:\nlikes tea",
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.systemPrompt).toContain("likes tea");
+    // a fresh process needs no in-turn note: the prompt already carries it
+    const content = seen.prompt.message.content;
+    const text = typeof content === "string" ? content : content.map((c: any) => c.text ?? "").join("");
+    expect(text).toBe("hi");
   });
 
   it("launches isolated from the machine's own Claude Code configuration", async () => {

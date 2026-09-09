@@ -637,6 +637,18 @@ type ClaudeUserMessage = {
 /** Claude's stream-json input accepts the same image source blocks as the
  * Anthropic Messages API. Keep the old string form for text-only turns so a
  * CLI update cannot disturb the overwhelmingly common path. */
+/** How a mid-session change to the volatile half of the system prompt
+ * reaches a model whose process was launched with the old copy. The CLI's
+ * own out-of-band convention inside a user turn, and it costs one short
+ * append rather than a relaunch that re-uploads the whole prompt cache. */
+function withVolatileNote(text: string, volatile: string): string {
+  const body = volatile.trim()
+    ? `This part of your instructions changed since this session started. It replaces the earlier copy:\n\n${volatile.trim()}`
+    : "The notes that were in your instructions when this session started have been cleared.";
+  const note = `<system-reminder>\n${body}\n</system-reminder>`;
+  return text ? `${note}\n\n${text}` : note;
+}
+
 function claudeUserMessage(
   text: string,
   images: readonly ClaudeImage[] | undefined,
@@ -730,6 +742,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       systemPromptPath: string | null;
       /** the spawn contract — a different one means a fresh process */
       argsKey: string;
+      /** the volatile half of the system prompt this process was launched
+       * with (see SendTurnInput.systemVolatile). A later turn whose volatile
+       * text differs delivers the difference in-turn rather than relaunching. */
+      volatile: string;
       /** the CLI's session id from `init`, what --resume takes later */
       sessionId: string | null;
       /** the running turn, or null between turns */
@@ -985,7 +1001,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const keyArgs = args.filter((a, i) => !privateFileFlags.has(a) && !privateFileFlags.has(args[i - 1] ?? ""));
       const argsKey = JSON.stringify({
         args: keyArgs,
-        system: turn.system ?? null,
+        // the volatile half is deliberately absent: it must not respawn a
+        // healthy session (see Session.volatile)
+        system: turn.systemStable ?? turn.system ?? null,
         mcpServers,
         cwd,
         model: injected.model ?? null,
@@ -1005,7 +1023,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           killCliTree(live.child);
         }, turnId, broker: live.broker });
         emit({ ...base(threadId, turnId), type: "turn.started" });
-        const written = await writeUser(live, threadId, promptMsg);
+        const volatile = turn.systemVolatile ?? "";
+        const message = volatile === live.volatile
+          ? promptMsg
+          : claudeUserMessage(withVolatileNote(turn.text, volatile), turn.images);
+        live.volatile = volatile;
+        const written = await writeUser(live, threadId, message);
         if (!written) {
           active.delete(threadId);
           live.turn = null;
@@ -1133,6 +1156,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         mcpConfigPath,
         systemPromptPath,
         argsKey,
+        volatile: turn.systemVolatile ?? "",
         sessionId: sessionId ?? newSessionId,
         turn: { turnId, settled: false, sawStreamDelta: false },
         idleTimer: null,
