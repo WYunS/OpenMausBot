@@ -72,6 +72,29 @@ function fakeStore(bots: BotRecord[]): SteerStore & { messages: Message[] } {
 }
 
 describe("steer-queue module", () => {
+  it("keeps queue operations and other listeners working when a listener throws", () => {
+    const bot = fakeBot("bot-listener-error", "thread-listener-error", false);
+    const store = fakeStore([bot]);
+    const run = vi.fn();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const unsubscribeBroken = onSteeredQueueChange(() => { throw new Error("notification failed"); });
+    const listener = vi.fn();
+    const unsubscribeHealthy = onSteeredQueueChange(listener);
+    try {
+      const keep = queueSteeredMessage(bot.id, bot.threadId, "still dispatch");
+      const cancel = queueSteeredMessage(bot.id, bot.threadId, "cancel me");
+      expect(cancelSteeredMessage(bot.id, cancel.id)).toBe(true);
+      expect(() => drainSteeredMessages(store, run)).not.toThrow();
+      expect(store.messages).toEqual([expect.objectContaining({ text: "still dispatch", queueId: keep.id })]);
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(_queuedCount(bot.threadId)).toBe(0);
+      expect(listener).toHaveBeenCalledTimes(4);
+      expect(warn).toHaveBeenCalledTimes(4);
+    } finally {
+      unsubscribeBroken(); unsubscribeHealthy(); warn.mockRestore();
+    }
+  });
+
   it("exports owned public receipts without sharing internal queue state", () => {
     const owned = queueSteeredMessage("bot-public", "thread-public", "public words", {
       prompt: "private provider context", replyToId: "private-reply", sendId: "private-send", reason: "capacity",

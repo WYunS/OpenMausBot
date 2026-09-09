@@ -36,7 +36,12 @@ interface QueueEntry {
 
 const queues = new Map<string, QueueEntry>(); // threadId → waiting sends
 const listeners = new Set<() => void>();
-const changed = () => { for (const listener of listeners) listener(); };
+const changed = () => {
+  for (const listener of listeners) {
+    try { listener(); }
+    catch { console.warn("steer-queue: change listener failed"); }
+  }
+};
 
 /** Public pending chips only: never expose provider prompts or reply context. */
 export function queuedSteerSnapshot(ownsThread: (botId: string, threadId: string) => boolean):
