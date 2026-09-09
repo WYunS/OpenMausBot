@@ -62,6 +62,25 @@ describe("Settings → Engines → Codex", () => {
   });
 });
 
+describe("Settings → Engines → setup cards", () => {
+  it("exposes managed Antigravity setup and keeps custom engines free of cloud sign-in", () => {
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("navigator", { userAgent: "Linux" });
+    fixture.bots = [];
+    fixture.instances = [{
+      instanceId: "agy", displayName: "Antigravity", driverKind: "antigravityAgent", cliDefault: "agy",
+      snapshot: { state: "available", authenticated: false }, models: { default: "model", options: [] },
+      install: { managed: { label: "Install Antigravity", downloadBytes: 10 } },
+    }];
+    const html = renderToStaticMarkup(createElement(EnginesSettings));
+    expect(html).toContain("Sign in with Google");
+    expect(html).toContain("Set up");
+    expect(html).toContain("CLI path and updates");
+    fixture.instances[0].access = "custom";
+    expect(renderToStaticMarkup(createElement(EnginesSettings))).not.toContain("Sign in with Google");
+  });
+});
+
 describe("Settings → Engines → Claude accounts", () => {
   function claude(authenticated?: boolean, isDefault = false): InstanceInfo {
     return {
