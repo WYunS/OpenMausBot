@@ -252,7 +252,7 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
   return (
     <EngineCard instance={instance}>
       {!engineReady(instance) && <EngineSetup instance={instance} intent={instance.access === "custom" ? "inject" : "cloud"} unframed />}
-      {instance.snapshot.update && <EngineUpdateNotice update={instance.snapshot.update} className="mt-3" />}
+      {instance.snapshot.update && <EngineUpdateNotice update={instance.snapshot.update} instance={instance} className="mt-3" />}
       {instance.claudeAccount && <ClaudeAccountSettings instance={instance} />}
       {engineReady(instance) && instance.snapshot.authenticated === true && (
         instance.authentication?.method === "device-code"

@@ -35,6 +35,10 @@ useful for checking error presentation, not evidence that provider auth works.
    controls are retained. Expand the advanced CLI disclosure to reach path,
    reset and update controls. Tab to a card and press Enter/Space; its native
    disclosure must work with a visible focus indicator.
+6. Expand Kimi to find **Install Kimi on this server**, and OpenCode to find
+   **Update OpenCode on this server**. Click each and confirm the fixture error
+   appears with its button usable again. Terminal commands remain under
+   **Prefer a terminal?**. These clicks never perform a real installation.
 
 Automated coverage:
 

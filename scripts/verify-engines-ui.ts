@@ -31,6 +31,9 @@ instances[0].claudeAccount = { configDir: "", isDefault: true, signInCommand: "e
 instances[1].authentication = { method: "device-code", signOut: true };
 instances[1].snapshot.account = { email: "work@example.test" };
 instances[4].install = { managed: { label: "Install Antigravity", downloadBytes: 200_000_000 } };
+instances[5].install!.server = { package: "kimi-fixture" };
+instances[3].install!.server = { package: "opencode-fixture" };
+instances[3].snapshot.update = { title: "OpenCode update available", message: "A sample update for this isolated preview.", command: "echo 'Preview only'" };
 instances.push({ ...instances[0], instanceId: "claude-local", displayName: "Claude · Local", access: "custom", claudeAccount: undefined, snapshot: { state: "available", authenticated: false } });
 let ui: Awaited<ReturnType<typeof createServer>> | undefined;
 try {
