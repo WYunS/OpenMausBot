@@ -13,6 +13,10 @@ onboarding step to reach engines. Provider install, sign-in, path-save, and
 account-management requests are rejected by fixture-only middleware; no real
 provider login or user configuration is involved. A rejected setup request is
 useful for checking error presentation, not evidence that provider auth works.
+Vite's generated source cache stays in the checkout's ignored
+`.omb-scratch/engine-preview-vite` directory; fixture accounts, home, and app data
+remain disposable. Keeping these separate prevents late cache writes from
+recreating a removed fixture directory.
 
 ## Checks
 

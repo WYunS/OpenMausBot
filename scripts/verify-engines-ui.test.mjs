@@ -2,10 +2,14 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const fixture = vi.hoisted(() => ({
   launch: vi.fn(), createServer: vi.fn(), close: vi.fn(),
-  listen: vi.fn(), closeUi: vi.fn(), signals: new Map(),
+  listen: vi.fn(), closeUi: vi.fn(), closeHttp: vi.fn(), closeConnections: vi.fn(), signals: new Map(),
 }));
 vi.mock("./control-omb.ts", () => ({ launchVerificationServer: fixture.launch }));
 vi.mock("vite", () => ({ createServer: fixture.createServer }));
+vi.mock("node:http", () => ({ createServer: () => ({
+  on: vi.fn(), once: vi.fn(), removeListener: vi.fn(), listen: fixture.listen,
+  close: fixture.closeHttp, closeAllConnections: fixture.closeConnections, address: () => ({ port: 2 }),
+}) }));
 
 beforeEach(() => {
   vi.resetModules();
@@ -25,9 +29,10 @@ beforeEach(() => {
     info: { dataDir: "/fixture-only", url: "http://127.0.0.1:1" }, close: fixture.close,
   });
   fixture.createServer.mockResolvedValue({
-    listen: fixture.listen, close: fixture.closeUi,
-    resolvedUrls: { local: ["http://127.0.0.1:2/"] },
+    middlewares: vi.fn(), close: fixture.closeUi,
   });
+  fixture.listen.mockImplementation((_port, _host, ready) => ready());
+  fixture.closeHttp.mockImplementation(closed => closed());
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -64,12 +69,37 @@ it("uses the same cancellation signal after startup", async () => {
   await run;
   expect(fixture.launch.mock.calls[0][1].aborted).toBe(true);
   expect(fixture.closeUi).toHaveBeenCalledOnce();
+  expect(fixture.closeHttp).toHaveBeenCalledOnce();
+  expect(fixture.closeConnections).toHaveBeenCalledOnce();
   expect(fixture.close).toHaveBeenCalledOnce();
   expectSignalsRemoved();
 });
 
+it("stops the app and deletes fixture data before waiting on Vite shutdown", async () => {
+  let releaseHttp;
+  let releaseFixture;
+  let releaseUi;
+  fixture.closeHttp.mockImplementationOnce(closed => { releaseHttp = closed; });
+  fixture.close.mockImplementationOnce(() => new Promise(resolve => { releaseFixture = resolve; }));
+  fixture.closeUi.mockImplementationOnce(() => new Promise(resolve => { releaseUi = resolve; }));
+  const run = import("./verify-engines-ui.ts");
+  await vi.waitFor(() => expect(fixture.listen).toHaveBeenCalledOnce());
+  const server = fixture.createServer.mock.calls[0][0].server;
+  expect(server.middlewareMode.server).toBe(server.hmr.server);
+  fixture.signals.get("SIGTERM")();
+  await vi.waitFor(() => expect(fixture.close).toHaveBeenCalledOnce());
+  expect(fixture.closeHttp).toHaveBeenCalledOnce();
+  expect(fixture.closeUi).not.toHaveBeenCalled();
+  releaseFixture();
+  await vi.waitFor(() => expect(fixture.closeUi).toHaveBeenCalledOnce());
+  releaseUi();
+  releaseHttp();
+  await run;
+  expect(fixture.close).toHaveBeenCalledOnce();
+});
+
 it("does not miss cancellation during UI startup or skip fixture cleanup if UI close fails", async () => {
-  fixture.listen.mockImplementation(async () => fixture.signals.get("SIGINT")());
+  fixture.listen.mockImplementation((_port, _host, ready) => { fixture.signals.get("SIGINT")(); ready(); });
   fixture.closeUi.mockRejectedValue(new Error("UI close failed"));
   await expect(import("./verify-engines-ui.ts")).rejects.toThrow("UI close failed");
   expect(fixture.close).toHaveBeenCalledOnce();
