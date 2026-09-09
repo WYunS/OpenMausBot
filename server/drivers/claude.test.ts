@@ -144,6 +144,9 @@ describe("ClaudeDriver.decodeConfig", () => {
         },
       }),
     ).rejects.toThrow(/interactive approval broker/);
+    // Settings may sign this account in and out on a hosted server.
+    expect(bypass.startAuthentication).toBeTypeOf("function");
+    expect(bypass.signOut).toBeTypeOf("function");
     await bypass.dispose();
   });
 

@@ -1474,6 +1474,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       getAuthentication: (flowId) => login.get(flowId),
       completeAuthentication: (flowId, code) => login.complete(flowId, code),
       cancelAuthentication: () => login.cancel(),
+      signOut: () => login.signOut(),
       adapter: {
         provider: DRIVER_KIND,
         capabilities: {

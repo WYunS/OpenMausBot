@@ -117,6 +117,17 @@ describe("Settings → Engines → Claude accounts", () => {
     expect(markup).toMatch(/placeholder="Normal Claude configuration"[^>]*value=""/);
   });
 
+  it("offers Claude sign-out only for a signed-in account the server can sign out", () => {
+    const hosted = { ...claude(true), authentication: { method: "paste-code" as const, signOut: true } };
+    const html = renderClaude(hosted);
+    expect(html).toContain("Sign out of Claude");
+    expect(html).toContain("different Claude subscription");
+    expect(html).not.toContain("claude auth logout");
+    expect(renderClaude(claude(true))).not.toContain("Sign out of Claude");
+    expect(renderClaude({ ...claude(false), authentication: { method: "paste-code" as const, signOut: true } })).not.toContain("Sign out of Claude");
+    expect(renderClaude(hosted, true)).toContain("1 bot(s) use this account");
+  });
+
   it("protects the default and assigned accounts and explains credential preservation", () => {
     const defaultMarkup = renderClaude(claude(true, true));
     expect(defaultMarkup).toContain("Default account");

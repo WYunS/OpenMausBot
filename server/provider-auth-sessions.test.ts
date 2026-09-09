@@ -158,6 +158,18 @@ describe("provider sign-out", () => {
     await expect(sessions.start(instance, "other")).resolves.toMatchObject({ phase: "waiting" });
   });
 
+  it("stops the instance's sessions before the credential goes, and only then", async () => {
+    const { sessions, instance } = fixture();
+    const order: string[] = [];
+    const stop = vi.fn(async () => { order.push("stop"); });
+    instance.signOut.mockImplementation(async () => { order.push("signOut"); });
+    await sessions.start(instance, "other");
+    await expect(sessions.signOut(instance, "owner", stop)).rejects.toMatchObject({ status: 409 });
+    expect(stop).not.toHaveBeenCalled();
+    await sessions.signOut(instance, "other", stop);
+    expect(order).toEqual(["stop", "signOut"]);
+  });
+
   it("releases the slot when the provider's sign-out fails and needs provider support", async () => {
     const { sessions, instance } = fixture();
     instance.signOut.mockRejectedValueOnce(new Error("Codex could not remove the sign-in on this server."));
