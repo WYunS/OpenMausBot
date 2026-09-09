@@ -12,7 +12,7 @@ vi.mock("@/state/store", async (importOriginal) => ({
 }));
 afterEach(() => vi.unstubAllGlobals());
 
-function render(authenticated: boolean): string {
+function render(authenticated: boolean, options: { email?: string; signOut?: boolean; assigned?: boolean } = {}): string {
   vi.stubGlobal("window", {});
   vi.stubGlobal("navigator", { userAgent: "Linux" });
   fixture.instances = [{
@@ -20,11 +20,12 @@ function render(authenticated: boolean): string {
     driverKind: "codexAgent",
     displayName: "Codex",
     cliDefault: "codex",
-    snapshot: { state: "available", authenticated },
+    snapshot: { state: "available", authenticated, ...(options.email ? { account: { email: options.email } } : {}) },
     models: { default: "model", options: [] },
-    authentication: { method: "device-code" },
+    authentication: { method: "device-code", ...(options.signOut ? { signOut: true } : {}) },
     install: { signInCommand: "codex login" },
   }];
+  fixture.bots = options.assigned ? [{ modelSelection: { instanceId: "codex" } } as Bot] : [];
   return renderToStaticMarkup(createElement(EnginesSettings));
 }
 
@@ -37,6 +38,24 @@ describe("Settings → Engines → Codex", () => {
     const html = render(true);
     expect(html).toContain("ChatGPT connected on this server");
     expect(html).not.toContain("Connect ChatGPT");
+    expect(html).not.toContain("Sign out of ChatGPT");
+  });
+
+  it("names the connected account and offers sign-out only when the server supports it", () => {
+    const html = render(true, { email: "ada@example.test", signOut: true });
+    expect(html).toContain("ada@example.test");
+    expect(html).toContain("Sign out of ChatGPT");
+    expect(html).toContain("switch to a different ChatGPT account");
+    expect(html).toContain("Check account");
+    expect(html).not.toContain("Connect ChatGPT");
+    expect(html).not.toContain("codex logout");
+    expect(render(true, { email: "ada@example.test" })).not.toContain("Sign out of ChatGPT");
+    expect(render(false, { signOut: true })).not.toContain("Sign out of ChatGPT");
+  });
+
+  it("warns how many bots pause when the account is signed out", () => {
+    expect(render(true, { signOut: true, assigned: true })).toContain("1 bot(s) use Codex right now");
+    expect(render(true, { signOut: true })).not.toContain("use Codex right now");
   });
 });
 

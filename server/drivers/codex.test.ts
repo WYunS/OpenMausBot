@@ -107,6 +107,24 @@ describe("CodexDriver turns (fake app-server)", () => {
     await removeTempDir(scratch);
   });
 
+  it("names the signed-in ChatGPT account from Codex's own home and offers sign-out", async () => {
+    const codexHome = join(scratch, ".codex");
+    mkdirSync(codexHome, { recursive: true });
+    const claims = Buffer.from(JSON.stringify({ email: "ada@example.test" })).toString("base64url");
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+      tokens: { id_token: `header.${claims}.signature-fixture`, access_token: "access-fixture", refresh_token: "refresh-fixture" },
+    }));
+    await create({ environment: { HOME: scratch, CODEX_HOME: codexHome } });
+    const connected = await instance.snapshot();
+    expect(connected).toMatchObject({ state: "available", authenticated: true, account: { email: "ada@example.test" } });
+    expect(JSON.stringify(connected)).not.toContain("fixture");
+    expect(instance.signOut).toBeTypeOf("function");
+    process.env.FAKE_CODEX_MODE = "logged-out";
+    const signedOut = await instance.snapshot();
+    expect(signedOut).toMatchObject({ state: "available", authenticated: false });
+    expect(signedOut).not.toHaveProperty("account");
+  });
+
   it("runs the handshake and normalizes a full turn", async () => {
     await create();
     const dump = join(scratch, "dump.json");

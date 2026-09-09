@@ -149,6 +149,71 @@ export class CodexDeviceAuthController {
     this.flow = null;
   }
 
+  /** Remove the ChatGPT sign-in Codex stores for this server account so a
+   * different account can connect. A sign-in in progress is never pulled
+   * away underneath the browser completing it. */
+  async signOut(): Promise<void> {
+    if (this.disposed) throw new Error("This provider was removed. Refresh Settings before signing out.");
+    if (this.flow?.status.phase === "waiting") throw new Error("Finish or cancel the ChatGPT sign-in in progress before signing out.");
+    await this.flow?.stopping;
+    const env = this.options.environment();
+    const home = env.HOME || env.USERPROFILE || homedir();
+    if (!isAbsolute(home) || (env.CODEX_HOME && !isAbsolute(env.CODEX_HOME))) {
+      throw new Error("Use an absolute HOME and CODEX_HOME path for this server's Codex provider before signing out.");
+    }
+    const homeKey = canonicalPath(resolve(env.CODEX_HOME || join(home, ".codex")));
+    if (authenticatingHomes.has(homeKey)) {
+      throw new Error("A ChatGPT sign-in is running for this server account. Finish or cancel it before signing out.");
+    }
+    authenticatingHomes.add(homeKey);
+    try {
+      const logout = await this.exec(["logout"], env, home);
+      if (logout.code !== 0) throw new Error("Codex could not remove the sign-in on this server. Check the server's Codex installation and try again.");
+      // The command's own report is not enough: confirm with the same status
+      // check that decides whether bots may run on this account.
+      const status = await this.exec(["login", "status"], env, home);
+      if (status.code === 0 || !/^not logged in\b/im.test(status.output)) {
+        throw new Error("Codex still reports a sign-in on this server. Update Codex and check its login status before trying again.");
+      }
+    } finally {
+      authenticatingHomes.delete(homeKey);
+    }
+  }
+
+  /** One bounded, non-interactive Codex command. Its output stays here;
+   * callers see an exit code and a status-line match, never the text. */
+  private exec(args: string[], env: Record<string, string | undefined>, cwd: string): Promise<{ code: number | null; output: string }> {
+    return new Promise((resolveExec, rejectExec) => {
+      let child: ReturnType<typeof spawnCli>;
+      try {
+        child = spawnCli(this.options.cli, args, { env: { ...env, NO_COLOR: "1" }, cwd, stdio: ["pipe", "pipe", "pipe"] });
+      } catch {
+        rejectExec(new Error("Codex could not start on this server. Install or update the configured Codex CLI, then try again."));
+        return;
+      }
+      child.stdin.end();
+      let output = "";
+      const receive = (chunk: Buffer) => {
+        if (output.length < MAX_OUTPUT) output += chunk.toString("utf8").slice(0, MAX_OUTPUT - output.length);
+      };
+      child.stdout.on("data", receive);
+      child.stderr.on("data", receive);
+      // A hung CLI must not hold the credential-home lock forever.
+      const timer = setTimeout(() => { void killCliTree(child, this.options.terminateTimeoutMs ?? 1500); }, this.options.startupTimeoutMs ?? 30_000);
+      timer.unref();
+      child.once("error", (error: NodeJS.ErrnoException) => {
+        clearTimeout(timer);
+        rejectExec(new Error(error.code === "ENOENT"
+          ? "Codex is not installed on this server. Run npm install -g @openai/codex@latest on the server, then try again."
+          : "Codex could not start on this server. Check the configured CLI path and its executable permissions."));
+      });
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        resolveExec({ code, output: stripVTControlCharacters(output) });
+      });
+    });
+  }
+
   private run(flow: Flow, args: string[], env: Record<string, string | undefined>, cwd: string,
     done: (code: number | null, output: string) => void, parsePrompt = false): void {
     if (flow.status.phase !== "waiting") return;
