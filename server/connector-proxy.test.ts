@@ -35,6 +35,16 @@ function nextJson(lines: readline.Interface) {
   });
 }
 
+function nextJsonWithin(lines: readline.Interface, timeoutMs: number) {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    nextJson(lines),
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("timed out waiting for MCP reply")), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 afterEach(async () => {
   child?.kill("SIGKILL");
   child = null;
@@ -241,14 +251,26 @@ describe("connector MCP bridge", () => {
     expect(JSON.stringify(reply)).not.toContain("upstream-secret");
   });
 
-  it("returns a JSON-RPC error, not a tools result, when a non-call relay fails", async () => {
+  it("returns an empty tool list when optional connected apps are unavailable", async () => {
     const lines = start({});
     child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} })}\n`);
     const reply = await nextJson(lines);
-    expect(reply).toEqual({
+    expect(reply).toEqual({ jsonrpc: "2.0", id: 3, result: { tools: [] } });
+  });
+
+  it("does not hold an ordinary chat open when connected-app discovery stalls", async () => {
+    const upstream = await listen((request) => {
+      request.resume();
+      // A broken provider can accept the request and never answer. Codex waits
+      // for tools/list before delivering even a plain greeting to the model.
+    });
+    const lines = start({ OMB_CONNECTOR_UPSTREAM_URL: upstream });
+    child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 12, method: "tools/list", params: {} })}\n`);
+
+    await expect(nextJsonWithin(lines, 3_000)).resolves.toEqual({
       jsonrpc: "2.0",
-      id: 3,
-      error: { code: -32000, message: "connected apps are unavailable" },
+      id: 12,
+      result: { tools: [] },
     });
   });
 });

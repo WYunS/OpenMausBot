@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   connectedAppsMayDisconnect,
@@ -9,9 +9,13 @@ import {
   mergeCurrentConnectorStatus,
   requiresAccountAlias,
   onlyLatestConnectorResponses,
+  shouldShowStaleConnectorWarning,
   type ConnectorStatus,
 } from "./PluginsPanel";
 import { managedConnectorUnavailableReason } from "../../shared/connector-availability";
+import { setLocale } from "@/lib/i18n";
+
+beforeEach(() => setLocale("en"));
 
 describe("connected-app remote permissions", () => {
   it("allows pairing and status remotely but keeps revocation on the host", () => {
@@ -212,5 +216,11 @@ describe("an answer the server was not sure about", () => {
   it("treats a missing authority flag as authoritative, preserving today's behaviour", () => {
     const merged = mergeCompleteConnectorStatus(connectedGmail, {}, new Map(), new Map());
     expect(merged.gmail.connected).toBe(false);
+  });
+
+  it("keeps an automatic cached fallback quiet but explains a failed manual refresh", () => {
+    expect(shouldShowStaleConnectorWarning(false, false)).toBe(false);
+    expect(shouldShowStaleConnectorWarning(false, true)).toBe(true);
+    expect(shouldShowStaleConnectorWarning(true, true)).toBe(false);
   });
 });

@@ -18,6 +18,10 @@ const THREAD_ID = process.env.OMB_THREAD_ID ?? "";
 const TOKEN = process.env.OMB_CONNECTOR_TOKEN ?? process.env.OMB_COMMS_TOKEN ?? "";
 const MAX_RESPONSE_BYTES = 20 * 1024 * 1024;
 const INITIALIZE_RELAY_TIMEOUT_MS = 1_000;
+// Codex waits for every MCP server's tools/list before it submits even a
+// plain greeting to the model. Connected apps are optional, so a provider
+// outage must not add the provider's network timeout to ordinary chat.
+const TOOLS_LIST_RELAY_TIMEOUT_MS = 1_500;
 const RELAY_TIMEOUT_MS = 10 * 60_000;
 
 function parsedHeaders(): Record<string, string> {
@@ -214,10 +218,19 @@ async function handle(message: Json): Promise<void> {
     }
   }
   try {
-    const response = await relay(message);
+    const response = await relay(
+      message,
+      method === "tools/list" ? TOOLS_LIST_RELAY_TIMEOUT_MS : RELAY_TIMEOUT_MS,
+    );
     if (response && id !== undefined) send(response);
   } catch (error) {
     if (id === undefined) return;
+    // An unavailable optional integration is an empty capability set, not a
+    // failed MCP server. The next turn probes again when service recovers.
+    if (method === "tools/list") {
+      send({ jsonrpc: "2.0", id, result: { tools: [] } });
+      return;
+    }
     const messageText = error instanceof Error ? error.message : String(error);
     if (method === "tools/call") send(textResult(id, messageText, true));
     else send(jsonRpcError(id, messageText));

@@ -1,7 +1,7 @@
 // The sidebar's utility rows, folded behind one labelled row.
 //
-// Team map, Teach a skill, Automations and Connected apps are places you
-// visit occasionally; they were costing four permanent rows at the bottom of a
+// Team map, Teach a skill, Automations, Connected apps and Archived bots are
+// places you visit occasionally; they were costing permanent rows at the bottom of a
 // list whose whole job is showing bots. They now live behind a single "Tools"
 // row that sits directly above the profile row and opens on hover.
 //

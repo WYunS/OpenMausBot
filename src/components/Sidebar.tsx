@@ -2158,14 +2158,15 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                 icon: <Puzzle size={18} />,
                 onSelect: () => dispatch({ type: "togglePlugins", open: true }),
               },
+              {
+                key: "archived-bots",
+                label: t("sidebar.archived.title"),
+                icon: <Archive size={18} />,
+                separatorBefore: true,
+                trailing: <span className="text-[11.5px] tabular-nums text-ink-secondary">{archivedBots.length}</span>,
+                onSelect: () => setArchivedBotsOpen(true),
+              },
             ]}
-          />
-        )}
-        {density !== "icons" && (
-          <ArchivedBotsButton
-            count={archivedBots.length}
-            density={density}
-            onClick={() => setArchivedBotsOpen(true)}
           />
         )}
         {!account.desktopSso && (density === "icons" ? (

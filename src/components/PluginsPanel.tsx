@@ -51,6 +51,12 @@ export interface ConnectorInventory {
   authoritative: boolean;
 }
 
+/** Background maintenance failures keep the last-known-good list quietly.
+ * Only a refresh the person explicitly requested warrants a stale notice. */
+export function shouldShowStaleConnectorWarning(authoritative: boolean, userRequested: boolean) {
+  return !authoritative && userRequested;
+}
+
 /** Warm the account inventory once the app server is ready. Concurrent panel
  * opens share the same request, and recent data survives modal unmounts. */
 export function preloadConnectedApps(force = false): Promise<ConnectorInventory> {
@@ -233,6 +239,7 @@ export function PluginsPanel() {
   const [stale, setStale] = useState(
     cachedConnectorStatus !== null && !cachedConnectorStatusAuthoritative,
   );
+  const [showStaleWarning, setShowStaleWarning] = useState(false);
   const [pendingUrls, setPendingUrls] = useState<Record<string, string>>({});
   const [aliasSlug, setAliasSlug] = useState<string | null>(null);
   const [aliasDraft, setAliasDraft] = useState("");
@@ -294,6 +301,7 @@ export function PluginsPanel() {
     return preloadConnectedApps(force)
       .then(({ services, authoritative }) => {
         setStale(!authoritative);
+        setShowStaleWarning(shouldShowStaleConnectorWarning(authoritative, force));
         setStatus((current) => mergeCompleteConnectorStatus(
           current,
           services,
@@ -569,9 +577,9 @@ export function PluginsPanel() {
 
         {surface === "apps" ? (
           <>
-        {stale && (
-          // Say which of the two things is true. Silence here is what makes a
-          // remembered list indistinguishable from a confirmed one.
+        {showStaleWarning && (
+          // A manual refresh deserves an explicit answer. Automatic refresh
+          // failures stay quiet because the remembered list is still useful.
           <div className="mx-6 mb-1 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12.5px] text-warning sm:mx-8">
             <TriangleAlert size={14} className="mt-px shrink-0" />
             <span>
