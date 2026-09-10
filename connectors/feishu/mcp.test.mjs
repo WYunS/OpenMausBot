@@ -4,7 +4,6 @@ import http from 'node:http';
 import { PassThrough } from 'node:stream';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
-import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { startMcp } from './mcp.mjs';
@@ -226,9 +225,8 @@ test('cancellation, EOF cleanup and pending-call concurrency limit', async (t) =
 
 test('standalone stdio process handshake and broker invocation without CLI or owner env', async (t) => {
   const b = await broker(t, (response) => response.end('{"ok":false,"error":{"code":"APPROVAL_DENIED"}}'));
-  // Launch through the workspace spelling, which may be a Windows junction.
-  // Node canonicalizes import.meta.url, so entry detection must tolerate aliases.
-  const child = spawn(process.execPath, [path.resolve('connectors/feishu/mcp.mjs')], {
+  // Both repository-root and pnpm --filter package cwd must launch the same entry.
+  const child = spawn(process.execPath, [fileURLToPath(new URL('./mcp.mjs', import.meta.url))], {
     env: { TT_FEISHU_BRIDGE_URL: b.url, TT_FEISHU_BRIDGE_TOKEN: token }, stdio: ['pipe', 'pipe', 'pipe'],
   });
   t.after(() => { if (child.exitCode === null) child.kill(); });

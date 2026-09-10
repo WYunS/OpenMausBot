@@ -887,6 +887,62 @@ test('large NTFS file IDs allow fresh installation without rounding lock identit
   await noStaging(f);
 });
 
+test('Windows transient sharing violations do not discard a verified runtime', { skip: process.platform !== 'win32' }, async (t) => {
+  const f = await fixture(t);
+  const realRename = fsPromises.rename;
+  let failures = 0;
+  t.mock.method(fsPromises, 'rename', async (...args) => {
+    if (path.basename(String(args[0])).startsWith('.stage-') && failures < 2) {
+      failures += 1;
+      throw Object.assign(new Error('temporary Windows sharing violation'), { code: 'EPERM' });
+    }
+    return realRename(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  assert.ok((await f.prepare()).cliPath);
+  assert.equal(failures, 2);
+  await noStaging(f);
+});
+
+test('Windows publish retries remain bounded and leave no staging on persistent failure', { skip: process.platform !== 'win32' }, async (t) => {
+  const f = await fixture(t);
+  const realRename = fsPromises.rename;
+  let failures = 0;
+  t.mock.method(fsPromises, 'rename', async (...args) => {
+    if (path.basename(String(args[0])).startsWith('.stage-')) {
+      failures += 1;
+      throw Object.assign(new Error('persistent sharing violation'), { code: 'EBUSY' });
+    }
+    return realRename(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  await assert.rejects(f.prepare(), { code: 'EBUSY' });
+  assert.equal(failures, 6);
+  await noStaging(f);
+});
+
+test('cancelling a Windows publish backoff preserves the ABORTED contract', { skip: process.platform !== 'win32' }, async (t) => {
+  const f = await fixture(t);
+  const controller = new AbortController();
+  const realRename = fsPromises.rename;
+  let failures = 0;
+  t.mock.method(fsPromises, 'rename', async (...args) => {
+    if (path.basename(String(args[0])).startsWith('.stage-')) {
+      failures += 1;
+      setTimeout(() => controller.abort(), 10);
+      throw Object.assign(new Error('temporary sharing violation'), { code: 'EPERM' });
+    }
+    return realRename(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  await assert.rejects(f.prepare({ signal: controller.signal }), { code: 'ABORTED' });
+  assert.equal(failures, 1);
+  await noStaging(f);
+});
+
 test('adjacent large NTFS file IDs cannot hide a replaced lock with the same owner', async (t) => {
   const f = await fixture(t);
   const lock = path.join(f.root, 'runtime', '.provision-lock');

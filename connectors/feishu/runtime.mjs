@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { inflateRawSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import { ARTIFACTS, NOTICE } from './runtime-artifacts.mjs';
 
 const MAX_BYTES = 100 * 1024 * 1024;
@@ -15,6 +16,21 @@ const queues = new Map();
 const error = (code) => Object.assign(new Error(code), { code });
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const checkAbort = (signal) => { if (signal?.aborted) throw error('ABORTED'); };
+
+// Windows scanners can briefly hold a freshly verified executable/directory.
+// Retry only sharing/access failures, never skip validation, overwrite an
+// unowned destination, or turn cancellation into a successful installation.
+async function publishVerifiedRuntime(source, destination, signal) {
+  for (let attempt = 0; ; attempt += 1) {
+    checkAbort(signal);
+    try { await rename(source, destination); return; }
+    catch (cause) {
+      if (process.platform !== 'win32' || !['EPERM', 'EBUSY', 'EACCES'].includes(cause.code) || attempt >= 5) throw cause;
+      try { await delay(50 * 2 ** attempt, undefined, { signal }); }
+      catch (waitError) { checkAbort(signal); throw waitError; }
+    }
+  }
+}
 const pathKey = (value) => process.platform === 'win32' ? value.toLowerCase() : value;
 const safeAbsolute = (value) => typeof value === 'string' && path.isAbsolute(value) &&
   !/[\x00-\x1f\x7f]/.test(value) && path.normalize(value) === value &&
@@ -636,7 +652,7 @@ function provisioner({ root, env = process.env, fetchImpl = fetch, spawnImpl = s
             checkAbort(signal);
             await rm(payload); // Only our unique staging files are deleted.
             await directories(runtime, false, root);
-            if (!exists) await rename(stage, destination);
+            if (!exists) await publishVerifiedRuntime(stage, destination, signal);
             else {
               await directories(destination, false, root);
               if ((await readRegular(path.join(destination, '.owner'), 16384)).toString() !== marker) throw error('UNOWNED_RUNTIME');
@@ -652,7 +668,7 @@ function provisioner({ root, env = process.env, fetchImpl = fetch, spawnImpl = s
               }
               for (const name of managedNames) {
                 checkAbort(signal);
-                await rename(path.join(stage, name), path.join(destination, name));
+                await publishVerifiedRuntime(path.join(stage, name), path.join(destination, name), signal);
               }
             }
             checkAbort(signal);
