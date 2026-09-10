@@ -141,10 +141,17 @@ function Invoke-Launcher {
   New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
   Set-Location -LiteralPath $repoRoot
 
+  # Electron is also used as a Node runtime for connector/computer proxy
+  # scripts. Those helpers share the same executable path and have no
+  # `--type=` flag, so executable-only detection mistakes an orphan helper for
+  # the desktop app and skips starting Vite. Match the desktop's sole app-path
+  # argument instead.
+  $quotedDesktopCommandLine = '"' + $electron + '" ' + $repoRoot
+  $plainDesktopCommandLine = $electron + ' ' + $repoRoot
   $alreadyRunning = Get-CimInstance Win32_Process | Where-Object {
     $_.Name -eq 'electron.exe' -and
     $_.ExecutablePath -eq $electron -and
-    $_.CommandLine -notlike '*--type=*'
+    ([string]$_.CommandLine).Trim() -in @($quotedDesktopCommandLine, $plainDesktopCommandLine)
   } | Select-Object -First 1
   if ($alreadyRunning) {
     # Let Electron's single-instance event restore, maximize and focus the

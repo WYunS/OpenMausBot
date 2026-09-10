@@ -44,6 +44,9 @@ test("the development desktop owns the credential-aware server and Vite stays ex
 test("a second desktop launch reaches Electron so it can restore the existing window", async () => {
   const source = await readFile(launcher, "utf8");
   assert.doesNotMatch(source, /if \(\$alreadyRunning\) \{ exit 0 \}/);
+  assert.match(source, /\$quotedDesktopCommandLine/);
+  assert.match(source, /\$plainDesktopCommandLine/);
+  assert.match(source, /\.CommandLine\)\.Trim\(\) -in/);
   assert.match(
     source,
     /if \(\$alreadyRunning\) \{[\s\S]*Start-DesktopApp[\s\S]*return[\s\S]*\}/,
