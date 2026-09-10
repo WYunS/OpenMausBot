@@ -10,6 +10,11 @@ const WINDOWS_EXECUTABLE_NAME = "Ruijie-Harness.exe";
 const STARTUP_TIMEOUT_MS = 30_000;
 const POLL_INTERVAL_MS = 250;
 
+/** Installed and startable, but intentionally not launched by a passive probe. */
+export class RuijieHarnessDormantError extends Error {
+  constructor() { super("锐捷 Harness 当前未运行"); }
+}
+
 export interface RuijieHarnessBridgeRecord {
   schemaVersion: 1;
   endpoint: string;
@@ -170,6 +175,7 @@ export function createRuijieHarnessLocator(
   dispose(): Promise<void>;
 } {
   let pending: Promise<string> | undefined;
+  let pendingAutoLaunch = false;
   let lastEndpoint: string | undefined;
 
   const resolve = async (options: RuijieHarnessEndpointOptions): Promise<string> => {
@@ -184,7 +190,7 @@ export function createRuijieHarnessLocator(
     let state = await usableEndpointForExecutable(executable, options.bridgePath, dependencies);
     if (state.endpoint) return state.endpoint;
     if (options.autoLaunch === false) {
-      throw new Error("锐捷 Harness 当前未运行");
+      throw new RuijieHarnessDormantError();
     }
     if (!state.running) {
       try {
@@ -209,10 +215,18 @@ export function createRuijieHarnessLocator(
   };
 
   return {
-    ensureEndpoint(options) {
+    async ensureEndpoint(options) {
       const explicit = validLoopbackEndpoint(options.endpoint);
       if (explicit) return Promise.resolve(explicit);
-      if (pending) return pending;
+      if (pending) {
+        // A passive fleet probe must not downgrade a concurrent explicit
+        // refresh/turn into a no-launch request. Retry after that probe settles.
+        if (options.autoLaunch !== false && !pendingAutoLaunch) {
+          try { return await pending; } catch { return this.ensureEndpoint(options); }
+        }
+        return pending;
+      }
+      pendingAutoLaunch = options.autoLaunch !== false;
       const current = (async () => {
         if (lastEndpoint && await dependencies.probeEndpoint(lastEndpoint)) return lastEndpoint;
         lastEndpoint = undefined;

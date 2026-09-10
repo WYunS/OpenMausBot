@@ -32,6 +32,7 @@ function modelProvider(instance: InstanceInfo | undefined, model: string): strin
 export function engineStatus(instance: InstanceInfo): string {
   if (needsCli(instance)) return t("model.setupRequired");
   if (needsSignIn(instance)) return t("model.signInRequired");
+  if (instance.driverKind === "ruijieHarness" && instance.snapshot.authenticated === undefined) return t("model.onDemand");
   return instance.snapshot.version ?? t("model.ready");
 }
 
@@ -269,7 +270,7 @@ export function ModelPicker({
   const [showAll, setShowAll] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
-  const refreshingRef = useRef(false);
+  const refreshingRef = useRef<string | null>(null);
   const lastClaudeIdRef = useRef<string | null>(null);
 
   const selection = bot.modelSelection;
@@ -284,30 +285,32 @@ export function ModelPicker({
   const railDriverKind = railInstance?.driverKind;
 
   const refreshLocalInstances = useCallback(() => {
-    if (refreshingRef.current) return;
-    refreshingRef.current = true;
+    if (refreshingRef.current === "fleet") return;
+    refreshingRef.current = "fleet";
     setRefreshing(true);
     void refreshInstances()
       .catch(() => {
         // Keep the last known catalog when the app is temporarily offline.
       })
       .finally(() => {
-        refreshingRef.current = false;
+        if (refreshingRef.current !== "fleet") return;
+        refreshingRef.current = null;
         setRefreshing(false);
       });
   }, [refreshInstances]);
 
   const refreshModels = useCallback(() => {
-    if (refreshingRef.current) return;
-    refreshingRef.current = true;
-    setRefreshing(true);
     const instanceId = railId ?? selection.instanceId;
+    if (refreshingRef.current === instanceId) return;
+    refreshingRef.current = instanceId;
+    setRefreshing(true);
     void refreshInstanceModels(instanceId)
       .catch(() => {
         // Keep the last known catalog when the app is temporarily offline.
       })
       .finally(() => {
-        refreshingRef.current = false;
+        if (refreshingRef.current !== instanceId) return;
+        refreshingRef.current = null;
         setRefreshing(false);
       });
   }, [railId, refreshInstanceModels, selection.instanceId]);

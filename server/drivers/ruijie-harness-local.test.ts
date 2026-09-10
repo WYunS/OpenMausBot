@@ -36,6 +36,21 @@ function dependencies(
 }
 
 describe("installed Ruijie Harness discovery", () => {
+  it("does not let a passive status probe suppress an explicit on-demand launch", async () => {
+    let running = false;
+    const launchExecutable = vi.fn(async () => { running = true; });
+    const locator = createRuijieHarnessLocator(dependencies({
+      inspectExecutable: async () => ({ running, endpoints: running ? ["http://127.0.0.1:54873"] : [] }),
+      probeEndpoint: async () => running,
+      launchExecutable,
+    }));
+    const passive = locator.ensureEndpoint({ bridgePath: "bridge", autoLaunch: false });
+    const active = locator.ensureEndpoint({ bridgePath: "bridge", autoLaunch: true });
+    await expect(passive).rejects.toThrow("当前未运行");
+    await expect(active).resolves.toBe("http://127.0.0.1:54873");
+    expect(launchExecutable).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the platform's packaged application locations", () => {
     expect(installedRuijieHarnessCandidates("win32", {
       LOCALAPPDATA: "C:\\Users\\test\\AppData\\Local",

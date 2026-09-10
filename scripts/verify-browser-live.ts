@@ -1,7 +1,6 @@
 // Actual browser + actual BrowserPanel, always in a disposable fixture HOME.
 import { readFileSync } from "node:fs";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { browserSessionId, closeBrowserSession } from "../server/browser-engine.ts";
 import { launchVerificationServer, runControlOmb } from "./control-omb.ts";
 import { mountPreview, parkUntilSignal, type MountedPreview } from "./testing/preview-fixture.ts";
 
@@ -11,9 +10,11 @@ const executablePath = process.env.OMB_VERIFY_BROWSER_CHROME;
 if (!binaryPath || !executablePath) throw new Error("Set OMB_VERIFY_BROWSER_BINARY and OMB_VERIFY_BROWSER_CHROME to explicit installed binaries.");
 const fixture = await launchVerificationServer(process.env, undefined, undefined, { binaryPath, executablePath });
 let ui: MountedPreview | undefined;
+let botId = "";
 try {
   await runControlOmb(["new-bot", "--name", "Pepper", "--url", fixture.info.url]);
   const { bots } = await (await fetch(`${fixture.info.url}/api/bots`)).json() as any;
+  botId = bots[0].id;
   await fetch(`${fixture.info.url}/api/config`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ features: { browser: true } }) });
   await fetch(`${fixture.info.url}/api/bots/${bots[0].id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ browser: true }) });
   ui = await mountPreview(fixture, {
@@ -30,7 +31,11 @@ try {
   await parkUntilSignal();
 } finally {
   await ui?.close();
-  // close --all is scoped to this fixture's HOME, never the operator's.
-  await promisify(execFile)(binaryPath, ["close", "--all"], { env: { HOME: fixture.info.dataDir, USERPROFILE: fixture.info.dataDir, PATH: process.env.PATH }, timeout: 15_000 }).catch(() => {});
+  // Some Windows native builds resolve the OS profile despite HOME overrides.
+  // Close only this fixture's UUID session, never an account-wide --all.
+  if (botId) await closeBrowserSession(binaryPath, {
+    HOME: fixture.info.dataDir, USERPROFILE: fixture.info.dataDir,
+    AGENT_BROWSER_SESSION: browserSessionId(botId, ""),
+  });
   await fixture.close();
 }

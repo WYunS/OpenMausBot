@@ -19,7 +19,7 @@ export function LiveBrowser({ bot }: { bot: Bot }) {
   const [tabs, setTabs] = useState<BrowserTab[]>([]);
   const [address, setAddress] = useState("");
   const [connected, setConnected] = useState(false);
-  const [control, setControl] = useState({ held: false, controlling: false, owned: false });
+  const [control, setControl] = useState<{ held: boolean; controlling: boolean; owned: boolean; recoveryRequired?: boolean }>({ held: false, controlling: false, owned: false });
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [showProfiles, setShowProfiles] = useState(false);
@@ -96,8 +96,9 @@ export function LiveBrowser({ bot }: { bot: Bot }) {
     catch (cause) { if (viewer.current === expected) setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { if (viewer.current === expected) setPending(false); }
   };
-  const driving = control.controlling && connected && !pending;
-  const hasHumanControl = control.owned && control.controlling;
+  const driving = control.controlling && connected && !pending && !control.recoveryRequired;
+  const hasHumanControl = control.owned && control.controlling && !control.recoveryRequired;
+  const controlLabel = control.recoveryRequired ? t("browser.live.restart") : hasHumanControl ? t("browser.live.return") : t("browser.live.take");
   return <div ref={panel} className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-hairline/40 bg-card text-ink">
     <div className="flex min-h-12 items-center gap-1 px-2 pt-1.5">
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
@@ -121,9 +122,12 @@ export function LiveBrowser({ bot }: { bot: Bot }) {
         <button type="button" className={button} disabled={!driving} aria-label={t("browser.live.reload")} onClick={() => void execute({ type: "reload" })}><RotateCw size={17} /></button>
       </div>
       <input ref={addressInput} aria-label={t("browser.live.address")} readOnly={!driving} value={address} onChange={(e) => setAddress(e.target.value)} onFocus={(e) => { urlEditing.current = true; if (driving) e.target.select(); }} onBlur={() => { urlEditing.current = false; }} placeholder={connected ? "about:blank" : t("browser.live.connecting")} spellCheck={false} className="mx-1 min-w-0 flex-1 rounded-lg bg-transparent px-2 py-1.5 text-center text-[12px] outline-none placeholder:text-ink-secondary focus:bg-inset focus:text-left" />
-      <button type="button" disabled={!connected || pending || (control.held && !control.owned)} onClick={() => void execute({ type: hasHumanControl ? "release" : "take" })} title={hasHumanControl ? t("browser.live.returnHint") : control.held && !control.owned ? t("browser.live.controlledElsewhere") : t("browser.live.takeHint")} aria-label={hasHumanControl ? t("browser.live.return") : t("browser.live.take")} aria-pressed={hasHumanControl} className={`${button} flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px] sm:text-[12px] ${hasHumanControl ? "bg-accent/15 text-accent" : ""}`}>
+      <button type="button" disabled={!connected || pending || (control.held && !control.owned)} onClick={() => {
+        if (control.recoveryRequired && !window.confirm(t("browser.live.restartConfirm"))) return;
+        void execute({ type: control.recoveryRequired ? "restart" : hasHumanControl ? "release" : "take" });
+      }} title={control.recoveryRequired ? t("browser.live.recoveryRequired") : hasHumanControl ? t("browser.live.returnHint") : control.held && !control.owned ? t("browser.live.controlledElsewhere") : t("browser.live.takeHint")} aria-label={controlLabel} aria-pressed={hasHumanControl} className={`${button} flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px] sm:text-[12px] ${hasHumanControl ? "bg-accent/15 text-accent" : ""}`}>
         {pending ? <Loader2 size={16} className="animate-spin" /> : <Hand size={16} className="hidden sm:block" />}
-        <span>{hasHumanControl ? t("browser.live.return") : t("browser.live.take")}</span>
+        <span>{controlLabel}</span>
       </button>
       <details className="relative shrink-0">
         <summary className={`${button} list-none cursor-pointer [&::-webkit-details-marker]:hidden`} aria-label={t("browser.live.menu")} title={t("browser.live.menu")}><EllipsisVertical size={17} /></summary>
@@ -144,7 +148,7 @@ export function LiveBrowser({ bot }: { bot: Bot }) {
         onReturnToToolbar={() => addressInput.current?.focus()}
         acknowledge={(seq) => { if (viewer.current) void action({ type: "ack", seq }).catch(() => {}); }}
         onDecodeError={() => setError(t("browser.live.decodeError"))} />
-        : <div className="flex min-h-64 flex-col items-center justify-center gap-3 p-6 text-center text-[13px] text-ink-secondary">{connected && control.held ? <Hand size={24} /> : error ? <Globe size={24} /> : <Loader2 size={24} className="animate-spin" />}<span>{control.held ? t("browser.live.paused") : error ? t("browser.live.disconnected") : t("browser.live.opening")}</span></div>}
+        : <div className="flex min-h-64 flex-col items-center justify-center gap-3 p-6 text-center text-[13px] text-ink-secondary">{connected && control.held ? <Hand size={24} /> : error ? <Globe size={24} /> : <Loader2 size={24} className="animate-spin" />}<span>{control.recoveryRequired ? t("browser.live.recoveryRequired") : control.held ? t("browser.live.paused") : error ? t("browser.live.disconnected") : t("browser.live.opening")}</span></div>}
     </div>
     <dialog ref={profilesDialog} onClose={() => setShowProfiles(false)} onClick={(e) => { if (e.target === e.currentTarget) setShowProfiles(false); }} className="m-auto w-[min(420px,calc(100%-32px))] max-h-[80vh] overflow-auto rounded-2xl border border-hairline/50 bg-card p-5 text-ink shadow-2xl backdrop:bg-black/40">
       <div className="mb-4 flex items-center justify-between"><h2 className="text-[15px] font-medium">{t("browser.live.profiles")}</h2><button className={button} aria-label={t("browser.live.closeProfiles")} onClick={() => setShowProfiles(false)}><X size={16} /></button></div>

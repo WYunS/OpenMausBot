@@ -211,7 +211,9 @@ describe("server-owned browser MCP runtime", () => {
   });
 
   it.each(["hang", "crash", "oversized"])("fails closed on %s, and can reconnect after explicit close", async (name) => {
-    const value = runtime({ requestTimeoutMs: 250 });
+    // Also covers a fresh Node process after close. A 250ms watchdog races
+    // normal Windows process startup under build load, not just hung RPCs.
+    const value = runtime({ requestTimeoutMs: 1_000 });
     await expect(value.agentRpc("s", spec(), "tools/call", { name })).rejects.toThrow(/Browser/);
     await expect(value.take("s", "owner")).rejects.toThrow(/may still be running/);
     expect(value.canControl("s", "owner")).toBe(false);

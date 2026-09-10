@@ -126,6 +126,7 @@ export interface ManagedVpsOwner {
   botId: string;
   name: string;
   inUse: boolean;
+  deleted?: boolean;
 }
 
 export interface ManagedVpsInventoryInstance {
@@ -756,9 +757,9 @@ async function scanManagedVpsComputers(
       instances.push({
         name,
         state: managedVpsState(detail.State?.Status, detail.State?.Running),
-        ownerBotId: owner?.botId ?? null,
+        ownerBotId: owner?.deleted ? null : owner?.botId ?? null,
         ownerName: owner?.name ?? null,
-        orphaned: !owner,
+        orphaned: !owner || owner.deleted === true,
         inUse: owner?.inUse === true,
       });
     }

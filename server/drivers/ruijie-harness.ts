@@ -30,6 +30,7 @@ import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import {
   defaultRuijieBridgePath,
   ruijieHarnessLocator,
+  RuijieHarnessDormantError,
 } from "./ruijie-harness-local.ts";
 
 export { defaultRuijieBridgePath } from "./ruijie-harness-local.ts";
@@ -933,6 +934,12 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
           await updateModelCatalog(endpoint);
           return { state: "available", authenticated: true, version: "Ruijie Harness", billing: "subscription", sso };
         } catch (cause) {
+          if (cause instanceof RuijieHarnessDormantError) {
+            // Installation is present. A passive status check must neither
+            // start the GUI nor hide the catalog. Authentication is checked
+            // against the Host when an explicit refresh/turn starts it.
+            return { state: "available", version: "Ruijie Harness", billing: "subscription" };
+          }
           return { state: "unavailable", authenticated: false, reason: cause instanceof Error ? cause.message : String(cause) };
         }
       },

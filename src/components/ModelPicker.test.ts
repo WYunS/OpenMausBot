@@ -25,10 +25,14 @@ vi.mock("@/state/store", async (importOriginal) => ({
   }),
 }));
 
-const { ClaudeAccountSelect, EffortRow, ModelEngineRail, ModelPicker } = await import("./ModelPicker");
+const { ClaudeAccountSelect, EffortRow, ModelEngineRail, ModelPicker, engineStatus } = await import("./ModelPicker");
 
 afterAll(() => vi.unstubAllGlobals());
 beforeEach(() => setLocale("en"));
+
+it("labels an installed dormant Harness as on-demand rather than missing setup", () => {
+  expect(engineStatus({ ...engine(), driverKind: "ruijieHarness", snapshot: { state: "available" } })).toBe("Starts on demand");
+});
 
 function engine(effortLevels?: readonly EffortLevel[]): InstanceInfo {
   return {

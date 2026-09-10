@@ -9,6 +9,13 @@ const shortcutInstaller = new URL("../scripts/install-local-windows-shortcut.ps1
 const mainProcess = new URL("./main.mjs", import.meta.url);
 const onboarding = new URL("../src/components/Onboarding.tsx", import.meta.url);
 
+test("source browser uses the complete staged Windows pair without overriding explicit paths", async () => {
+  const source = await readFile(launcher, "utf8");
+  assert.match(source, /-not \$env:OMB_AGENT_BROWSER_PATH -and -not \$env:AGENT_BROWSER_EXECUTABLE_PATH/);
+  assert.match(source, /\$env:OMB_BROWSER_BUNDLE_DIR = \$stagedBrowserRoot/);
+  assert.match(source, /'manifest.json'/);
+});
+
 test("the desktop wrapper starts PowerShell without flashing a console", async () => {
   const source = await readFile(windowlessLauncher, "utf8");
   assert.match(source, /start-local-windows\.ps1/);

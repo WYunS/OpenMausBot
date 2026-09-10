@@ -176,18 +176,18 @@ describe("archive / delete confirmation", () => {
 });
 
 describe("bot deletion feedback", () => {
-  it("disables the destructive action while persistent computers are checked", () => {
+  it("disables duplicate delete submissions while local deletion is in progress", () => {
     const markup = renderToStaticMarkup(createElement(BotDeleteMenuItem, {
       deleting: true,
       onClick: vi.fn(),
     }));
 
-    expect(markup).toContain("Checking computers…");
+    expect(markup).toContain("Deleting…");
     expect(markup).toContain('disabled=""');
     expect(markup).toContain('aria-busy="true"');
   });
 
-  it("offers Delete again after the check settles", () => {
+  it("offers Delete again after the operation settles", () => {
     const markup = renderToStaticMarkup(createElement(BotDeleteMenuItem, {
       deleting: false,
       onClick: vi.fn(),

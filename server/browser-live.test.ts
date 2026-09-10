@@ -1,11 +1,13 @@
 import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BrowserRuntime } from "./browser-runtime.ts";
+import { BrowserRuntime, CompletedBrowserActionError } from "./browser-runtime.ts";
 import { BrowserLive, browserStreamPort, normalizeBrowserLiveMessage, parseBrowserLiveAction } from "./browser-live.ts";
 
 const execute = vi.hoisted(() => vi.fn());
 const nativeClose = vi.hoisted(() => vi.fn());
+const navigate = vi.hoisted(() => vi.fn());
+vi.mock("./browser-navigation.ts", () => ({ navigateBrowserPage: navigate }));
 const nativeInput = vi.fn();
 vi.mock("./browser-engine.ts", () => ({ closeBrowserSession: nativeClose }));
 vi.mock("node:child_process", async (original) => {
@@ -63,6 +65,7 @@ beforeEach(() => {
   held = new Map();
   runtime = {
     heldBy: (session: string) => held.get(session),
+    needsRecovery: () => false,
     canControl: (session: string, owner: string) => held.get(session) === owner,
     take: vi.fn(async (session: string, owner: string) => {
       if (held.has(session) && held.get(session) !== owner) throw new Error("held");
@@ -79,6 +82,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", nativeInput);
   nativeInput.mockReset().mockImplementation(async () => Response.json({ success: true, data: { dispatched: true } }));
   nativeClose.mockReset().mockResolvedValue(true);
+  navigate.mockReset().mockResolvedValue({});
   execute.mockReset().mockResolvedValue(output(ready));
 });
 afterEach(() => { live.closeAll(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers(); });
@@ -368,6 +372,36 @@ describe("authenticated browser viewer relay", () => {
     expect(JSON.parse(nativeInput.mock.calls[0]![1].body)).toEqual({ action: "press", key: "Enter" });
     await a.action({ type: "release" });
     await expect(runtime.withAgentAction("profile-a", async () => true)).rejects.toThrow("Restart");
+  });
+  it("keeps control usable after a confirmed navigation cancellation", async () => {
+    runtime = new BrowserRuntime(); live = new BrowserLive({ runtime });
+    const a = await open(); await a.action({ type: "take" });
+    navigate.mockRejectedValueOnce(new CompletedBrowserActionError("The page could not be opened."));
+    await expect(a.action({ type: "navigate", url: "http://localhost:1234/" })).rejects.toThrow("page could not be opened");
+    expect(runtime.canControl("profile-a", a.res.id)).toBe(true);
+    await a.action({ type: "release" });
+    await a.action({ type: "take" });
+    await expect(a.action({ type: "navigate", url: "http://localhost:5678/" })).resolves.toEqual({ ok: true });
+  });
+  it("uses cancellable navigation on the exact native session without evaluating page JavaScript", async () => {
+    const a = await open(); await a.action({ type: "take" });
+    execute.mockClear();
+    await a.action({ type: "navigate", url: "https://example.com/?q=hello" });
+    expect(navigate).toHaveBeenCalledWith("/trusted/agent-browser", expect.objectContaining({ AGENT_BROWSER_SESSION: "profile-a", AGENT_BROWSER_SOCKET_DIR: "/isolated/socket" }), "https://example.com/?q=hello");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("exposes recovery after an unconfirmed command instead of retrying takeover forever", async () => {
+    runtime = new BrowserRuntime(); live = new BrowserLive({ runtime });
+    const a = await open(); await a.action({ type: "take" });
+    navigate.mockRejectedValueOnce(Object.assign(new Error("timeout private URL"), {
+      code: null, killed: true, signal: "SIGTERM", stdout: JSON.stringify({ success: false }),
+    }));
+    await expect(a.action({ type: "navigate", url: "http://localhost:1234/" })).rejects.toThrow("browser could not complete");
+    expect(a.res.events("control").at(-1)).toMatchObject({ owned: true, controlling: false, recoveryRequired: true });
+    await expect(a.action({ type: "take" })).rejects.toThrow("Restart");
+    await a.action({ type: "restart" });
+    await expect(runtime.withAgentAction("profile-a", async () => true)).resolves.toBe(true);
   });
   it("releases Shift-only printable keys even when keyUp contains no text", async () => {
     const a = await open(); await a.action({ type: "take" });

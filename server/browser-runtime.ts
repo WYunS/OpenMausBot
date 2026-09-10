@@ -19,6 +19,9 @@ export function browserRuntimeEnv(overrides: Record<string, string | undefined>)
 }
 
 class TransportError extends Error {}
+/** The native command returned a complete failure response. Its action has
+ * settled, so it must not leave the session behind the uncertain-work gate. */
+export class CompletedBrowserActionError extends Error {}
 type Pending = { resolve: (result: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout };
 
 /** A server-owned JSONL client. Neither child stderr nor its environment is
@@ -278,6 +281,8 @@ export class BrowserRuntime {
 
   heldBy(session: string): string | null { return this.gates.get(session)?.owner ?? null; }
 
+  needsRecovery(session: string): boolean { return this.gates.get(session)?.uncertain === true; }
+
   /** A disconnected viewer may leave a physical key/button pressed. Never
    * let an agent inherit that input state; explicit restart clears it. */
   abandonHumanInput(session: string, owner: string): void {
@@ -304,8 +309,10 @@ export class BrowserRuntime {
     catch (error) {
       // Validation happens before entry. A failed accepted command might still
       // be executing in the daemon; hand-back must not race its completion.
-      gate.uncertain = true;
-      gate.ready = false;
+      if (!(error instanceof CompletedBrowserActionError)) {
+        gate.uncertain = true;
+        gate.ready = false;
+      }
       throw error;
     }
     finally { gate.humans--; this.changed(gate); }

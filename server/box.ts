@@ -85,6 +85,7 @@ export interface ManagedBoxOwner {
   botId: string;
   name: string;
   inUse: boolean;
+  deleted?: boolean;
 }
 
 export interface ManagedBoxInventoryInstance {
@@ -475,9 +476,9 @@ export async function listManagedBoxes(
       boxId,
       name,
       state: safeBoxState(candidate.state),
-      ownerBotId: owner?.botId ?? null,
+      ownerBotId: owner?.deleted ? null : owner?.botId ?? null,
       ownerName: owner?.name ?? null,
-      orphaned: owner === null,
+      orphaned: owner === null || owner.deleted === true,
       inUse: owner?.inUse ?? false,
     });
   }

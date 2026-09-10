@@ -41,6 +41,7 @@ import {
 import * as checkpoints from "./checkpoints.ts";
 import { readConnectedAppsCache, writeConnectedAppsCache } from "./connected-apps-cache.ts";
 import { writeFileAtomic } from "./atomic.ts";
+import { readRetainedComputerOwners, retainComputerOwner } from "./retained-computers.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import {
@@ -3136,7 +3137,7 @@ const LOCAL_VM_DESKTOP_WAIT_MS = 90_000;
 const localVmIdles = new Map<string, LocalVmIdleTimer>();
 
 function managedBoxOwners(): box.ManagedBoxOwner[] {
-  return store.bots.map((bot) => ({
+  return [...readRetainedComputerOwners(DATA_DIR).filter((owner) => !store.bot(owner.botId)), ...store.bots.map((bot) => ({
     botId: bot.id,
     name: bot.name,
     // A machine is not safe to mutate while any app-level work or human
@@ -3149,7 +3150,7 @@ function managedBoxOwners(): box.ManagedBoxOwner[] {
       Boolean(routines?.activeRunForBot(bot.id)) ||
       activeVpsThreads.has(bot.id) ||
       computerControl.snapshot(bot.id).held,
-  }));
+  }))];
 }
 
 function botHasActiveTurn(botId: string): boolean {
@@ -12322,13 +12323,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // its background setup. Do not let deletion race that work while a Box
       // account is configured; the person can stop the turn and retry.
       if ((box.boxConfigured(cfg) || vpsSshAlias(cfg)) && (bot.busy || hasDirectDispatch(bot.id))) {
-        return json(res, 409, { error: "stop this bot's work before checking and deleting its cloud computer" });
-      }
-      const botBoxRecovery = boxCreateRecoverySnapshot().filter((entry) => entry.botId === bot.id);
-      if (botBoxRecovery.some((entry) => !entry.resolved)) {
-        return json(res, 409, {
-          error: "finish reconciling this bot's pending cloud computer creation before deleting it — check ascii.dev, then retry Box setup",
-        });
+        return json(res, 409, { error: "stop this bot's work before deleting the bot" });
       }
       // Bot deletion awaits VM/browser/provider cleanup. Claim the bot and
       // every channel it belongs to before that first await so a phone save
@@ -12347,73 +12342,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           if (localVmActiveThreads.has(target.key) || localVmLifecycleBusy.has(target.key)) {
             return json(res, 409, { error: "stop this bot's Local VM turn or setup action before deleting the bot" });
           }
-          const vm = await containerComputerStatus(undefined, undefined, target);
-          if (!vm.daemonUp && existsSync(target.workspaceDir)) {
-            return json(res, 409, {
-              error: "start the container runtime and delete this bot's Local VM before deleting the bot",
-            });
-          }
-          if (vm.container !== "missing") {
-            return json(res, 409, { error: "delete this bot's Local VM from its Computer panel before deleting the bot" });
-          }
         }
-        // A remembered VPS backend is durable ownership evidence even if the
-        // bot is currently Off. A bot that has never selected VPS must not
-        // wait on an unrelated, unreachable account-wide SSH alias.
-        if (bot.cloudBackend === "vps") {
-          const vpsInventory = await vps.listManagedVpsComputers(cfg, managedBoxOwners());
-          if (vpsInventory.configured && !vpsInventory.available) {
-            return json(res, 503, {
-              error: `${vpsInventory.problem ?? "VPS computer inventory is unavailable"}. Refresh Settings → Computers before deleting this bot`,
-            });
-          }
-          if (vpsInventory.instances.some((instance) => instance.ownerBotId === bot.id)) {
-            return json(res, 409, {
-              error: "remove this bot's VPS computer from Settings → Computers before deleting the bot",
-            });
-          }
-        }
-        // LIST is eventually consistent, and a remembered Box may also have
-        // been renamed outside OpenMausBot. The create journal is stronger
-        // ownership evidence: inspect every durable id directly before the bot
-        // record that makes it discoverable can be removed. Missing credentials
-        // or an unavailable provider must fail closed.
-        for (const recovery of botBoxRecovery) {
-          if (!recovery.boxId) {
-            return json(res, 409, {
-              error: "finish reconciling this bot's pending cloud computer creation before deleting it",
-            });
-          }
-          const inspected = await box.inspectBoxIdentity(cfg, recovery.boxId);
-          if (!inspected.available) {
-            return json(res, 503, {
-              error: `${inspected.problem ?? "a remembered cloud computer could not be verified"}. Restore its Box account before deleting this bot`,
-            });
-          }
-          if (inspected.identity) {
-            return json(res, 409, {
-              error: "delete this bot's remembered cloud computer from Settings → Computers before deleting the bot",
-            });
-          }
-          // A direct 404/410 is authoritative even while account LIST catches
-          // up. Retire only this exact provider identity, then continue looking
-          // for any older name-based resource the journal never recorded.
-          retireDeletedBoxCreate(recovery.boxId);
-        }
-        // A Box survives destination/backend changes and contains browser
-        // sessions and files. Resolve ownership from a fresh provider listing;
-        // deleting the bot first would make that durable machine look orphaned.
-        const cloudInventory = await box.listManagedBoxes(cfg, managedBoxOwners());
-        if (cloudInventory.configured && !cloudInventory.available) {
-          return json(res, 503, {
-            error: `${cloudInventory.problem ?? "cloud computer inventory is unavailable"}. Refresh Settings → Computers before deleting this bot`,
-          });
-        }
-        if (cloudInventory.instances.some((instance) => instance.ownerBotId === bot.id)) {
-          return json(res, 409, {
-            error: "delete this bot's cloud computer from Settings → Computers before deleting the bot",
-          });
-        }
+        // No SSH, provider LIST, or container-daemon prerequisite for deleting
+        // a local bot. Persist identity first; remote machines and creation
+        // journals remain intact for explicit cleanup in Settings/provider UI.
+        retainComputerOwner(DATA_DIR, bot);
         // Establish a durable cleanup intent before any teardown. A malformed
         // or unreadable journal therefore rejects the delete with the bot and
         // all of its live work untouched. The intent is aborted if a later

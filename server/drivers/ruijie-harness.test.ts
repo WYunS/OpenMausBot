@@ -13,6 +13,7 @@ import {
 } from "./ruijie-harness.ts";
 import type { RuntimeEvent } from "../contracts.ts";
 import { computerPrompt } from "../system-prompt.ts";
+import { ruijieHarnessLocator, RuijieHarnessDormantError } from "./ruijie-harness-local.ts";
 
 class FakeSocket extends EventTarget {
   static readonly CONNECTING = 0;
@@ -196,6 +197,21 @@ describe("Ruijie Harness driver", () => {
     const source = await readFile(new URL("./ruijie-harness.ts", import.meta.url), "utf8");
     const refreshModels = source.match(/const refreshModels = async \(\) => \{[\s\S]*?\n    \};/u)?.[0];
     expect(refreshModels).toContain("resolveEndpoint(input.config, true)");
+  });
+
+  it("keeps the installed dormant catalog selectable without inventing authentication", async () => {
+    const probe = vi.spyOn(ruijieHarnessLocator, "ensureEndpoint").mockRejectedValue(new RuijieHarnessDormantError());
+    try {
+      const instance = await RuijieHarnessDriver.create({
+        instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {}, config: {},
+      });
+      const snapshot = await instance.snapshot();
+      expect(snapshot.state).toBe("available");
+      expect(snapshot.authenticated).toBeUndefined();
+      expect(snapshot.sso).toBeUndefined();
+      expect(instance.models.options.length).toBe(10);
+      expect(probe).toHaveBeenCalledWith(expect.objectContaining({ autoLaunch: false }));
+    } finally { probe.mockRestore(); }
   });
 
   it("reports the same SSO identity and wallet as the running Harness", async () => {

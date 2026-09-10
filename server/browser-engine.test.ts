@@ -299,6 +299,16 @@ describe("finding the browser engine", () => {
     expect(agentBrowserReleaseUrl(revised)).toBe(revised.url);
   });
 
+  it("recognizes a staged Windows bundle as managed with its patched release version", () => {
+    const directory = join(tmpdir(), "staged-browser");
+    const bundle = browserBundlePaths(directory, "win32-x64");
+    const files = new Set([bundle.directory, bundle.engine, bundle.chrome, bundle.manifest, bundle.licenses]);
+    const options = { env: { OMB_BROWSER_BUNDLE_DIR: directory }, platform: "win32" as const, arch: "x64", exists: (path: string) => files.has(path) };
+    expect(browserEngineStatus(options)).toEqual({ kind: "ready", binaryPath: bundle.engine, version: "0.36.0-omb.1" });
+    files.delete(bundle.chrome);
+    expect(browserEngineStatus(options)).toMatchObject({ kind: "unavailable", installable: false });
+  });
+
   it.each(SUPPORTED_BROWSER_TARGETS)("uses the complete %s desktop bundle before old downloaded engines", (target) => {
     const [platform, arch] = target.split("-");
     const env = { OMB_RESOURCES_PATH: join(tmpdir(), "OMB resources"), PATH: "" };

@@ -205,10 +205,12 @@ interface BrowserLookupOptions {
 }
 
 function packagedBrowser(options: BrowserLookupOptions) {
-  const resources = (options.env ?? process.env).OMB_RESOURCES_PATH;
-  if (!resources) return null;
+  const env = options.env ?? process.env;
+  const resources = env.OMB_RESOURCES_PATH;
+  const bundleDirectory = env.OMB_BROWSER_BUNDLE_DIR?.trim() || (resources ? join(resolve(resources), "browser-engine") : undefined);
+  if (!bundleDirectory) return null;
   try {
-    return browserBundlePaths(join(resolve(resources), "browser-engine"), `${options.platform ?? process.platform}-${options.arch ?? process.arch}`);
+    return browserBundlePaths(resolve(bundleDirectory), `${options.platform ?? process.platform}-${options.arch ?? process.arch}`);
   } catch {
     return null; // No desktop bundle for this platform/architecture.
   }

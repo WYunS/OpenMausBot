@@ -134,6 +134,13 @@ describe("live browser control affordance", () => {
     expect(html).not.toContain('<span>Return to bot</span>');
   });
 
+  it("offers restart instead of repeated takeover when the browser requires recovery", () => {
+    fixture.control = Object.assign({ held: true, controlling: false, owned: true }, { recoveryRequired: true });
+    const html = render();
+    expect(html).toContain('aria-label="Restart browser…" aria-pressed="false"');
+    expect(html).not.toContain('<span>Take control</span>');
+  });
+
   it("uses the fullscreen toolbar button to leave fullscreen", async () => {
     let tree!: ReturnType<typeof LiveBrowser>;
     function Capture() { tree = LiveBrowser({ bot }); return tree; }

@@ -134,6 +134,15 @@ describe("managed VPS inventory", () => {
     expect(JSON.stringify(inventory)).not.toMatch(/\b[ab]{64}\b|VNC_PW|172\.17\.0\.9/);
   });
 
+  it("keeps an unlabelled legacy computer manageable after local bot deletion", async () => {
+    const name = vpsContainerName(OWNER.botId);
+    const fake = inventoryRunner([{ id: "a".repeat(64), name, labels: labels(name, null) }]);
+    const owners = [{ ...OWNER, deleted: true }];
+    expect((await listManagedVpsComputers(CONFIG, owners, fake.runner)).instances).toEqual([
+      expect.objectContaining({ name, ownerBotId: null, ownerName: OWNER.name, orphaned: true, inUse: false }),
+    ]);
+  });
+
   it("keeps local legacy owners but excludes foreign and ownerless legacy rows", async () => {
     const legacyOwner: ManagedVpsOwner = { botId: "legacy-current", name: "Legacy", inUse: false };
     const foreignOwner: ManagedVpsOwner = { botId: "foreign-current", name: "Foreign", inUse: false };

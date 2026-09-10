@@ -41,7 +41,7 @@ UI and harness, then removes its temporary data; the server log remains.
 Focused automated coverage:
 
 ```sh
-pnpm exec vitest run server/browser-engine.test.ts server/browser-runtime.test.ts \
+pnpm exec vitest run server/browser-engine.test.ts server/browser-runtime.test.ts server/browser-navigation.test.ts \
   server/browser-proxy.test.ts server/browser-live.test.ts \
   server/browser-live-routes.test.ts server/browser-codex-path.integration.test.ts \
   src/lib/browser-input-queue.test.ts src/lib/browser-profiles.test.ts \
@@ -54,3 +54,33 @@ stale list/stream events, native key routing, bounded input/backpressure,
 revoked capabilities, and exact saved-state cleanup. Native workflow testing
 is still required: a green mocked
 frame test alone does not prove browser input or restoration works.
+
+## Network failure and fullscreen regression checks
+
+With the same two explicit binary variables as above:
+
+```sh
+node --experimental-strip-types scripts/verify-browser-live-control.ts
+```
+
+This creates a disposable bot and local HTTP server. It checks a refused URL,
+then a server that accepts TCP but never returns headers. Navigation must confirm
+browser-side cancellation at about 15 seconds, after which release, retake, normal
+navigation, and keyboard input must still work. The fixture webpage reports its
+actual input value to the fixture HTTP server; a successful action response alone
+does not pass the check. Neither Google availability nor model credentials matter.
+
+While the UI fixture above is running, test actual Electron DOM fullscreen:
+
+```sh
+OMB_VERIFY_BROWSER_PREVIEW_URL=http://127.0.0.1:5173/__browser-preview.html \
+node node_modules/electron/cli.js scripts/verify-browser-fullscreen.mjs
+```
+
+Use the exact printed preview port. The hidden Electron window uses a disposable
+profile and must enter/exit fullscreen with the same toolbar button, without Esc.
+On PowerShell set `$env:OMB_VERIFY_BROWSER_PREVIEW_URL` before the Node command.
+Fixture cleanup must address its exact UUID session, never `close --all`: some
+Windows native builds resolve the OS profile even when HOME is overridden.
+
+See [the September 10 regression evidence](ruijie-browser-delete-2026-09-10.md).

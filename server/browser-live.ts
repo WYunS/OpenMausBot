@@ -2,8 +2,9 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import { promisify } from "node:util";
-import { browserRuntimeEnv, type BrowserRuntime } from "./browser-runtime.ts";
+import { browserRuntimeEnv, CompletedBrowserActionError, type BrowserRuntime } from "./browser-runtime.ts";
 import { closeBrowserSession } from "./browser-engine.ts";
+import { navigateBrowserPage } from "./browser-navigation.ts";
 
 const execute = promisify(execFile);
 const MAX_FRAME = 3 * 1024 * 1024;
@@ -199,7 +200,8 @@ export class BrowserLive {
         const pending = viewer.pendingFrame; viewer.pendingFrame = undefined;
         this.frame(viewer, pending);
       }
-      this.send(viewer, { type: "control", held, owned: this.runtime.heldBy(session) === viewer.id, controlling: this.runtime.canControl(session, viewer.id) });
+      this.send(viewer, { type: "control", held, owned: this.runtime.heldBy(session) === viewer.id, controlling: this.runtime.canControl(session, viewer.id),
+        ...(this.runtime.needsRecovery(session) ? { recoveryRequired: true } : {}) });
       if (!held && viewer.hiddenFrame) {
         const frame = viewer.hiddenFrame; viewer.hiddenFrame = undefined;
         this.frame(viewer, frame);
@@ -256,17 +258,35 @@ export class BrowserLive {
 
   private async command(viewer: Viewer, args: string[]): Promise<ObjectValue> {
     if (!this.current(viewer)) throw new BrowserLiveError("This browser view is no longer available.", 409);
-    const env = browserRuntimeEnv({ ...viewer.spec.env, AGENT_BROWSER_SESSION: viewer.session });
+    // Leave time for the native navigation timeout to return a completed
+    // error before the process watchdog has to kill an unresponsive command.
+    const env = browserRuntimeEnv({ ...viewer.spec.env, AGENT_BROWSER_SESSION: viewer.session, AGENT_BROWSER_DEFAULT_TIMEOUT: "15000" });
+    const completedFailure = () => new CompletedBrowserActionError(args[0] === "open" && args.length > 1
+      ? "The page could not be opened. Check the address or network connection, or open another page."
+      : "The browser could not complete this command. Try another action.");
     try {
+      if (args[0] === "open" && args[1]) return await navigateBrowserPage(viewer.spec.command, env, args[1]);
       const { stdout } = await execute(viewer.spec.command, [...args, "--json", "--no-webmcp"], {
         env, timeout: 30_000, maxBuffer: 1024 * 1024, encoding: "utf8", windowsHide: true,
       });
       if (!this.current(viewer)) throw new Error("stale viewer");
       const result = object(JSON.parse(stdout));
       const data = object(result?.data);
+      if (result?.success === false) throw completedFailure();
       if (result?.success !== true || !data) throw new Error("browser command failed");
       return data;
-    } catch { throw new BrowserLiveError("The browser could not complete this action. Check that the browser engine is installed, then reconnect.", 503); }
+    } catch (error) {
+      if (error instanceof CompletedBrowserActionError) throw error;
+      // execFile rejects exit 1 even when the engine acknowledged a normal
+      // page/network failure. Never confuse that with a killed/timed-out CLI.
+      const exit = object(error);
+      if (Number.isInteger(exit?.code) && exit?.killed !== true && !exit?.signal && typeof exit?.stdout === "string") {
+        let response: ObjectValue | null = null;
+        try { response = object(JSON.parse(exit.stdout)); } catch { /* Unknown completion stays fail-closed. */ }
+        if (response?.success === false) throw completedFailure();
+      }
+      throw new BrowserLiveError("The browser could not complete this action. Check that the browser engine is installed, then reconnect.", 503);
+    }
   }
 
   private async input(viewer: Viewer, message: ObjectValue): Promise<void> {
@@ -421,7 +441,10 @@ export class BrowserLive {
         await taking;
         if (!this.current(viewer)) { this.close(viewer); throw new BrowserLiveError("This browser view closed.", 409); }
         return { ok: true };
-      } catch { throw new BrowserLiveError("Another browser view or bot action is using this browser. Try again shortly.", 409); }
+      } catch {
+        if (this.runtime.needsRecovery(viewer.session)) throw new BrowserLiveError("The previous browser action was interrupted. Restart the browser to restore control.", 409);
+        throw new BrowserLiveError("Another browser view or bot action is using this browser. Try again shortly.", 409);
+      }
       finally { this.control(viewer.session); }
     }
     if (!this.runtime.canControl(viewer.session, viewer.id)) throw new BrowserLiveError("Take control of this browser before interacting.", 409);
@@ -434,7 +457,10 @@ export class BrowserLive {
         else if (action.type === "command") await this.command(viewer, action.args);
       });
       return { ok: true };
-    } catch (error) { throw error instanceof BrowserLiveError ? error : new BrowserLiveError("Browser control changed. Take control again to continue.", 409); }
+    } catch (error) {
+      if (error instanceof CompletedBrowserActionError) throw new BrowserLiveError(error.message, 502);
+      throw error instanceof BrowserLiveError ? error : new BrowserLiveError("Browser control changed. Take control again to continue.", 409);
+    }
     finally { viewer.pendingActions -= 1; this.control(viewer.session); }
   }
 

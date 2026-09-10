@@ -31,6 +31,20 @@ $env:RUIJIE_HARNESS_ARGUMENTS = $null
 $env:RUIJIE_HARNESS_HOME = $null
 $env:RUIJIE_HARNESS_USER_DATA_DIR = $null
 
+# Use the same staged native pair as the Windows installer when available.
+# Otherwise a source launch silently chooses system Chrome, whose daemon
+# startup can time out even though the packaged headless browser works.
+$stagedBrowserRoot = Join-Path $repoRoot 'dist-native\browser\win32-x64'
+$stagedBrowser = Join-Path $stagedBrowserRoot 'agent-browser.exe'
+$stagedChrome = Join-Path $stagedBrowserRoot 'chrome\chrome-headless-shell-win64\chrome-headless-shell.exe'
+if (-not $env:OMB_AGENT_BROWSER_PATH -and -not $env:AGENT_BROWSER_EXECUTABLE_PATH -and -not $env:OMB_BROWSER_BUNDLE_DIR -and
+    (Test-Path -LiteralPath $stagedBrowser -PathType Leaf) -and
+    (Test-Path -LiteralPath $stagedChrome -PathType Leaf) -and
+    (Test-Path -LiteralPath (Join-Path $stagedBrowserRoot 'manifest.json') -PathType Leaf) -and
+    (Test-Path -LiteralPath (Join-Path $stagedBrowserRoot 'licenses') -PathType Container)) {
+  $env:OMB_BROWSER_BUNDLE_DIR = $stagedBrowserRoot
+}
+
 function Set-NodeSystemProxy {
   # Node's fetch does not use the Windows proxy unless env-proxy support is
   # enabled explicitly. Mirror the current per-user proxy without hard-coding
