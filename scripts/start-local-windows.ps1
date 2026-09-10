@@ -21,18 +21,15 @@ $env:OMB_PORT = [string]$developmentServerPort
 $env:OMB_DESKTOP_SERVER = '1'
 $env:OMB_BROWSER_CONNECTION = $null
 
-# Use the adjacent Ruijie Harness checkout as a provider CLI while developing.
-# Engine discovery remains passive; the hidden Host starts only when a Harness
-# turn actually needs it.
-$ruijieHarnessRoot = 'D:\ChatGPT\RuijieDSH'
-$ruijieHarnessElectron = Join-Path $ruijieHarnessRoot 'dsh-plugin-desktop\node_modules\electron\dist\electron.exe'
-$ruijieHarnessMain = Join-Path $ruijieHarnessRoot 'dsh-plugin-desktop\lib\main.js'
-if ((Test-Path -LiteralPath $ruijieHarnessElectron) -and (Test-Path -LiteralPath $ruijieHarnessMain)) {
-  $env:RUIJIE_HARNESS_EXECUTABLE = $ruijieHarnessElectron
-  $env:RUIJIE_HARNESS_ARGUMENTS = ConvertTo-Json @($ruijieHarnessMain, '--openmaus-server') -Compress
-  $env:RUIJIE_HARNESS_HOME = Join-Path $ruijieHarnessRoot '.local-data\dsh-home'
-  $env:RUIJIE_HARNESS_USER_DATA_DIR = Join-Path $ruijieHarnessRoot '.local-data\electron-user-data'
-}
+# Match packaged Bot behavior: discover the installed Harness.  Development
+# Harness is launched explicitly from its own shortcut when it is the product
+# under test; silently overriding the provider here makes a healthy installed
+# release invisible and turns a missing development Host into a 30-second
+# probe on every Bot refresh.
+$env:RUIJIE_HARNESS_EXECUTABLE = $null
+$env:RUIJIE_HARNESS_ARGUMENTS = $null
+$env:RUIJIE_HARNESS_HOME = $null
+$env:RUIJIE_HARNESS_USER_DATA_DIR = $null
 
 function Set-NodeSystemProxy {
   # Node's fetch does not use the Windows proxy unless env-proxy support is

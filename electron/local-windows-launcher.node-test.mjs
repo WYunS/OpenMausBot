@@ -37,6 +37,8 @@ test("the development desktop owns the credential-aware server and Vite stays ex
   assert.match(source, /127\.0\.0\.1,localhost,::1/);
   assert.doesNotMatch(source, /\$env:OMB_DESKTOP_PARENT\s*=\s*\$null/);
   assert.doesNotMatch(source, /\$env:OMB_USER_DATA\s*=.*'锐捷Bot'/);
+  assert.doesNotMatch(source, /D:\\ChatGPT\\RuijieDSH/);
+  assert.match(source, /\$env:RUIJIE_HARNESS_EXECUTABLE\s*=\s*\$null/);
 });
 
 test("a second desktop launch reaches Electron so it can restore the existing window", async () => {

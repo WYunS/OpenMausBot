@@ -182,6 +182,22 @@ describe("ProviderRegistry", () => {
     expect(refreshes).toEqual({ a: 2, b: 2 });
   });
 
+  it("can describe only the explicitly refreshed instance", async () => {
+    const fake = makeFakeDriver();
+    const registry = new ProviderRegistry([fake.driver]);
+    await registry.load({ a: { driver: "fake" }, b: { driver: "fake" } });
+    let unrelatedSnapshots = 0;
+    Object.assign(registry.get("b")!, {
+      snapshot: async () => {
+        unrelatedSnapshots += 1;
+        return { state: "available" as const };
+      },
+    });
+
+    expect((await registry.describe(["a"])).map((row) => row.instanceId)).toEqual(["a"]);
+    expect(unrelatedSnapshots).toBe(0);
+  });
+
   it("disposeAll disposes every live instance and empties the registry", async () => {
     const fake = makeFakeDriver();
     const registry = new ProviderRegistry([fake.driver]);

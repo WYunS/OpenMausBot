@@ -211,6 +211,7 @@ export function createRuijieSsoAccountService({
   const redirectUri = `http://localhost:${port}${CALLBACK_PATH}`;
   let phase = null;
   let cached = null;
+  let accountGeneration = 0;
   let transition = Promise.resolve();
   const serialize = (work) => {
     const next = transition.then(work, work);
@@ -265,15 +266,27 @@ export function createRuijieSsoAccountService({
       return ruijieAccountIdentity(valid.accessToken);
     }
   };
+  const enrichInBackground = (current) => {
+    const generation = accountGeneration;
+    void summary(current).then((value) => {
+      if (generation === accountGeneration) cached = value;
+    }).catch(() => {});
+  };
   const stateWork = async () => {
     if (phase) return phase;
     const current = tokens();
     if (!current) return publicState("signed-out");
+    if (jwtExpiresAt(current.accessToken) > now() + REFRESH_SKEW_MS) {
+      cached ??= ruijieAccountIdentity(current.accessToken);
+      enrichInBackground(current);
+      return publicState("ready", { summary: cached });
+    }
     try {
       cached = await summary(current);
       return publicState("ready", { summary: cached });
     } catch (cause) {
       if (cause instanceof SessionRejectedError) {
+        accountGeneration += 1;
         await clearTokens();
         cached = null;
         return publicState("signed-out", { message: "登录已过期，请重新登录" });
@@ -304,7 +317,14 @@ export function createRuijieSsoAccountService({
         const next = { accessToken: ownText(payload, "access_token"), refreshToken: ownText(payload, "refresh_token") };
         if (!next.accessToken || !next.refreshToken) throw new Error("GPTAuth 登录未返回完整会话");
         await saveTokens(next);
-        cached = await summary(next);
+        // Authentication is complete once the tokens are durably stored.
+        // Usage/subscription are supplemental and can each sit behind a
+        // 30-second network timeout; never keep the login screen waiting for
+        // them. A focus refresh or the normal account poll will pick up the
+        // richer cached summary when it is ready.
+        accountGeneration += 1;
+        cached = ruijieAccountIdentity(next.accessToken);
+        enrichInBackground(next);
         phase = null;
         return publicState("ready", { summary: cached });
       } catch (cause) {
@@ -314,6 +334,7 @@ export function createRuijieSsoAccountService({
     }),
     signOut: () => serialize(async () => {
       const current = tokens();
+      accountGeneration += 1;
       await clearTokens();
       cached = null;
       phase = null;

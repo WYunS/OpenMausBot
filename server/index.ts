@@ -8022,9 +8022,9 @@ function persistMcpServers(next: Record<string, unknown>): void {
   cfg.mcpServers = next;
 }
 
-async function describeInstances() {
+async function describeInstances(instanceId?: string) {
   const configs = instanceConfigs(cfg);
-  return (await registry.describe()).map((instance) => {
+  return (await registry.describe(instanceId ? [instanceId] : undefined)).map((instance) => {
     const entry = configs[instance.instanceId];
     if (entry?.driver !== "claudeAgent") return instance;
     try {
@@ -11648,19 +11648,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             return json(res, 409, { error: "delete this bot's Local VM from its Computer panel before deleting the bot" });
           }
         }
-        // VPS containers are also durable and may outlive a destination or
-        // backend switch. Keep the bot as the discoverable owner until the
-        // person explicitly removes that container from Settings.
-        const vpsInventory = await vps.listManagedVpsComputers(cfg, managedBoxOwners());
-        if (vpsInventory.configured && !vpsInventory.available) {
-          return json(res, 503, {
-            error: `${vpsInventory.problem ?? "VPS computer inventory is unavailable"}. Refresh Settings → Computers before deleting this bot`,
-          });
-        }
-        if (vpsInventory.instances.some((instance) => instance.ownerBotId === bot.id)) {
-          return json(res, 409, {
-            error: "remove this bot's VPS computer from Settings → Computers before deleting the bot",
-          });
+        // A remembered VPS backend is durable ownership evidence even if the
+        // bot is currently Off. A bot that has never selected VPS must not
+        // wait on an unrelated, unreachable account-wide SSH alias.
+        if (bot.cloudBackend === "vps") {
+          const vpsInventory = await vps.listManagedVpsComputers(cfg, managedBoxOwners());
+          if (vpsInventory.configured && !vpsInventory.available) {
+            return json(res, 503, {
+              error: `${vpsInventory.problem ?? "VPS computer inventory is unavailable"}. Refresh Settings → Computers before deleting this bot`,
+            });
+          }
+          if (vpsInventory.instances.some((instance) => instance.ownerBotId === bot.id)) {
+            return json(res, 409, {
+              error: "remove this bot's VPS computer from Settings → Computers before deleting the bot",
+            });
+          }
         }
         // LIST is eventually consistent, and a remembered Box may also have
         // been renamed outside OpenMausBot. The create journal is stronger
@@ -12943,7 +12945,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       try {
         if (action === "refresh-models") {
           if (!(await registry.refreshModels(instanceId))) return json(res, 404, { error: "unknown instance" });
-          return json(res, 200, { instances: await describeInstances() });
+          return json(res, 200, { instances: await describeInstances(instanceId), partial: true });
         }
         if (action === "install") {
           if (!(await registry.installRuntime(instanceId))) return json(res, 404, { error: "managed installation is unavailable" });

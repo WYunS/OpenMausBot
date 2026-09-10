@@ -177,7 +177,7 @@ export class ProviderRegistry {
   }
 
   /** instance snapshots for the model picker: id, driver, models, health */
-  async describe() {
+  async describe(instanceIds?: readonly InstanceId[]) {
     // Multiple instances may share a driver. Scan each default binary once
     // per response instead of repeating filesystem work for every row.
     const candidatesByName = new Map<string, string[]>();
@@ -190,8 +190,9 @@ export class ProviderRegistry {
       candidatesByName.set(name, found);
       return found;
     };
+    const selected = instanceIds ? new Set(instanceIds) : undefined;
     return Promise.all(
-      this.entries().map(async (entry) => {
+      this.entries().filter((entry) => !selected || selected.has(entry.instanceId)).map(async (entry) => {
         const driver = this.driversByKind.get(entry.shadow?.driverKind ?? entry.live!.driverKind);
         if (entry.shadow) {
           return {

@@ -716,6 +716,7 @@ export type Action =
   | { type: "deleteGroupTask"; groupId: string; threadId: string }
   | { type: "interruptGroup"; groupId: string; threadId?: string; onError?: () => void }
   | { type: "instances"; instances: InstanceInfo[] }
+  | { type: "instancesUpsert"; instances: InstanceInfo[] }
   | { type: "ruijieSnapshot"; snapshot: InstanceInfo["snapshot"] }
   | { type: "configStatus"; config: ConfigStatus }
   | { type: "select"; id: string }
@@ -1041,6 +1042,12 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     case "instances":
       return { ...state, instances: action.instances };
+    case "instancesUpsert": {
+      const updates = new Map(action.instances.map((instance) => [instance.instanceId, instance]));
+      const existing = state.instances.map((instance) => updates.get(instance.instanceId) ?? instance);
+      const known = new Set(state.instances.map((instance) => instance.instanceId));
+      return { ...state, instances: [...existing, ...action.instances.filter((instance) => !known.has(instance.instanceId))] };
+    }
     case "ruijieSnapshot":
       return { ...state, instances: mergeRuijieHarnessSnapshot(state.instances, action.snapshot) };
     case "configStatus":
@@ -2942,7 +2949,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const { instances } = await api(`/api/instances/${encodeURIComponent(instanceId)}/refresh-models`, {
       method: "POST",
     });
-    rawDispatch({ type: "instances", instances });
+    rawDispatch({ type: "instancesUpsert", instances });
   }, []);
 
   const refreshRuijieHarness = useCallback(async () => {

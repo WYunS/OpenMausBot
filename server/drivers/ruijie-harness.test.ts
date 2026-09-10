@@ -185,10 +185,10 @@ describe("Ruijie Harness driver", () => {
     expect(compatibleHarnessEffort("high", [])).toBeUndefined();
   });
 
-  it("keeps catalog refresh passive so startup cannot launch Harness", async () => {
+  it("lets an explicit catalog refresh launch Harness on demand", async () => {
     const source = await readFile(new URL("./ruijie-harness.ts", import.meta.url), "utf8");
     const refreshModels = source.match(/const refreshModels = async \(\) => \{[\s\S]*?\n    \};/u)?.[0];
-    expect(refreshModels).toContain("resolveEndpoint(input.config, false)");
+    expect(refreshModels).toContain("resolveEndpoint(input.config, true)");
   });
 
   it("reports the same SSO identity and wallet as the running Harness", async () => {

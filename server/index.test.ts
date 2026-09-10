@@ -1736,6 +1736,17 @@ describe("harness HTTP API", () => {
     }));
   });
 
+  it("returns only the requested provider after an explicit model refresh", async () => {
+    const refreshed = await api("POST", "/api/instances/claude/refresh-models", {});
+    expect(refreshed.status).toBe(200);
+    expect(refreshed.body.partial).toBe(true);
+    expect(refreshed.body.instances).toHaveLength(1);
+    expect(refreshed.body.instances[0]).toMatchObject({
+      instanceId: "claude",
+      driverKind: "claudeAgent",
+    });
+  });
+
   it("searches transcripts and exports a conversation", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
     // every new bot opens with a seeded greeting — a known searchable string
@@ -7158,6 +7169,25 @@ describe("harness HTTP API", () => {
     const invalid = await api("PATCH", `/api/bots/${bot.id}`, { cloudBackend: "daytona" });
     expect(invalid.status).toBe(400);
     expect((await api("PATCH", "/api/config", { vps: { sshAlias: "" } })).status).toBe(200);
+  });
+
+  it("deletes an Off bot without probing an unrelated configured VPS", async () => {
+    let botId = "";
+    try {
+      expect((await api("PUT", "/api/config", { vps: { sshAlias: "unreachable-vps" } })).status).toBe(200);
+      const created = await api("POST", "/api/bots");
+      botId = created.body.bot.id;
+      expect((await api("PATCH", `/api/bots/${botId}`, { computer: "off" })).status).toBe(200);
+      rmSync(fakeDockerLog, { force: true });
+
+      const deleted = await api("DELETE", `/api/bots/${botId}`);
+      expect(deleted.status).toBe(200);
+      expect(existsSync(fakeDockerLog)).toBe(false);
+      botId = "";
+    } finally {
+      if (botId) await api("DELETE", `/api/bots/${botId}`).catch(() => undefined);
+      await api("PATCH", "/api/config", { vps: { sshAlias: "" } });
+    }
   });
 
   it("rejects the disabled Ruijie sandbox at every public configuration boundary", async () => {

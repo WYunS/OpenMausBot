@@ -281,6 +281,7 @@ export function ModelPicker({
     ?? (active?.driverKind === "claudeAgent" ? active : claudeAccounts[0]);
   const railInstance =
     state.instances.find((instance) => instance.instanceId === (railId ?? selection.instanceId)) ?? state.instances[0];
+  const railDriverKind = railInstance?.driverKind;
 
   const refreshLocalInstances = useCallback(() => {
     if (refreshingRef.current) return;
@@ -301,8 +302,7 @@ export function ModelPicker({
     refreshingRef.current = true;
     setRefreshing(true);
     const instanceId = railId ?? selection.instanceId;
-    void refreshInstances()
-      .then(() => refreshInstanceModels(instanceId))
+    void refreshInstanceModels(instanceId)
       .catch(() => {
         // Keep the last known catalog when the app is temporarily offline.
       })
@@ -310,11 +310,13 @@ export function ModelPicker({
         refreshingRef.current = false;
         setRefreshing(false);
       });
-  }, [railId, refreshInstanceModels, refreshInstances, selection.instanceId]);
+  }, [railId, refreshInstanceModels, selection.instanceId]);
 
   useEffect(() => {
-    if (open) refreshLocalInstances();
-  }, [open, refreshLocalInstances]);
+    if (!open) return;
+    if (railDriverKind === "ruijieHarness") refreshModels();
+    else refreshLocalInstances();
+  }, [open, railDriverKind, refreshLocalInstances, refreshModels]);
 
   useEffect(() => {
     if (bot.busy) setOpen(false);

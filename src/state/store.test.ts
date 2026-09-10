@@ -20,6 +20,30 @@ import {
 import { openLiveEvents, type LiveEventSourceLike, type LiveEventsPlatform } from "../lib/live-events";
 import type { RoutineRun } from "../lib/routines";
 
+describe("partial provider refresh", () => {
+  it("updates only the refreshed Harness row and preserves every other engine", () => {
+    const codex = {
+      instanceId: "codex", driverKind: "codex", displayName: "Codex", enabled: true,
+      snapshot: { state: "available" as const }, models: { default: "gpt", options: [] },
+    };
+    const harness = {
+      instanceId: "ruijieHarness", driverKind: "ruijieHarness", displayName: "锐捷 Harness", enabled: true,
+      snapshot: { state: "unavailable" as const }, models: { default: "flash", options: [] },
+    };
+    const refreshed = {
+      ...harness,
+      snapshot: { state: "available" as const },
+      models: { default: "flash", options: [{ id: "flash", label: "DeepSeek-V4-Flash" }] },
+    };
+
+    const next = reducer({ ...initialState, instances: [codex, harness] }, {
+      type: "instancesUpsert",
+      instances: [refreshed],
+    });
+    expect(next.instances).toEqual([codex, refreshed]);
+  });
+});
+
 describe("independent bot threads", () => {
   const bot: Bot = {
     id: "thread-bot", threadId: "first", name: "Maus", title: "Helper", description: "",

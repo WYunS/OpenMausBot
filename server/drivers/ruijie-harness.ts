@@ -575,7 +575,10 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
     };
 
     const refreshModels = async () => {
-      const endpoint = await resolveEndpoint(input.config, false);
+      // Refresh is an explicit user action (opening/refreshing the Harness
+      // rail), unlike passive fleet snapshots during Bot startup. It may
+      // therefore start the installed headless Host on demand.
+      const endpoint = await resolveEndpoint(input.config, true);
       await matchingSsoSummary(endpoint, input.config.expectedAccountEmail);
       await updateModelCatalog(endpoint);
     };
