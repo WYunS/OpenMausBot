@@ -22,7 +22,7 @@ struct TaskManagerView: View {
 
     private var tasks: [BotTask] {
         switch current {
-        case let .bot(bot): return bot.tasks ?? []
+        case let .bot(bot): return bot.visibleTasks
         case let .room(room): return room.tasks ?? []
         }
     }
@@ -58,6 +58,11 @@ struct TaskManagerView: View {
                                     Text(RelativeStamp.list(task.createdAt))
                                         .font(.caption)
                                         .foregroundStyle(Color.secondary)
+                                    if let openedBy = task.openedByLabel {
+                                        Text(verbatim: openedBy)
+                                            .font(.caption)
+                                            .foregroundStyle(Color.secondary)
+                                    }
                                 }
                                 Spacer()
                                 if task.threadId == current.threadId {

@@ -12,7 +12,7 @@ const button = "rounded-md p-1.5 text-ink-secondary hover:bg-inset hover:text-in
 
 /** Closing a panel releases its lease. A new connection never silently
  * restores permission to type, and never replays old browser frames. */
-function LiveBrowser({ bot }: { bot: Bot }) {
+export function LiveBrowser({ bot }: { bot: Bot }) {
   const { state } = useStore();
   const [attempt, setAttempt] = useState(0);
   const [frame, setFrame] = useState<BrowserFrame | null>(null);
@@ -27,6 +27,7 @@ function LiveBrowser({ bot }: { bot: Bot }) {
   const [viewport, setViewport] = useState({ width: 1280, height: 720 });
   const viewer = useRef("");
   const panel = useRef<HTMLDivElement>(null);
+  const addressInput = useRef<HTMLInputElement>(null);
   const profilesDialog = useRef<HTMLDialogElement>(null);
   const typingDialog = useRef<HTMLDialogElement>(null);
   const inputQueue = useRef<ReturnType<typeof createBrowserInputQueue> | null>(null);
@@ -76,9 +77,13 @@ function LiveBrowser({ bot }: { bot: Bot }) {
       if (data.held && !data.controlling) { setFrame(null); setTabs([]); setAddress(""); }
     });
     source.addEventListener("error", (event) => {
+      // A closed source may still deliver its queued error after a profile
+      // switch or reconnect. It must not clear the replacement viewer/input.
+      if (stopped) return;
+      stopped = true;
       let message = t("browser.live.connectionEnded");
       if (event instanceof MessageEvent) { try { message = JSON.parse(event.data).message || message; } catch { /* Network error fallback. */ } }
-      if (!stopped) { setError(message); setConnected(false); setFrame(null); setControl({ held: false, controlling: false, owned: false }); }
+      setError(message); setConnected(false); setFrame(null); setControl({ held: false, controlling: false, owned: false });
       viewer.current = ""; inputQueue.current?.clear(); source.close();
     });
     return () => { stopped = true; viewer.current = ""; inputQueue.current?.clear(); source.close(); };
@@ -111,9 +116,10 @@ function LiveBrowser({ bot }: { bot: Bot }) {
         <button type="button" className={button} disabled={!driving} aria-label={t("browser.live.forward")} onClick={() => void execute({ type: "forward" })}><ArrowRight size={17} /></button>
         <button type="button" className={button} disabled={!driving} aria-label={t("browser.live.reload")} onClick={() => void execute({ type: "reload" })}><RotateCw size={17} /></button>
       </div>
-      <input aria-label={t("browser.live.address")} readOnly={!driving} value={address} onChange={(e) => setAddress(e.target.value)} onFocus={(e) => { urlEditing.current = true; if (driving) e.target.select(); }} onBlur={() => { urlEditing.current = false; }} placeholder={connected ? "about:blank" : t("browser.live.connecting")} spellCheck={false} className="mx-1 min-w-0 flex-1 rounded-lg bg-transparent px-2 py-1.5 text-center text-[12px] outline-none placeholder:text-ink-secondary focus:bg-inset focus:text-left" />
-      <button type="button" disabled={!connected || pending || (control.held && !control.owned)} onClick={() => void execute({ type: control.owned ? "release" : "take" })} title={control.owned ? t("browser.live.returnHint") : control.held ? t("browser.live.controlledElsewhere") : t("browser.live.takeHint")} aria-label={control.owned ? t("browser.live.return") : t("browser.live.take")} aria-pressed={control.owned} className={`${button} ${control.owned ? "bg-accent/15 text-accent" : ""}`}>
-        {pending ? <Loader2 size={16} className="animate-spin" /> : <Hand size={16} />}
+      <input ref={addressInput} aria-label={t("browser.live.address")} readOnly={!driving} value={address} onChange={(e) => setAddress(e.target.value)} onFocus={(e) => { urlEditing.current = true; if (driving) e.target.select(); }} onBlur={() => { urlEditing.current = false; }} placeholder={connected ? "about:blank" : t("browser.live.connecting")} spellCheck={false} className="mx-1 min-w-0 flex-1 rounded-lg bg-transparent px-2 py-1.5 text-center text-[12px] outline-none placeholder:text-ink-secondary focus:bg-inset focus:text-left" />
+      <button type="button" disabled={!connected || pending || (control.held && !control.owned)} onClick={() => void execute({ type: control.owned ? "release" : "take" })} title={control.owned ? t("browser.live.returnHint") : control.held ? t("browser.live.controlledElsewhere") : t("browser.live.takeHint")} aria-label={control.owned ? t("browser.live.return") : t("browser.live.take")} aria-pressed={control.owned} className={`${button} flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px] sm:text-[12px] ${control.owned ? "bg-accent/15 text-accent" : ""}`}>
+        {pending ? <Loader2 size={16} className="animate-spin" /> : <Hand size={16} className="hidden sm:block" />}
+        <span>{control.owned ? t("browser.live.return") : t("browser.live.take")}</span>
       </button>
       <details className="relative shrink-0">
         <summary className={`${button} list-none cursor-pointer [&::-webkit-details-marker]:hidden`} aria-label={t("browser.live.menu")} title={t("browser.live.menu")}><EllipsisVertical size={17} /></summary>
@@ -131,6 +137,7 @@ function LiveBrowser({ bot }: { bot: Bot }) {
     {error && <div role="alert" className="flex items-center justify-between gap-2 border-b border-hairline/30 px-3 py-2 text-[12px] text-danger"><span>{error}</span>{!connected && <button className="shrink-0 underline" onClick={() => setAttempt((value) => value + 1)}>{t("browser.live.reconnect")}</button>}</div>}
     <div className="min-h-48 flex-1 overflow-auto bg-inset/40">
       {frame ? <BrowserViewport frame={frame} {...viewport} driving={driving} input={input}
+        onReturnToToolbar={() => addressInput.current?.focus()}
         acknowledge={(seq) => { if (viewer.current) void action({ type: "ack", seq }).catch(() => {}); }}
         onDecodeError={() => setError(t("browser.live.decodeError"))} />
         : <div className="flex min-h-64 flex-col items-center justify-center gap-3 p-6 text-center text-[13px] text-ink-secondary">{connected && control.held ? <Hand size={24} /> : error ? <Globe size={24} /> : <Loader2 size={24} className="animate-spin" />}<span>{control.held ? t("browser.live.paused") : error ? t("browser.live.disconnected") : t("browser.live.opening")}</span></div>}

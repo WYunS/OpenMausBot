@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Menu } from "lucide-react";
 import { StoreProvider, useStore } from "@/state/store";
+import { ThreadRefsProvider } from "@/components/ThreadRefs";
 import { Onboarding } from "@/components/Onboarding";
 import { initAnalytics } from "@/lib/analytics";
 import { Sidebar } from "@/components/Sidebar";
@@ -20,9 +21,7 @@ import { NoEngines } from "@/components/NoEngines";
 import { CommandPalette } from "@/components/CommandPalette";
 import { KeyboardShortcutsModal } from "@/components/KeyboardShortcutsModal";
 import { LocalVmWorkspace } from "@/components/LocalVmWorkspace";
-import { SkillRecorderPage } from "@/components/SkillRecorderPage";
 import { TeamMapPage } from "@/components/TeamMapPage";
-import { skillRecorderEnabled } from "@/lib/feature-flags";
 import { setLocale } from "@/lib/i18n";
 import { RuijieAccountProvider, useRuijieAccount } from "@/state/ruijie-account";
 import { shouldOpenKeyboardShortcuts } from "@/lib/keyboard-shortcuts";
@@ -55,7 +54,7 @@ function Shell() {
   // the panel hands off to this and back)
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const previousViewRef = useRef(state.activeView);
-  const calendarOriginRef = useRef<"chat" | "team-map" | "skill-recorder">("chat");
+  const calendarOriginRef = useRef<"chat" | "team-map">("chat");
   const group = state.groups.find((g) => g.id === state.selectedId);
   const bot = group ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0]);
   const calendarFocus = state.activeView === "routines";
@@ -159,12 +158,8 @@ function Shell() {
       dispatch({ type: "showTeamMap" });
       return;
     }
-    if (calendarOriginRef.current === "skill-recorder" && skillRecorderEnabled(state.config)) {
-      dispatch({ type: "showSkillRecorder" });
-      return;
-    }
     dispatch({ type: "select", id: state.selectedId });
-  }, [dispatch, state.config, state.selectedId]);
+  }, [dispatch, state.selectedId]);
   const openCalendarRoom = useCallback((id: string) => {
     dispatch({ type: "select", id });
   }, [dispatch]);
@@ -235,8 +230,6 @@ function Shell() {
         <TeamMapPage />
       ) : state.activeView === "routines" ? (
         <RoutinesPage onBack={closeCalendar} onOpenRoom={openCalendarRoom} />
-      ) : !remoteClient && state.activeView === "skill-recorder" ? (
-        <SkillRecorderPage />
       ) : !remoteClient && localVmWorkspaceBotId ? (
         <LocalVmWorkspace
           primaryBotId={localVmWorkspaceBotId}
@@ -279,7 +272,7 @@ function Shell() {
           />
         )
       )}
-      {!remoteClient && state.inspectorOpen && bot && <InspectorPanel bot={bot} />}
+      {!remoteClient && state.inspectorOpen && bot && <InspectorPanel key={bot.threadId} bot={bot} />}
       {state.appSettingsOpen && <SettingsModal />}
       {state.pluginsOpen && <PluginsPanel />}
       {state.shortcutsOpen && (
@@ -312,7 +305,9 @@ export default function App() {
     <DesktopCapabilitiesProvider>
       <StoreProvider>
         <RuijieAccountProvider>
-          <Shell />
+          <ThreadRefsProvider>
+            <Shell />
+          </ThreadRefsProvider>
           <AccountGate />
         </RuijieAccountProvider>
       </StoreProvider>

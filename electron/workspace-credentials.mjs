@@ -13,6 +13,7 @@ export const WORKSPACE_CREDENTIALS = [
   { section: "ruijieSandbox", field: "requestJson", name: "ruijieSandboxRequestJson", env: "OMB_RUIJIE_SANDBOX_REQUEST_JSON" },
   { section: "tts", field: "key", name: "ttsKey", env: "OMB_TTS_KEY" },
   { section: "imageGen", field: "key", name: "openaiImageApiKey", env: "OMB_OPENAI_IMAGE_KEY" },
+  { section: "imageGen", field: "customApiKey", name: "customImageApiKey", env: "OMB_CUSTOM_IMAGE_KEY" },
   { section: "opencodeGo", field: "apiKey", name: "opencodeGoApiKey", env: "OPENCODE_API_KEY" },
 ];
 

@@ -33,7 +33,6 @@ import { currentCall } from "@/lib/call";
 import { showNotification, type NotificationTarget } from "@/lib/notify";
 import { speaker } from "@/lib/tts";
 import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
-import { skillRecorderEnabled } from "@/lib/feature-flags";
 import { openLiveEvents } from "@/lib/live-events";
 import { mergeRuijieHarnessSnapshot } from "@/lib/engine-availability";
 
@@ -128,8 +127,9 @@ export interface Message {
   channelMode?: "chat" | "goal";
   /** activity messages: tool name + outcome. `spoken` is the server's
    * narration of the same chip ("reading a file"), used by call mode. */
-  /** `setup` marks an error fixed by installing something, not by retrying. */
-  tool?: { name: string; ok?: boolean; spoken?: string; setup?: boolean };
+  /** `setup` marks an error fixed by installing something, not by retrying.
+   * `summary` is the call's input on one redacted line (the shell command). */
+  tool?: { name: string; ok?: boolean; spoken?: string; setup?: boolean; summary?: string };
   /** user messages sent into a running turn — the model saw it mid-turn */
   steered?: boolean;
   /** a user message that arrived through the server's API, not typed here */
@@ -155,6 +155,8 @@ export interface Message {
   reactions?: Array<{ emoji: string; by: string }>;
   /** comm chips: "Messaged @X" linking to the bot⇄bot channel. */
   comm?: { groupId: string; withBotId: string; withName: string; withColor: MausColor };
+  /** thread chips: "Opened thread #Title on Bot" linking to that thread */
+  threadRef?: { botId: string; threadId: string; title: string };
   /** sent while the bot was mid-turn; auto-sends when the turn settles.
    * Rendered only while the bot is busy, so a flag stranded by a server
    * restart never shows a promise nothing will keep. */
@@ -223,6 +225,8 @@ export interface ModelSelection {
  * provider session. The bot's threadId points at the active one. */
 export interface Task {
   threadId: string;
+  /** Internal routine execution; reachable through its run receipt, not history menus. */
+  routineRunId?: string;
   projectId?: string;
   title: string;
   createdAt: number;
@@ -239,6 +243,17 @@ export interface Task {
   busy?: boolean;
   unread?: boolean;
   pinnedMessageId?: string;
+  /** set when a bot (not the person) started this thread — its own or a
+   * teammate's; the sidebar shows a quiet "opened by <name>" under the title */
+  openedBy?: ThreadOpener;
+}
+
+/** The bot that opened a thread on itself or a teammate. */
+export interface ThreadOpener {
+  botId: string;
+  name: string;
+  delegationId?: string;
+  at: number;
 }
 
 export interface TaskUsage {
@@ -332,9 +347,10 @@ export interface Bot {
 export interface BotProject {
   id: string;
   name: string;
+  emoji?: string;
 }
 
-export type ProjectUpdatePatch = { name?: string };
+export type ProjectUpdatePatch = { name?: string; emoji?: string | null };
 
 /** A conversation uses its own execution settings; the sidebar keeps the
  * original bot's aggregate presence and profile defaults. */
@@ -395,11 +411,18 @@ export function messageVersions(bot: Bot, message: Message): Message[] {
 /** GET /api/config — configured flags only; secrets are never echoed. */
 export interface ConfigStatus {
   xai?: { configured: boolean };
+  anthropic?: { configured: boolean };
+  openaiCompat?: { configured: boolean; url?: string };
+  /** what this server is entitled to; Settings shows only what works here */
+  edition?: { edition: "oss" | "enterprise"; features: string[] };
+  budgets?: { monthlyUsd?: number; warnAtPercent?: number };
+  billing?: { currency?: string; prices?: Record<string, { inputPerMillion: number; outputPerMillion: number; cachedInputPerMillion?: number }> };
   composio: { configured: boolean; mode?: "managed" | "self-hosted" | "unavailable" };
   box: { configured: boolean };
   vps: { configured: boolean; sshAlias: string };
   ruijieSandbox?: { configured: boolean; managerUrl: string };
   rooms: { turnTimeoutMinutes: number };
+  threads?: { maxConcurrentPerBot: number };
   localVm: { mode: "shared" | "per-bot"; maxInstances: number };
   opencodeGo?: { configured: boolean };
   /** Voice (ElevenLabs). `configured` = a key is saved; `ready` = a key AND
@@ -407,13 +430,22 @@ export interface ConfigStatus {
    * never echoed back. */
   tts?: { configured: boolean; ready: boolean; voice: string; provider?: "elevenlabs" | "system" };
   /** Shared write-only credential for on-demand GPT Image avatars. */
-  imageGen?: { configured: boolean };
+  imageGen?: {
+    configured: boolean;
+    provider?: "openai" | "xai" | "custom";
+    model?: string;
+    customUrl?: string;
+    customModel?: string;
+    openaiConfigured?: boolean;
+    xaiConfigured?: boolean;
+    customKeyConfigured?: boolean;
+  };
   /** who's using the app — collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string };
   /** UI language override; "" (or absent) follows the system language. */
   language?: string;
   /** Opt-in flags. Absent means off. */
-  features?: { skillRecorder: boolean; showToolCalls?: boolean; browser?: boolean };
+  features?: { skillAuthoring: boolean; showToolCalls?: boolean; browser?: boolean };
   /** Which browser this server can give bots: the desktop app's surface, the
    * agent-browser engine, or nothing yet (with the reason). */
   browserEngine?: BrowserEngineSummary;
@@ -440,17 +472,23 @@ export interface BrowserProfile {
 
 export type ConfigStatusFrame = Pick<
   ConfigStatus,
-  "xai" | "composio" | "box" | "vps" | "ruijieSandbox" | "rooms" | "localVm" | "opencodeGo" | "tts" | "imageGen" | "profile" | "language" | "features" | "browserEngine" | "browserProfiles"
+  "xai" | "anthropic" | "openaiCompat" | "edition" | "budgets" | "billing" | "composio" | "box" | "vps" | "ruijieSandbox" | "rooms" | "threads" | "localVm" | "opencodeGo" | "tts" | "imageGen" | "profile" | "language" | "features" | "browserEngine" | "browserProfiles"
 >;
 
 export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
   return {
     xai: frame.xai,
+    anthropic: frame.anthropic,
+    openaiCompat: frame.openaiCompat,
+    edition: frame.edition,
+    budgets: frame.budgets,
+    billing: frame.billing,
     composio: frame.composio,
     box: frame.box,
     vps: frame.vps,
     ruijieSandbox: frame.ruijieSandbox,
     rooms: frame.rooms,
+    threads: frame.threads,
     localVm: frame.localVm,
     opencodeGo: frame.opencodeGo,
     tts: frame.tts,
@@ -472,6 +510,8 @@ export interface EngineInstall {
   signInCommand?: string;
   needsNode?: boolean;
   managed?: { label: string; downloadBytes: number };
+  /** the server can install or update this engine itself, no terminal */
+  server?: { package: string };
 }
 
 /** One row of GET /api/instances — the model picker's data. */
@@ -486,7 +526,7 @@ export interface InstanceInfo {
     state: "available" | "unavailable";
     reason?: string;
     authenticated?: boolean;
-    account?: { email?: string; organization?: string };
+    account?: { email?: string; organization?: string; method?: "login" | "api-key" };
     version?: string | null;
     /** A newer provider version unlocks capabilities, but this installed
      * version and its current models remain usable. */
@@ -521,7 +561,8 @@ export interface InstanceInfo {
   };
   /** `custom` agents sit below the rail divider — no subscription catalog. */
   access?: "subscription" | "custom";
-  authentication?: { method: "device-code" | "paste-code" | "browser" };
+  /** `signOut`: the browser may remove the stored sign-in to switch accounts. */
+  authentication?: { method: "device-code" | "paste-code" | "browser"; signOut?: boolean };
   install?: EngineInstall;
   /** Configured CLI path override — set ONLY when the user overrode it;
    * absent means the driver default is in effect. */
@@ -536,6 +577,7 @@ export interface InstanceInfo {
 
 export type AppSettingsSection =
   | "general"
+  | "appearance"
   | "experimental"
   | "connections"
   | "engines"
@@ -565,7 +607,7 @@ export interface AppState {
   config: ConfigStatus | null;
   /** selected chat — a bot id OR a group id */
   selectedId: string;
-  activeView: "chat" | "team-map" | "routines" | "skill-recorder";
+  activeView: "chat" | "team-map" | "routines";
   routines: Routine[];
   routineRuns: RoutineRun[];
   routinesLoadState: "loading" | "ready" | "error";
@@ -598,6 +640,11 @@ export interface AppState {
   focusMessage: { threadId: string; messageId: string; nonce: number; consumed: boolean } | null;
   connected: boolean;
   error: string | null;
+  /** a quiet, non-error line above the transcript; clears itself */
+  notice: { kind: "thread-gone"; botName: string | null } | null;
+  /** a thread the person asked to open (chip or #Title link): the sidebar
+   * expands its bot and scrolls the row into view once it is current */
+  revealThread: { threadId: string; nonce: number } | null;
   mascotMotion: {
     botId: string;
     nonce: number;
@@ -605,7 +652,7 @@ export interface AppState {
   } | null;
   /** Queued follow-up lines waiting for drain; keyed by threadId.
    * Each entry is identified by the server queueId, not by text. */
-  pendingQueued: Record<string, Array<{ queueId: string; text: string }>>;
+  pendingQueued: Record<string, Array<{ queueId: string; text: string; reason?: "capacity" }>>;
   /** queueIds whose drain frame beat the POST continuation. One-shot and
    * bounded to a short event window so other clients cannot grow it forever. */
   consumedQueueIds: Record<string, true>;
@@ -654,12 +701,34 @@ function reconcileSnapshotQueues(
     if (waiting.length > 0) pendingQueued[threadId] = waiting;
   }
 
-  let consumedQueueIds = state.consumedQueueIds;
+  let consumedQueueIds: AppState["consumedQueueIds"] = {};
   // Preserve the newest receipts when a large historical snapshot contains
   // more than the bounded tombstone window.
   landed.sort((left, right) => left.at - right.at);
   for (const entry of landed) {
     consumedQueueIds = rememberConsumedQueueId(consumedQueueIds, entry.queueId);
+  }
+  // Live drain/cancel receipts are newer than loaded transcript history.
+  // Re-reading an old transcript must not evict protection for a late POST.
+  for (const queueId of Object.keys(state.consumedQueueIds)) {
+    consumedQueueIds = rememberConsumedQueueId(consumedQueueIds, queueId);
+  }
+  return { ...state, pendingQueued, consumedQueueIds };
+}
+
+/** Direct-bot queues are server-owned. Restore them on reload, keeping the
+ * separate group queue untouched. Remember removals so a late send response
+ * cannot resurrect a message another window already cancelled or drained. */
+function replaceBotQueues(state: AppState, queues: AppState["pendingQueued"]): AppState {
+  const groupThreads = new Set(state.groups.flatMap((group) => [group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)]));
+  const liveIds = new Set(Object.values(queues).flatMap((entries) => entries.map((entry) => entry.queueId)));
+  const pendingQueued = { ...queues };
+  let consumedQueueIds = state.consumedQueueIds;
+  for (const [threadId, entries] of Object.entries(state.pendingQueued)) {
+    if (groupThreads.has(threadId)) pendingQueued[threadId] = entries;
+    else for (const entry of entries) {
+      if (!liveIds.has(entry.queueId)) consumedQueueIds = rememberConsumedQueueId(consumedQueueIds, entry.queueId);
+    }
   }
   return { ...state, pendingQueued, consumedQueueIds };
 }
@@ -672,10 +741,11 @@ export type Action =
       bots: Bot[];
       groups: Group[];
       computerControl: Record<string, { held: boolean; helpReason: string | null }>;
+      botQueuedMessages?: AppState["pendingQueued"];
     }
+  | { type: "botQueues"; queues: AppState["pendingQueued"] }
   | { type: "showRoutines"; section?: "schedule" | "logs"; view?: "calendar" | "list"; botId?: string; routineId?: string }
   | { type: "showTeamMap" }
-  | { type: "showSkillRecorder" }
   | { type: "routinesHydrated"; routines: Routine[]; runs: RoutineRun[] }
   | { type: "routinesLoadFailed" }
   | { type: "routinePatched"; routine: Routine }
@@ -729,7 +799,7 @@ export type Action =
       threadId?: string;
       onError?: () => void;
     }
-  | { type: "pendingQueued"; threadId: string; queueId: string; text: string }
+  | { type: "pendingQueued"; threadId: string; queueId: string; text: string; reason?: "capacity" }
   | { type: "consumePendingQueued"; threadId: string; queueId: string }
   | { type: "cancelQueued"; botId: string; queueId: string; threadId?: string }
   | { type: "cancelGroupQueued"; groupId: string; threadId: string; queueId: string }
@@ -759,9 +829,10 @@ export type Action =
   | { type: "renameTask"; botId: string; threadId: string; title: string }
   | { type: "deleteTask"; botId: string; threadId: string }
   | { type: "updateTask"; botId: string; threadId: string; patch: TaskUpdatePatch }
-  | { type: "createProject"; botId: string; name: string; onCreated?: (project: BotProject) => void; onError?: () => void }
-  | { type: "updateProject"; botId: string; projectId: string; patch: ProjectUpdatePatch }
-  | { type: "deleteProject"; botId: string; projectId: string }
+  | { type: "createProject"; botId: string; name: string; emoji?: string | null; onCreated?: (project: BotProject) => void; onError?: (message: string) => void }
+  | { type: "updateProject"; botId: string; projectId: string; patch: ProjectUpdatePatch; onSaved?: () => void; onError?: (message: string) => void }
+  | { type: "deleteProject"; botId: string; projectId: string; onDeleted?: () => void; onError?: (message: string) => void }
+  | { type: "reorderProjects"; botId: string; projectIds: string[]; onSaved?: () => void; onError?: (message: string) => void }
   | { type: "newBot" }
   | { type: "botAdded"; bot: Bot }
   | { type: "deleteBot"; botId: string }
@@ -779,6 +850,8 @@ export type Action =
   | { type: "interrupt"; botId: string; threadId?: string; onError?: () => void }
   | { type: "connected"; value: boolean }
   | { type: "error"; message: string | null }
+  | { type: "notice"; notice: AppState["notice"] }
+  | { type: "revealThread"; threadId: string }
   | { type: "toggleSettings"; open?: boolean; section?: BotSettingsSection }
   | { type: "togglePlugins"; open?: boolean }
   | { type: "toggleComputer"; open?: boolean }
@@ -856,6 +929,40 @@ export function openNotificationTarget(
     bot.threadId === target.threadId ||
     (bot.tasks ?? []).some((task) => task.threadId === target.threadId);
   if (known) dispatch({ type: "switchTask", botId: bot.id, threadId: target.threadId });
+}
+
+/** A thread the person can open from a chip or a #Title link. */
+export interface ThreadTarget {
+  botId: string;
+  threadId: string;
+}
+
+interface ThreadOpeningState extends NotificationRoutingState {
+  bots: Array<NotificationThreadOwner & { name: string }>;
+}
+
+/** Open a thread the person clicked: select its bot (or room) and switch
+ * the VIEW to that thread — never the work; a turn running elsewhere keeps
+ * running (the #981 rule). The sidebar then reveals the row. A thread this
+ * client no longer knows (deleted, or not yet announced) falls back to the
+ * bot with a quiet notice rather than a 404 or a crash. Returns whether the
+ * thread was found. */
+export function openThread(
+  dispatch: (action: Action) => void,
+  target: ThreadTarget,
+  state: ThreadOpeningState,
+): boolean {
+  const owns = (owner: NotificationThreadOwner) =>
+    owner.threadId === target.threadId || (owner.tasks ?? []).some((task) => task.threadId === target.threadId);
+  if (state.groups.some(owns) || state.bots.some(owns)) {
+    openNotificationTarget(dispatch, target, state);
+    dispatch({ type: "revealThread", threadId: target.threadId });
+    return true;
+  }
+  const bot = state.bots.find((candidate) => candidate.id === target.botId);
+  if (bot) dispatch({ type: "select", id: bot.id });
+  dispatch({ type: "notice", notice: { kind: "thread-gone", botName: bot?.name ?? null } });
+  return false;
 }
 
 function updateBot(state: AppState, botId: string, fn: (b: Bot) => Bot): AppState {
@@ -936,18 +1043,21 @@ export function reducer(state: AppState, action: Action): AppState {
       const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id);
       const selectedId =
         state.selectedId && known(state.selectedId) ? state.selectedId : (action.bots[0]?.id ?? "");
+      const hydrated = {
+        ...state,
+        bots: action.bots,
+        groups: action.groups,
+        computerControl: action.computerControl,
+        selectedId,
+        backgroundThreadEvents: {},
+      };
       return reconcileSnapshotQueues(
-        {
-          ...state,
-          bots: action.bots,
-          groups: action.groups,
-          computerControl: action.computerControl,
-          selectedId,
-          backgroundThreadEvents: {},
-        },
+        action.botQueuedMessages ? replaceBotQueues(hydrated, action.botQueuedMessages) : hydrated,
         [...action.bots, ...action.groups],
       );
     }
+    case "botQueues":
+      return reconcileSnapshotQueues(replaceBotQueues(state, action.queues), [...state.bots, ...state.groups]);
     case "showRoutines":
       return {
         ...state,
@@ -963,17 +1073,6 @@ export function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         activeView: "team-map",
-        settingsOpen: false,
-        computerOpen: false,
-        inspectorOpen: false,
-        appSettingsOpen: false,
-        pluginsOpen: false,
-      };
-    case "showSkillRecorder":
-      if (!skillRecorderEnabled(state.config)) return state;
-      return {
-        ...state,
-        activeView: "skill-recorder",
         settingsOpen: false,
         computerOpen: false,
         inspectorOpen: false,
@@ -1051,14 +1150,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case "ruijieSnapshot":
       return { ...state, instances: mergeRuijieHarnessSnapshot(state.instances, action.snapshot) };
     case "configStatus":
-      return {
-        ...state,
-        config: action.config,
-        activeView:
-          state.activeView === "skill-recorder" && !skillRecorderEnabled(action.config)
-            ? "chat"
-            : state.activeView,
-      };
+      return { ...state, config: action.config };
     case "select": {
       if (state.groups.some((g) => g.id === action.id)) {
         return {
@@ -1353,11 +1445,6 @@ export function reducer(state: AppState, action: Action): AppState {
           task.threadId === action.threadId ? { ...task, ...patch } : task),
       }));
     }
-    case "updateProject":
-      return updateBot(state, action.botId, (bot) => ({
-        ...bot,
-        projects: bot.projects?.map((project) => project.id === action.projectId ? { ...project, ...action.patch } : project),
-      }));
     case "connected":
       return { ...state, connected: action.value };
     case "error":
@@ -1384,6 +1471,10 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     case "togglePlugins":
       return { ...state, pluginsOpen: action.open ?? !state.pluginsOpen };
+    case "notice":
+      return { ...state, notice: action.notice };
+    case "revealThread":
+      return { ...state, revealThread: { threadId: action.threadId, nonce: (state.revealThread?.nonce ?? 0) + 1 } };
     case "focusMessage":
       return {
         ...state,
@@ -1507,7 +1598,7 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         pendingQueued: {
           ...state.pendingQueued,
-          [action.threadId]: [...prev, { queueId: action.queueId, text: action.text }],
+          [action.threadId]: [...prev, { queueId: action.queueId, text: action.text, ...(action.reason ? { reason: action.reason } : {}) }],
         },
       };
     }
@@ -1524,7 +1615,7 @@ export function reducer(state: AppState, action: Action): AppState {
       const pendingQueued = { ...state.pendingQueued };
       if (rest.length) pendingQueued[action.threadId] = rest;
       else delete pendingQueued[action.threadId];
-      return { ...state, pendingQueued };
+      return { ...state, pendingQueued, consumedQueueIds: rememberConsumedQueueId(state.consumedQueueIds, action.queueId) };
     }
     case "cancelQueued": {
       const bot = state.bots.find((candidate) => candidate.id === action.botId);
@@ -1532,11 +1623,10 @@ export function reducer(state: AppState, action: Action): AppState {
       const threadId = action.threadId ?? bot.threadId;
       const prev = state.pendingQueued[threadId] ?? [];
       const rest = prev.filter((entry) => entry.queueId !== action.queueId);
-      if (rest.length === prev.length) return state;
       const pendingQueued = { ...state.pendingQueued };
       if (rest.length) pendingQueued[threadId] = rest;
       else delete pendingQueued[threadId];
-      return { ...state, pendingQueued };
+      return { ...state, pendingQueued, consumedQueueIds: rememberConsumedQueueId(state.consumedQueueIds, action.queueId) };
     }
     case "cancelGroupQueued": {
       const prev = state.pendingQueued[action.threadId] ?? [];
@@ -1620,7 +1710,9 @@ export function reducer(state: AppState, action: Action): AppState {
     case "newBot":
     case "duplicateBot":
     case "createProject":
+    case "updateProject":
     case "deleteProject":
+    case "reorderProjects":
     case "interrupt":
     case "createGroup":
     case "deleteGroup":
@@ -1688,6 +1780,8 @@ export const initialState: AppState = {
   focusMessage: null,
   connected: false,
   error: null,
+  notice: null,
+  revealThread: null,
   mascotMotion: null,
   pendingQueued: {},
   consumedQueueIds: {},
@@ -2143,6 +2237,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         action.type !== "deleteBot"
       ) rawDispatch(action);
       switch (action.type) {
+        case "notice":
+          if (action.notice) setTimeout(() => rawDispatch({ type: "notice", notice: null }), 6000);
+          break;
         case "createRoutine":
           api("/api/routines", { method: "POST", body: JSON.stringify(action.input) }).catch(showError);
           break;
@@ -2208,6 +2305,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   threadId: body.threadId,
                   queueId: body.queueId,
                   text: action.text,
+                  reason: body.reason === "capacity" ? "capacity" : undefined,
                 });
               }
             })
@@ -2478,19 +2576,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           persistTaskPatch(action.botId, action.threadId, action.patch);
           break;
         case "createProject":
-          api(`/api/bots/${action.botId}/projects`, { method: "POST", body: JSON.stringify({ name: action.name }) })
+          api(`/api/bots/${action.botId}/projects`, { method: "POST", body: JSON.stringify({ name: action.name, emoji: action.emoji }) })
             .then(({ bot, project }) => {
               dispatch({ type: "botPatched", bot });
               action.onCreated?.(project);
-            }).catch((error) => { showError(error); action.onError?.(); });
+            }).catch((error) => { showError(error); action.onError?.(error instanceof Error ? error.message : String(error)); });
           break;
         case "updateProject":
           api(`/api/bots/${action.botId}/projects/${action.projectId}`, { method: "PATCH", body: JSON.stringify(action.patch) })
-            .then(({ bot }) => dispatch({ type: "botPatched", bot })).catch(showError);
+            .then(({ bot }) => { dispatch({ type: "botPatched", bot }); action.onSaved?.(); })
+            .catch((error) => { showError(error); action.onError?.(error instanceof Error ? error.message : String(error)); });
           break;
         case "deleteProject":
           api(`/api/bots/${action.botId}/projects/${action.projectId}`, { method: "DELETE" })
-            .then(({ bot }) => dispatch({ type: "botPatched", bot })).catch(showError);
+            .then(({ bot }) => { dispatch({ type: "botPatched", bot }); action.onDeleted?.(); })
+            .catch((error) => { showError(error); action.onError?.(error instanceof Error ? error.message : String(error)); });
+          break;
+        case "reorderProjects":
+          api(`/api/bots/${action.botId}/projects/order`, { method: "PATCH", body: JSON.stringify({ projectIds: action.projectIds }) })
+            .then(({ bot }) => { dispatch({ type: "botPatched", bot }); action.onSaved?.(); })
+            .catch((error) => { showError(error); action.onError?.(error instanceof Error ? error.message : String(error)); });
           break;
         case "interrupt":
           api(`/api/bots/${action.botId}/interrupt`, {
@@ -2676,13 +2781,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
     const loadAll = async (): Promise<boolean> => {
       const chat = () =>
-        api("/api/bots").then(({ bots, groups, computerControl }) => {
+        api("/api/bots").then(({ bots, groups, computerControl, botQueuedMessages }) => {
           if (!alive) return;
           rawDispatch({
             type: "hydrate",
             bots,
             groups: groups ?? [],
             computerControl: computerControl ?? {},
+            botQueuedMessages,
           });
         });
       const peripherals = peripheralParts.map((part) => ({
@@ -2749,6 +2855,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         bumpPeripheralVersion("webhooks");
       }
       switch (frame.kind) {
+        case "bot.queued":
+          rawDispatch({ type: "botQueues", queues: frame.queues });
+          break;
         case "message": {
           rawDispatch({ type: "messageAdded", threadId: frame.threadId, message: frame.message });
           if (frame.message?.role === "user" && typeof frame.message.queueId === "string") {

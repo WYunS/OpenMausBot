@@ -45,6 +45,7 @@ struct ChatView: View {
     @State private var filePreview: FilePreviewItem?
     @State private var fileDownloadTask: Task<Void, Never>?
     @State private var fileDownloadRequestID: UUID?
+    @State private var threadOpenTask: Task<Void, Never>?
     @State private var acceptsNextHardwareLineBreak = false
     @FocusState private var composerFocused: Bool
     @StateObject private var dictation = SpeechDictation()
@@ -187,10 +188,11 @@ struct ChatView: View {
                                         chat: current,
                                         message: message,
                                         endsRun: endsRun(at: index, in: transcript),
-                                        openLink: openLink
+                                        openLink: openLink,
+                                        openThread: openThread
                                     )
                                 case let .activityRun(items):
-                                    ActivityRunChip(items: items)
+                                    ActivityRunChip(items: items, openThread: openThread)
                                 }
                             }
                             .id(row.id)
@@ -368,10 +370,15 @@ struct ChatView: View {
             // started in the previous task must not open a sheet (or surface
             // its error) in the new one when the network reply arrives late.
             resetFilePreview()
+            cancelThreadOpen()
+        }
+        .onChange(of: session.connection?.id) { _, _ in
+            cancelThreadOpen()
         }
         .onDisappear {
             dictation.stop()
             resetFilePreview()
+            cancelThreadOpen()
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { dictation.stop() }
@@ -931,6 +938,24 @@ struct ChatView: View {
         )
     }
 
+    /// A chip that opened a thread on this bot switches this screen in
+    /// place; one that opened a thread on a teammate pushes that chat.
+    private func openThread(_ ref: ThreadRef) {
+        cancelThreadOpen()
+        let shownBotId: String? = current.isBot ? current.id : nil
+        threadOpenTask = Task {
+            let openedThreadId = await session.openThread(ref, shownBotId: shownBotId)
+            guard !Task.isCancelled else { return }
+            threadOpenTask = nil
+            if let openedThreadId { selectedThreadId = openedThreadId }
+        }
+    }
+
+    private func cancelThreadOpen() {
+        threadOpenTask?.cancel()
+        threadOpenTask = nil
+    }
+
     private func openLink(_ url: URL, from message: Message) -> OpenURLAction.Result {
         guard let target = LocalMessageLink.resolve(url) else {
             fileOpenError = "This link can't be opened securely."
@@ -1233,6 +1258,8 @@ struct MessageRow: View {
     /// Last bubble of a run from the same side: the one that gets the tail.
     var endsRun = true
     let openLink: (URL, Message) -> OpenURLAction.Result
+    /// Where an "Opened thread" chip goes; nil leaves the chip a receipt.
+    var openThread: ((ThreadRef) -> Void)? = nil
     @EnvironmentObject private var session: Session
     @State private var editingText = ""
     @State private var showingEdit = false
@@ -1361,7 +1388,7 @@ struct MessageRow: View {
                 TextBubble(message: message, chat: chat, tailed: endsRun, openLink: openLink)
             }
         case .activity:
-            ActivityChip(tool: message.tool)
+            ActivityChip(tool: message.tool, threadRef: message.threadRef, openThread: openThread)
         case .screen:
             ScreenShot(threadId: chat.threadId, message: message)
         case .unknown:
@@ -1556,14 +1583,33 @@ struct TextBubble: View {
 /// transcript and they are context, not content.
 struct ActivityChip: View {
     let tool: ToolActivity?
+    /// The thread this chip opened, when it opened one.
+    var threadRef: ThreadRef? = nil
+    var openThread: ((ThreadRef) -> Void)? = nil
 
     var body: some View {
         if let tool {
-            SkillExecutionReceiptView(
+            let receipt = SkillExecutionReceiptView(
                 skillName: tool.name,
                 status: tool.ok.map { $0 ? "success" : "error" } ?? "running"
             )
             .padding(.leading, 2)
+
+            if let threadRef, let openThread {
+                // The receipt's own button has nothing to expand here, so the
+                // whole chip is the link to the thread it names.
+                Button {
+                    Haptics.selection()
+                    openThread(threadRef)
+                } label: {
+                    receipt.allowsHitTesting(false)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(tool.name)
+                .accessibilityHint("Opens the thread")
+            } else {
+                receipt
+            }
         }
     }
 }
