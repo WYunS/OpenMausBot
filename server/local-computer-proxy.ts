@@ -14,6 +14,84 @@ type Frame = { png: string; mime: "image/png" | "image/jpeg" | "image/webp" };
 type Timer = (callback: () => void, delayMs: number) => unknown;
 
 const IMAGE_TYPES = new Set<Frame["mime"]>(["image/png", "image/jpeg", "image/webp"]);
+const HARNESS_SCHEMA_ANNOTATIONS = ["description", "title", "default", "examples"] as const;
+const JSON_SCHEMA_TYPES = new Set(["object", "array", "string", "number", "integer", "boolean", "null"]);
+
+function scalarMatches(type: string, value: unknown): boolean {
+  if (type === "null") return value === null;
+  if (type === "integer") return typeof value === "number" && Number.isInteger(value);
+  if (type === "number") return typeof value === "number" && Number.isFinite(value);
+  return typeof value === type;
+}
+
+/** CUA exposes full JSON Schema while Harness deliberately accepts a small,
+ * enforced subset. Preserve the model-relevant shape and discard validation
+ * hints Harness would reject before it can mount any of the computer tools. */
+export function harnessCompatibleJsonSchema(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const source = value as Record<string, unknown>;
+  const annotations = Object.fromEntries(HARNESS_SCHEMA_ANNOTATIONS.flatMap((key) =>
+    source[key] === undefined ? [] : [[key, source[key]]]
+  ));
+
+  const hasDeclaredShape = source.type !== undefined
+    || (source.properties && typeof source.properties === "object" && !Array.isArray(source.properties))
+    || (source.items && typeof source.items === "object");
+  const rawUnion = !hasDeclaredShape && Array.isArray(source.oneOf)
+    ? source.oneOf
+    : !hasDeclaredShape && Array.isArray(source.anyOf)
+      ? source.anyOf
+      : null;
+  if (rawUnion) {
+    const variants = rawUnion
+      .filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry))
+      .map(harnessCompatibleJsonSchema);
+    if (variants.length === 1) return { ...variants[0], ...annotations };
+    if (variants.length > 1) return { oneOf: variants, ...annotations };
+    return annotations;
+  }
+  if (!hasDeclaredShape && Array.isArray(source.allOf)) {
+    const first = source.allOf.find((entry) => entry && typeof entry === "object" && !Array.isArray(entry));
+    return first ? { ...harnessCompatibleJsonSchema(first), ...annotations } : annotations;
+  }
+
+  let type = source.type;
+  if (Array.isArray(type)) {
+    const types = type.filter((entry): entry is string => typeof entry === "string" && entry !== "null" && JSON_SCHEMA_TYPES.has(entry));
+    if (types.length > 1) return { oneOf: types.map((entry) => ({ type: entry })), ...annotations };
+    type = types[0] ?? "null";
+  }
+  if (typeof type !== "string" || !JSON_SCHEMA_TYPES.has(type)) {
+    if (source.properties && typeof source.properties === "object" && !Array.isArray(source.properties)) type = "object";
+    else if (source.items && typeof source.items === "object") type = "array";
+    else return annotations;
+  }
+  const schemaType = type as string;
+
+  const result: Record<string, unknown> = { type: schemaType, ...annotations };
+  if (schemaType === "object") {
+    if (source.properties && typeof source.properties === "object" && !Array.isArray(source.properties)) {
+      result.properties = Object.fromEntries(Object.entries(source.properties as Record<string, unknown>)
+        .map(([key, schema]) => [key, harnessCompatibleJsonSchema(schema)]));
+      if (Array.isArray(source.required)) {
+        const names = source.required.filter((entry): entry is string =>
+          typeof entry === "string" && Object.hasOwn(result.properties as object, entry)
+        );
+        if (names.length) result.required = names;
+      }
+    }
+    if (typeof source.additionalProperties === "boolean") result.additionalProperties = source.additionalProperties;
+  } else if (schemaType === "array" && source.items && typeof source.items === "object") {
+    result.items = harnessCompatibleJsonSchema(source.items);
+  } else if (!["object", "array"].includes(schemaType)) {
+    if (Array.isArray(source.enum)) {
+      const allowed = source.enum.filter((entry) => scalarMatches(schemaType, entry));
+      if (allowed.length) result.enum = allowed;
+    }
+    if (source.const !== undefined && scalarMatches(schemaType, source.const)) result.const = source.const;
+  }
+  return result;
+}
 
 function rawImage(value: unknown): Frame | null {
   const seen = new Set<object>();
@@ -130,6 +208,14 @@ export function createLocalComputerProxyInterceptor(options: {
     fromDriver(line: string) {
       let message: any;
       try { message = JSON.parse(line); } catch { options.toClient(line); return; }
+      if (Array.isArray(message?.result?.tools)) {
+        message.result.tools = message.result.tools.map((tool: unknown) => {
+          if (!tool || typeof tool !== "object" || Array.isArray(tool)) return tool;
+          const record = tool as Record<string, unknown>;
+          return { ...record, inputSchema: harnessCompatibleJsonSchema(record.inputSchema) };
+        });
+        line = JSON.stringify(message);
+      }
       const id = message?.id;
       if (synthetic.has(id)) {
         synthetic.delete(id);
@@ -216,7 +302,9 @@ function readlineLines(stream: NodeJS.ReadableStream, onLine: (line: string) => 
 
 async function postFrame(frame: Frame): Promise<void> {
   const url = process.env.OMB_CONTROL_URL;
-  const token = process.env.OMB_CONTROL_TOKEN;
+  const token = process.env.OMB_CONTROL_TOKEN_FILE
+    ? (() => { try { return readFileSync(process.env.OMB_CONTROL_TOKEN_FILE!, "utf8").trim(); } catch { return ""; } })()
+    : process.env.OMB_CONTROL_TOKEN;
   if (!url || !token) return;
   await fetch(url, {
     method: "POST",

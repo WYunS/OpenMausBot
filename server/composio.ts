@@ -993,23 +993,18 @@ export interface ToolkitCard {
   domain: string | null;
 }
 
-function offlineBrandTile(mark: string, background: string, foreground = "#ffffff"): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="${background}"/><text x="32" y="39" text-anchor="middle" font-family="Arial,sans-serif" font-size="25" font-weight="700" fill="${foreground}">${mark}</text></svg>`;
-  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
-}
-
-// Curated fallback — these compact embedded marks work with no DNS or CDN.
-// They keep the marketplace identifiable while the managed catalog is down.
-const CURATED: ToolkitCard[] = ([
-  { slug: "slack", label: "Slack", blurb: "Post updates and read channels", domain: "slack.com", logo: offlineBrandTile("S", "#611f69") },
-  { slug: "github", label: "GitHub", blurb: "Issues, pull requests, and code", domain: "github.com", logo: offlineBrandTile("GH", "#24292f") },
-  { slug: "gmail", label: "Gmail", blurb: "Read and send email", domain: "gmail.com", logo: offlineBrandTile("M", "#ea4335") },
-  { slug: "googlecalendar", label: "Google Calendar", blurb: "Read and create events", domain: "calendar.google.com", logo: offlineBrandTile("31", "#4285f4") },
-  { slug: "googlesheets", label: "Google Sheets", blurb: "Read and update spreadsheets", domain: "sheets.google.com", logo: offlineBrandTile("S", "#0f9d58") },
-  { slug: "googledocs", label: "Google Docs", blurb: "Read and write documents", domain: "docs.google.com", logo: offlineBrandTile("D", "#4285f4") },
-  { slug: "googledrive", label: "Google Drive", blurb: "Browse and manage files", domain: "drive.google.com", logo: offlineBrandTile("△", "#fbbc04", "#174ea6") },
-  { slug: "notion", label: "Notion", blurb: "Pages and databases", domain: "notion.so", logo: offlineBrandTile("N", "#111111") },
-  { slug: "linear", label: "Linear", blurb: "Issues and project tracking", domain: "linear.app", logo: offlineBrandTile("L", "#5e6ad2") },
+// Curated fallback — the official catalog supplies logos when reachable;
+// otherwise the client keeps the original favicon(domain) fallback.
+const CURATED: ToolkitCard[] = [
+  { slug: "slack", label: "Slack", blurb: "Post updates and read channels", domain: "slack.com", logo: null },
+  { slug: "github", label: "GitHub", blurb: "Issues, pull requests, and code", domain: "github.com", logo: null },
+  { slug: "gmail", label: "Gmail", blurb: "Read and send email", domain: "gmail.com", logo: null },
+  { slug: "googlecalendar", label: "Google Calendar", blurb: "Read and create events", domain: "calendar.google.com", logo: null },
+  { slug: "googlesheets", label: "Google Sheets", blurb: "Read and update spreadsheets", domain: "sheets.google.com", logo: null },
+  { slug: "googledocs", label: "Google Docs", blurb: "Read and write documents", domain: "docs.google.com", logo: null },
+  { slug: "googledrive", label: "Google Drive", blurb: "Browse and manage files", domain: "drive.google.com", logo: null },
+  { slug: "notion", label: "Notion", blurb: "Pages and databases", domain: "notion.so", logo: null },
+  { slug: "linear", label: "Linear", blurb: "Issues and project tracking", domain: "linear.app", logo: null },
   { slug: "sentry", label: "Sentry", blurb: "Errors and alerts", domain: "sentry.io", logo: null },
   { slug: "posthog", label: "PostHog", blurb: "Analytics, feature flags, experiments", domain: "posthog.com", logo: null },
   { slug: "discord", label: "Discord", blurb: "Messages and channels", domain: "discord.com", logo: null },
@@ -1025,10 +1020,7 @@ const CURATED: ToolkitCard[] = ([
   { slug: "airtable", label: "Airtable", blurb: "Bases and records", domain: "airtable.com", logo: null },
   { slug: "figma", label: "Figma", blurb: "Files and comments", domain: "figma.com", logo: null },
   { slug: "stripe", label: "Stripe", blurb: "Payments and customers", domain: "stripe.com", logo: null },
-] satisfies ToolkitCard[]).map((card) => card.logo ? card : {
-  ...card,
-  logo: offlineBrandTile(card.label.slice(0, 2).toUpperCase(), "#475569"),
-});
+];
 
 let toolkitCache: { at: number; cards: ToolkitCard[]; identity: string } | null = null;
 

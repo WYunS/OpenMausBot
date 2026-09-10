@@ -77,7 +77,10 @@ import {
   loadAuthorizationWithDirectFallback,
 } from "./ruijie-sso-window-policy.mjs";
 import { isKnownSkin } from "./skin-overlay.cjs";
-import { readSecureCredentials } from "./secure-credentials.mjs";
+import {
+  mergeLegacyConnectedAppsCredentials,
+  readSecureCredentials,
+} from "./secure-credentials.mjs";
 import { createControlPlaneClient } from "./control-plane-client.mjs";
 import {
   companionAccountCleanupPending,
@@ -386,6 +389,32 @@ async function saveSecureCredentials(credentials) {
   const temporary = `${CREDENTIALS_FILE}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, encrypted, { mode: 0o600 });
   fs.renameSync(temporary, CREDENTIALS_FILE);
+}
+
+async function migrateLegacyConnectedAppsProfile() {
+  if (process.platform !== "win32" || credentialStoreUnavailable) return;
+  const currentDirectory = path.resolve(app.getPath("userData")).toLowerCase();
+  const candidates = app.isPackaged
+    ? ["锐捷Bot", "OpenMausBot"]
+    : ["OpenMausBot"];
+  for (const profile of candidates) {
+    const legacyFile = path.join(app.getPath("appData"), profile, "credentials.bin");
+    if (path.dirname(legacyFile).toLowerCase() === currentDirectory || !fs.existsSync(legacyFile)) continue;
+    const legacy = await readSecureCredentials({
+      exists: () => true,
+      isAvailable: () => safeStorage.isAsyncEncryptionAvailable(),
+      readFile: () => fs.readFileSync(legacyFile),
+      decrypt: (buffer) => safeStorage.decryptStringAsync(buffer),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    });
+    if (legacy.status !== "ok") continue;
+    const merged = mergeLegacyConnectedAppsCredentials(secureCredentials, legacy.credentials);
+    if (!merged.changed) continue;
+    await saveSecureCredentials(merged.credentials);
+    secureCredentials = merged.credentials;
+    slog(`restored connected-apps identity from the ${profile} profile`);
+    return;
+  }
 }
 
 async function secureComposioConfig() {
@@ -2673,6 +2702,7 @@ app.whenReady().then(async () => {
   }
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
   secureCredentials = await loadSecureCredentials();
+  await migrateLegacyConnectedAppsProfile();
   if (OWNS_LOCAL_SERVER) {
     await secureComposioConfig();
     await secureWorkspaceConfig();

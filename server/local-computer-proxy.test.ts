@@ -1,10 +1,71 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createLocalComputerProxyInterceptor } from "./local-computer-proxy.ts";
+import {
+  createLocalComputerProxyInterceptor,
+  harnessCompatibleJsonSchema,
+} from "./local-computer-proxy.ts";
 
 const frame = (value: unknown) => JSON.stringify(value);
 
 describe("local computer MCP proxy", () => {
+  it("downgrades CUA tool schemas to the subset accepted by Harness", () => {
+    expect(harnessCompatibleJsonSchema({
+      type: "object",
+      properties: {
+        count: { type: "integer", minimum: 1, maximum: 3 },
+        target: {
+          anyOf: [
+            { type: "string", pattern: "^[a-z]+$" },
+            { type: "object", properties: { x: { type: ["number", "null"] } } },
+          ],
+        },
+        tags: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+      },
+      required: ["count", "target"],
+      additionalProperties: false,
+    })).toEqual({
+      type: "object",
+      properties: {
+        count: { type: "integer" },
+        target: {
+          oneOf: [
+            { type: "string" },
+            { type: "object", properties: { x: { type: "number" } } },
+          ],
+        },
+        tags: { type: "array", items: { type: "string" } },
+      },
+      required: ["count", "target"],
+      additionalProperties: false,
+    });
+  });
+
+  it("rewrites schemas in tools/list responses before Harness registers them", () => {
+    const toClient: string[] = [];
+    const proxy = createLocalComputerProxyInterceptor({
+      toDriver: () => undefined,
+      toClient: (line) => toClient.push(line),
+      publishFrame: async () => undefined,
+      schedule: () => undefined,
+    });
+
+    proxy.fromDriver(frame({
+      jsonrpc: "2.0", id: 1, result: { tools: [{
+        name: "click",
+        inputSchema: {
+          type: "object",
+          properties: { target: { anyOf: [{ type: "string" }, { type: "integer", minimum: 1 }] } },
+          anyOf: [{ required: ["target"] }, { properties: { target: { type: "string" } } }],
+        },
+      }] },
+    }));
+
+    const schema = JSON.parse(toClient[0]!).result.tools[0].inputSchema;
+    expect(schema.type).toBe("object");
+    expect(schema.properties.target).toEqual({ oneOf: [{ type: "string" }, { type: "integer" }] });
+    expect(JSON.stringify(schema)).not.toMatch(/"(anyOf|minimum)":/);
+  });
+
   it("publishes the raw CUA screenshot before Harness replaces it for a text-only model", async () => {
     const toDriver: string[] = [];
     const toClient: string[] = [];
