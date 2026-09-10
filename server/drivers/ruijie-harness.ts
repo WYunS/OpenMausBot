@@ -218,7 +218,7 @@ async function resolveDshHome(config: RuijieHarnessConfig): Promise<string> {
 }
 
 type StdioIntegration = { command: string; args: string[]; env: Record<string, string> };
-type NamedStdioIntegration = { name: "computer" | "composio"; integration: StdioIntegration };
+type NamedStdioIntegration = { name: "computer" | "composio" | "browser"; integration: StdioIntegration };
 
 function computerIntegration(turn: SendTurnInput): StdioIntegration | undefined {
   if (turn.integrations?.localComputer) {
@@ -240,6 +240,9 @@ function stdioIntegrations(turn: SendTurnInput, computer: StdioIntegration | und
     ...(computer ? [{ name: "computer" as const, integration: computer }] : []),
     ...(turn.integrations?.composio
       ? [{ name: "composio" as const, integration: turn.integrations.composio }]
+      : []),
+    ...(turn.integrations?.browser
+      ? [{ name: "browser" as const, integration: turn.integrations.browser }]
       : []),
   ];
 }
@@ -766,6 +769,7 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
         computerMcp: true,
         localComputerMcp: true,
         composioMcp: true,
+        browserMcp: true,
       },
       async sendTurn(turn: SendTurnInput) {
         if (active.has(turn.threadId)) throw new Error("锐捷 Harness 正在处理这个会话");

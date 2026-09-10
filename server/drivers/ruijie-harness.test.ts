@@ -680,6 +680,43 @@ describe("Ruijie Harness driver", () => {
     }
   });
 
+  it("mounts the built-in browser through a managed Harness user preset", async () => {
+    const dshHome = await mkdtemp(join(tmpdir(), "openmaus-rjh-test-"));
+    try {
+      const instance = await RuijieHarnessDriver.create({
+        instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
+        config: {
+          endpoint: "http://127.0.0.1:49724",
+          expectedAccountEmail: "wangyunshang@ruijie.com.cn",
+          dshHome,
+        },
+      });
+
+      expect(instance.adapter.capabilities).toMatchObject({ browserMcp: true });
+      await instance.adapter.sendTurn({
+        threadId: "thread-browser",
+        text: "打开网页",
+        cwd: "C:\\work",
+        integrations: {
+          browser: {
+            command: "C:\\OpenMaus\\electron.exe",
+            args: ["browser-proxy.js"],
+            env: { OMB_BROWSER_TOKEN: "secret" },
+          },
+        },
+      });
+
+      const create = calls.find((call) => call.method === "session.create");
+      expect(create?.payload).toMatchObject({ cwd: "C:\\work", agentPreset: expect.stringMatching(/^openmaus-browser-/) });
+      const preset = await readFile(join(dshHome, ".agent-presets", create!.payload.agentPreset, "agent.cordis.yml"), "utf8");
+      expect(preset).toContain('command: "C:\\\\OpenMaus\\\\electron.exe"');
+      expect(preset).toContain('"OMB_BROWSER_TOKEN":"secret"');
+      expect(preset).toContain("failOnStartupError: false");
+    } finally {
+      await rm(dshHome, { recursive: true, force: true });
+    }
+  });
+
   it("uses a distinct computer MCP preset for each Harness session", async () => {
     const dshHome = await mkdtemp(join(tmpdir(), "openmaus-rjh-test-"));
     try {
