@@ -16,30 +16,6 @@
 // asks a few hundred milliseconds too early. So we try again, briefly, before
 // admitting ignorance.
 export const CREDENTIAL_READ_DELAYS_MS = [100, 200, 400, 800];
-export const CONNECTED_APPS_PROFILE_MIGRATION = "legacyConnectedAppsProfileV1";
-
-const BROKER_TOKEN = /^[0-9a-f]{64}$/;
-
-/** Preserve the official OpenMausBot managed-connector identity when a
- * branded desktop profile is introduced. Connected accounts live behind
- * this opaque installation token; minting a fresh one makes them appear to
- * have been deleted even though the upstream account still exists. */
-export function mergeLegacyConnectedAppsCredentials(current, legacy) {
-  if (current?.[CONNECTED_APPS_PROFILE_MIGRATION] === "1") return { changed: false, credentials: current };
-  if (!BROKER_TOKEN.test(legacy?.composioBrokerToken ?? "")) return { changed: false, credentials: current };
-  return {
-    changed: true,
-    credentials: {
-      ...current,
-      composioBrokerToken: legacy.composioBrokerToken,
-      ...(typeof legacy.composioInstallationId === "string" && legacy.composioInstallationId
-        ? { composioInstallationId: legacy.composioInstallationId }
-        : {}),
-      [CONNECTED_APPS_PROFILE_MIGRATION]: "1",
-    },
-  };
-}
-
 const message = (error) => (error instanceof Error ? error.message : String(error));
 
 export async function readSecureCredentials({

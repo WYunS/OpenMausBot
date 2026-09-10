@@ -27,6 +27,45 @@ readline.createInterface({input: process.stdin}).on("line", (line) => {
 `;
 
 describe("local computer proxy (isolated child and control endpoint)", () => {
+  it("keeps the observed computer MCP alive when its parent closes stderr", async () => {
+    const driver = `
+      const readline = require("node:readline");
+      process.stderr.write("A new computer driver version is available\\n");
+      readline.createInterface({ input: process.stdin }).on("line", (line) => {
+        const message = JSON.parse(line);
+        setTimeout(() => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id,
+          result: { tools: [{ name: "list_windows", inputSchema: { type: "object", properties: {} } }] }
+        }) + "\\n"), 100);
+      });
+    `;
+    const child = spawn(process.execPath, [SPAWNED_PROXIES.localComputer], {
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", OMB_CUA_COMMAND: process.execPath,
+        OMB_CUA_ARGS: JSON.stringify(["-e", driver]), OMB_CONTROL_URL: "http://127.0.0.1:1/control",
+        OMB_CONTROL_TOKEN: "isolated-control-token" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    // The hidden Harness Host has no usable stderr consumer. This closes the
+    // same pipe instead of giving the proxy the healthy terminal used before.
+    child.stderr.destroy();
+    const lines = createInterface({ input: child.stdout });
+    try {
+      const reply = new Promise<any>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("computer proxy stopped responding after its stderr closed")), 5_000);
+        lines.once("line", (line) => { clearTimeout(timer); resolve(JSON.parse(line)); });
+        child.once("exit", (code) => { clearTimeout(timer); reject(new Error(`computer proxy exited before discovery: ${code}`)); });
+      });
+      child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\n");
+      expect((await reply).result.tools[0].name).toBe("list_windows");
+      const exited = once(child, "exit");
+      child.stdin.end();
+      expect(await exited).toEqual([0, null]);
+    } finally {
+      lines.close();
+      child.stdin.end();
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+    }
+  });
+
   it("keeps discovery lease-free, refuses contention and outages, and drains the final gated frame", async () => {
     let held = true;
     let unavailable = false;

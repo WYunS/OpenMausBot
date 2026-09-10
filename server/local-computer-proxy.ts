@@ -315,6 +315,10 @@ async function postFrame(frame: Frame): Promise<void> {
 }
 
 export function runLocalComputerProxy(): void {
+  // A hidden Electron Host can pass an already-closed stderr pipe to its MCP
+  // child. An update notice from CUA must not turn that optional diagnostic
+  // channel's EPIPE into a fatal crash of the working JSON-RPC connection.
+  process.stderr.on("error", () => undefined);
   const {
     OMB_CUA_COMMAND: command,
     OMB_CUA_ARGS: encodedArgs,
@@ -345,7 +349,10 @@ export function runLocalComputerProxy(): void {
     stdio: ["pipe", "pipe", "pipe"],
   });
   child.stdin.on("error", () => undefined);
-  child.stderr.pipe(process.stderr);
+  child.stderr.on("data", (chunk: Buffer) => {
+    // Keep draining CUA even after the parent's diagnostic sink closes.
+    if (!process.stderr.destroyed) process.stderr.write(chunk);
+  });
   const restorer = process.platform === "win32" ? createBackgroundWindowRestorer() : null;
   const proxy = createLocalComputerProxyInterceptor({
     toDriver: (line) => child.stdin.write(line + "\n"),

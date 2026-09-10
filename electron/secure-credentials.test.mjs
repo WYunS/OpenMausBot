@@ -3,11 +3,7 @@
 // keychain hiccup look like the user had never connected anything.
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  CONNECTED_APPS_PROFILE_MIGRATION,
-  mergeLegacyConnectedAppsCredentials,
-  readSecureCredentials,
-} from "./secure-credentials.mjs";
+import { readSecureCredentials } from "./secure-credentials.mjs";
 
 const transient = () =>
   new Error("safeStorage.decryptStringAsync is temporarily unavailable. Please try again.");
@@ -74,37 +70,5 @@ describe("readSecureCredentials", () => {
     const result = await readSecureCredentials(deps({ decrypt }));
     expect(result.status).toBe("unavailable");
     expect(decrypt).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("mergeLegacyConnectedAppsCredentials", () => {
-  const token = "a".repeat(64);
-
-  it("restores the legacy connector identity without replacing current sign-in credentials", () => {
-    const result = mergeLegacyConnectedAppsCredentials(
-      { ruijieSsoAccessToken: "current-sso", composioBrokerToken: "b".repeat(64) },
-      { composioBrokerToken: token, composioInstallationId: "legacy-installation" },
-    );
-    expect(result).toEqual({
-      changed: true,
-      credentials: {
-        ruijieSsoAccessToken: "current-sso",
-        composioBrokerToken: token,
-        composioInstallationId: "legacy-installation",
-        [CONNECTED_APPS_PROFILE_MIGRATION]: "1",
-      },
-    });
-  });
-
-  it("does not overwrite a completed migration or accept an invalid legacy token", () => {
-    const current = { composioBrokerToken: "b".repeat(64), [CONNECTED_APPS_PROFILE_MIGRATION]: "1" };
-    expect(mergeLegacyConnectedAppsCredentials(current, { composioBrokerToken: token })).toEqual({
-      changed: false,
-      credentials: current,
-    });
-    expect(mergeLegacyConnectedAppsCredentials({}, { composioBrokerToken: "invalid" })).toEqual({
-      changed: false,
-      credentials: {},
-    });
   });
 });

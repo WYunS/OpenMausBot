@@ -207,6 +207,43 @@ if (listening) {
   }
 }
 
+// Reproduce a hidden Electron Host whose inherited stderr pipe has already
+// closed. CUA's update notices must not kill the packaged computer proxy.
+let computerReport;
+{
+  const driver = `
+    const readline = require("node:readline");
+    process.stderr.write("Computer driver update available\\n");
+    readline.createInterface({ input: process.stdin }).on("line", (line) => {
+      const request = JSON.parse(line);
+      setTimeout(() => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id,
+        result: { tools: [{ name: "list_windows", inputSchema: { type: "object", properties: {} } }] }
+      }) + "\\n"), 100);
+    });
+  `;
+  const computer = spawn(process.execPath, [join(staging, "server", "local-computer-proxy.js")], {
+    cwd: staging,
+    env: { ...fixtureEnv, OMB_CUA_COMMAND: process.execPath, OMB_CUA_ARGS: JSON.stringify(["-e", driver]),
+      OMB_CONTROL_URL: "http://127.0.0.1:1/control", OMB_CONTROL_TOKEN: "isolated-smoke-token" },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  computer.stderr.destroy();
+  let stdout = "";
+  computer.stdin.on("error", () => undefined);
+  computer.stdout.on("data", (chunk) => {
+    stdout += chunk;
+    if (stdout.includes("\n")) computer.stdin.end();
+  });
+  computerReport = await new Promise((resolve) => {
+    const timeout = setTimeout(() => computer.kill("SIGKILL"), 8_000);
+    computer.once("close", (code, signal) => {
+      clearTimeout(timeout);
+      resolve({ code, signal, stdout });
+    });
+    computer.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\n");
+  });
+}
+
 cleanup();
 
 if (!listening) {
@@ -246,7 +283,10 @@ if (
 }
 
 const count = Object.keys(proxyReport.resolved).length;
+assert.equal(computerReport.code, 0, `packaged computer proxy crashed with closed stderr: ${JSON.stringify(computerReport)}`);
+assert.equal(JSON.parse(computerReport.stdout.trim()).result.tools[0].name, "list_windows");
 console.log(`packaged server started with no node_modules in reach (port ${port}) ✓`);
 console.log(`all ${count} spawned proxy paths resolve inside the packaged server dir ✓`);
 console.log("packaged MCP stdio server reached the API and flushed its final frames ✓");
+console.log("packaged computer proxy survives a closed parent stderr pipe and completes discovery ✓");
 if (browserBundle) console.log(`packaged browser discovered without installation; access remains opt-in ✓ ${JSON.stringify(browserReport)}`);
