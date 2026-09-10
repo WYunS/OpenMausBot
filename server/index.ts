@@ -2,7 +2,7 @@
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join } from "node:path";
 
@@ -39,6 +39,8 @@ import {
   type BrowserCleanupWireRequest,
 } from "./browser-lifecycle-cleanup.ts";
 import * as checkpoints from "./checkpoints.ts";
+import { readConnectedAppsCache, writeConnectedAppsCache } from "./connected-apps-cache.ts";
+import { writeFileAtomic } from "./atomic.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import {
@@ -1029,7 +1031,16 @@ function phoneIntegration() {
   return { command: process.execPath, args: [phoneProxyPath], env };
 }
 
-function connectedAppsIntegration(botId: string, threadId: string, generation: string) {
+function rotatingCapabilityFile(kind: "computer" | "connectors", botId: string, threadId: string, token: string): string {
+  const directory = join(DATA_DIR, "runtime-capabilities");
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const key = createHash("sha256").update(`${kind}\0${botId}\0${threadId}`).digest("hex");
+  const path = join(directory, `${kind}-${key}.token`);
+  writeFileAtomic(path, token, { mode: 0o600 });
+  return path;
+}
+
+async function connectedAppsIntegration(botId: string, threadId: string, generation: string) {
   const token = mintInternalCapability({
     botId,
     threadId,
@@ -1039,12 +1050,25 @@ function connectedAppsIntegration(botId: string, threadId: string, generation: s
     skillAuthoring: false,
     createdBots: 0,
   });
-  return composio.mcpIntegration(cfg, {
+  const integration = await composio.mcpIntegration(cfg, {
     harnessUrl: `http://127.0.0.1:${PORT}`,
     commsToken: token,
     botId,
     threadId,
   });
+  if (!integration) return null;
+  const {
+    OMB_CONNECTOR_TOKEN: _token,
+    OMB_CONNECTOR_UPSTREAM_HEADERS: _headers,
+    ...env
+  } = integration.env;
+  return {
+    ...integration,
+    env: {
+      ...env,
+      OMB_CONNECTOR_TOKEN_FILE: rotatingCapabilityFile("connectors", botId, threadId, token),
+    },
+  };
 }
 
 // ── computer control (who is driving) ──────────────────────────────────
@@ -1200,7 +1224,7 @@ function observedLocalComputer(
       OMB_CUA_COMMAND: cua.command,
       OMB_CUA_ARGS: JSON.stringify(cua.args),
       OMB_CONTROL_URL: control.url,
-      OMB_CONTROL_TOKEN: control.token,
+      OMB_CONTROL_TOKEN_FILE: rotatingCapabilityFile("computer", botId, threadId, control.token),
     },
   };
 }
@@ -13696,7 +13720,27 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           services: {},
         });
       }
-      return json(res, 200, { configured: true, credentialStore: "ok", services: await composio.connectedServices(cfg) });
+      const identity = composio.connectorBackendIdentity(cfg);
+      try {
+        const services = await composio.connectedServices(cfg);
+        if (identity) writeConnectedAppsCache(identity, services);
+        return json(res, 200, {
+          configured: true,
+          credentialStore: "ok",
+          authoritative: true,
+          services,
+        });
+      } catch (cause) {
+        const cached = identity ? readConnectedAppsCache(identity) : null;
+        if (!cached) throw cause;
+        return json(res, 200, {
+          configured: true,
+          credentialStore: "ok",
+          authoritative: false,
+          cachedAt: cached.at,
+          services: cached.services,
+        });
+      }
     }
     if (method === "GET" && path === "/api/connectors") {
       const services = (url.searchParams.get("services") ?? "").split(",").filter(Boolean);

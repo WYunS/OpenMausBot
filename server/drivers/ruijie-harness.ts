@@ -25,6 +25,7 @@ import type {
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
 import { computerProxyEnv } from "../container-computer.ts";
+import { mutatingComputerTool } from "../computer-tools.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import {
   defaultRuijieBridgePath,
@@ -77,6 +78,7 @@ interface PendingTurn {
   interrupted: boolean;
   settled: boolean;
   requiresComputerAction: boolean;
+  requiresComputerMutation: boolean;
   computerToolSucceeded: boolean;
   computerRetryCount: number;
   toolNames: Map<string, string>;
@@ -87,6 +89,28 @@ const COMPUTER_ACTION_REQUEST = /^(?:(?:请|麻烦|你)?(?:帮我|给我|去)?|�
 
 export function computerActionRequested(text: string): boolean {
   return COMPUTER_ACTION_REQUEST.test(text);
+}
+
+const COMPUTER_MUTATION_REQUEST = /(?:打开|启动|访问|浏览|搜索|搜一下|查找|找一下|点击|双击|右击|输入|填写|键入|按下|滚动|拖动|下载|上传|保存|安装|运行|执行|关闭|切换)|\b(?:open|launch|visit|browse|search|click|type|fill|press|scroll|drag|download|upload|save|install|run|execute|close|switch)\b/i;
+
+export function computerMutationRequested(text: string): boolean {
+  return COMPUTER_MUTATION_REQUEST.test(text);
+}
+
+function harnessToolResultSucceeded(data: Record<string, unknown> | undefined): boolean {
+  if (!data || data.error !== undefined || data.isError === true) return false;
+  const message = data.message;
+  if (!message || typeof message !== "object") return true;
+  const result = message as Record<string, unknown>;
+  if (result.isError === true) return false;
+  return !(
+    Array.isArray(result.content) &&
+    result.content.some((item) => (
+      item !== null &&
+      typeof item === "object" &&
+      (item as Record<string, unknown>).isError === true
+    ))
+  );
 }
 
 function mountedComputerTool(name: string | undefined): boolean {
@@ -668,8 +692,12 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
               : undefined;
         const toolName = itemId ? pending.toolNames.get(itemId) : undefined;
         if (itemId) pending.toolNames.delete(itemId);
-        const toolSucceeded = data?.error === undefined;
-        if (toolSucceeded && mountedComputerTool(toolName)) pending.computerToolSucceeded = true;
+        const toolSucceeded = harnessToolResultSucceeded(data);
+        if (
+          toolSucceeded &&
+          mountedComputerTool(toolName) &&
+          (!pending.requiresComputerMutation || mutatingComputerTool(toolName))
+        ) pending.computerToolSucceeded = true;
         emit({ type: "item.completed", threadId, turnId: pending.turnId, itemId, itemType: "tool", ok: toolSucceeded });
         const image = /(?:^|__)get_(?:window|desktop)_state$/.test(toolName ?? "")
           ? toolResultImageAttachment(data)
@@ -802,6 +830,7 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
           interrupted: false,
           settled: false,
           requiresComputerAction: Boolean(computer) && computerActionRequested(turn.text),
+          requiresComputerMutation: Boolean(computer) && computerMutationRequested(turn.text),
           computerToolSucceeded: false,
           computerRetryCount: 0,
           toolNames: new Map(),

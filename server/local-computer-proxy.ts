@@ -2,19 +2,17 @@
 // but observes raw screenshots before Harness projects them for a text-only
 // model. Controlled apps keep the native desktop's normal foreground behavior.
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { augmentedPath } from "./env-path.ts";
 import { createControlClient } from "./control-client.ts";
+import { MUTATING_COMPUTER_TOOLS } from "./computer-tools.ts";
 import { createLineSplitter, createMcpBridgeInterceptor } from "./mcp-bridge.ts";
 
 type Frame = { png: string; mime: "image/png" | "image/jpeg" | "image/webp" };
 type Timer = (callback: () => void, delayMs: number) => unknown;
 
-const MUTATING_TOOLS = new Set([
-  "click", "double_click", "right_click", "drag", "invoke", "press_key", "hotkey", "scroll", "set_value", "type_text",
-  "launch_app", "close_window", "maximize_window", "minimize_window", "restore_window",
-]);
 const IMAGE_TYPES = new Set<Frame["mime"]>(["image/png", "image/jpeg", "image/webp"]);
 
 function rawImage(value: unknown): Frame | null {
@@ -154,7 +152,7 @@ export function createLocalComputerProxyInterceptor(options: {
       const image = rawImage(message?.result);
       if (image) void options.publishFrame(image);
       options.toClient(line);
-      if (call && MUTATING_TOOLS.has(call.name) && lastTarget) {
+      if (call && MUTATING_COMPUTER_TOOLS.has(call.name) && lastTarget) {
         // Capture the immediate response plus the two common browser paint
         // boundaries. Newer frames replace older ones in the panel.
         const generation = ++observationGeneration;
@@ -234,6 +232,7 @@ export function runLocalComputerProxy(): void {
     OMB_CUA_ARGS: encodedArgs,
     OMB_CONTROL_URL: url,
     OMB_CONTROL_TOKEN: token,
+    OMB_CONTROL_TOKEN_FILE: tokenFile,
     ...childEnv
   } = process.env;
   let args: string[];
@@ -242,7 +241,7 @@ export function runLocalComputerProxy(): void {
     const endpoint = new URL(url ?? "");
     if (!command?.trim() || command.includes("\0")
       || !Array.isArray(parsed) || !parsed.every((arg) => typeof arg === "string" && !arg.includes("\0"))
-      || !token || !["http:", "https:"].includes(endpoint.protocol)
+      || (!token && !tokenFile) || !["http:", "https:"].includes(endpoint.protocol)
       || !["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname) || endpoint.username || endpoint.password) {
       throw new Error("invalid connection");
     }
@@ -266,7 +265,15 @@ export function runLocalComputerProxy(): void {
     publishFrame: postFrame,
     prepareWindow: restorer ? (target) => restorer.restore(target) : undefined,
   });
-  const client = createControlClient({ url: url!, token: token! });
+  const client = createControlClient({
+    url: url!,
+    tokenProvider: () => {
+      if (tokenFile) {
+        try { return readFileSync(tokenFile, "utf8").trim(); } catch { return ""; }
+      }
+      return token ?? "";
+    },
+  });
   let refusalReason: string | undefined;
   const intercept = createMcpBridgeInterceptor({
     answer: (line) => process.stdout.write(line + "\n"),

@@ -41,22 +41,28 @@ const UNAVAILABLE: ControlState = { held: true, helpOpen: false };
 export function createControlClient(options?: {
   url?: string;
   token?: string;
+  tokenProvider?: () => string;
   cacheMs?: number;
   fetchImpl?: typeof fetch;
 }): ControlClient {
   const url = options?.url ?? process.env.OMB_CONTROL_URL ?? "";
-  const token = options?.token ?? process.env.OMB_CONTROL_TOKEN ?? "";
+  const tokenProvider = options?.tokenProvider
+    ?? (() => options?.token ?? process.env.OMB_CONTROL_TOKEN ?? "");
   const cacheMs = options?.cacheMs ?? 750;
   const fetchImpl = options?.fetchImpl ?? fetch;
-  const configured = Boolean(url && token);
-  const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+  const configured = Boolean(url && tokenProvider());
+
+  const headers = () => ({
+    authorization: `Bearer ${tokenProvider()}`,
+    "content-type": "application/json",
+  });
 
   let cachedAt = 0;
   let cached: ControlState = DISENGAGED;
 
   async function read(): Promise<ControlState> {
     try {
-      const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(2_000) });
+      const res = await fetchImpl(url, { headers: headers(), signal: AbortSignal.timeout(2_000) });
       if (!res.ok) return UNAVAILABLE;
       const body: any = await res.json().catch(() => null);
       if (typeof body?.held !== "boolean" || typeof body?.helpOpen !== "boolean") return UNAVAILABLE;
@@ -85,7 +91,7 @@ export function createControlClient(options?: {
       try {
         const res = await fetchImpl(url, {
           method: "POST",
-          headers,
+          headers: headers(),
           body: JSON.stringify({ reason }),
           signal: AbortSignal.timeout(2_000),
         });
@@ -101,7 +107,7 @@ export function createControlClient(options?: {
       try {
         await fetchImpl(url, {
           method: "DELETE",
-          headers,
+          headers: headers(),
           body: JSON.stringify({ requestId }),
           signal: AbortSignal.timeout(2_000),
         });

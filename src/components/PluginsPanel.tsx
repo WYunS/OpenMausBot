@@ -3,7 +3,7 @@
 // Composio API key is configured, a curated set otherwise. Icons resolve
 // logo → favicon → monogram.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Loader2, RefreshCw, Search, TriangleAlert, X } from "lucide-react";
+import { Check, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { api, useStore } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
@@ -72,8 +72,11 @@ export function preloadConnectedApps(force = false): Promise<ConnectorInventory>
       const services: Record<string, ConnectorStatus> = response.services ?? {};
       // An unreadable credential store tells us nothing about what is
       // connected. Keep the last inventory we were sure about instead.
-      if (response.credentialStore === "unavailable") {
-        return { services: readCachedInventory()?.services ?? {}, authoritative: false };
+      if (response.credentialStore === "unavailable" || response.authoritative === false) {
+        return {
+          services: response.services ?? readCachedInventory()?.services ?? {},
+          authoritative: false,
+        };
       }
       cachedConnectorStatus = services;
       cachedConnectorStatusAt = Date.now();
@@ -539,10 +542,14 @@ export function PluginsPanel() {
               <button
                 onClick={() => void loadConnectionInventory(true)}
                 disabled={refreshing}
-                className="rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-50"
-                title={t("connectors.refreshTitle")}
+                className={cn(
+                  "relative rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-50",
+                  showStaleWarning && "text-warning",
+                )}
+                title={showStaleWarning ? t("connectors.stale") : t("connectors.refreshTitle")}
               >
                 <RefreshCw size={17} className={cn(refreshing && "animate-spin")} />
+                {showStaleWarning && <span className="absolute right-1 top-1 size-1.5 rounded-full bg-warning" />}
               </button>
             )}
             <button
@@ -577,17 +584,6 @@ export function PluginsPanel() {
 
         {surface === "apps" ? (
           <>
-        {showStaleWarning && (
-          // A manual refresh deserves an explicit answer. Automatic refresh
-          // failures stay quiet because the remembered list is still useful.
-          <div className="mx-6 mb-1 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12.5px] text-warning sm:mx-8">
-            <TriangleAlert size={14} className="mt-px shrink-0" />
-            <span>
-              {t("connectors.stale")}
-            </span>
-          </div>
-        )}
-
         <div className="flex flex-col gap-3 px-6 pb-4 pt-5 sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <div className="flex w-fit rounded-xl bg-raised/70 p-1" role="tablist" aria-label={t("connectors.viewAria")}>
             <button
@@ -625,9 +621,9 @@ export function PluginsPanel() {
           </label>
         </div>
 
-        {/* Two notices about the same fact is one too many: the stale banner
-            above already explains this launch, and "configure your own
-            connection service" is advice for someone who never set one up. */}
+        {/* A stale snapshot is represented by the small refresh status dot;
+            "configure your own connection service" is advice for someone
+            who never set one up, not for a temporary upstream outage. */}
         {!configured && !stale && (
           <div className="mx-6 mb-1 rounded-xl bg-warning/10 px-4 py-3 text-[13px] text-warning sm:mx-8">
             {t("connectors.notConfigured")}{" "}

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   computerActionRequested,
+  computerMutationRequested,
   compatibleHarnessEffort,
   parseLaunchArguments,
   RuijieHarnessDriver,
@@ -159,6 +160,12 @@ describe("Ruijie Harness driver", () => {
     expect(computerActionRequested("Search the web for today's AI news")).toBe(true);
     expect(computerActionRequested("解释量子纠缠的基本原理")).toBe(false);
     expect(computerActionRequested("What is open source software?")).toBe(false);
+  });
+
+  it("distinguishes state inspection from requests that must change the computer", () => {
+    expect(computerMutationRequested("打开浏览器并搜索今天的 AI 新闻")).toBe(true);
+    expect(computerMutationRequested("查看桌面")).toBe(false);
+    expect(computerMutationRequested("take a screenshot")).toBe(false);
   });
 
   it("uses the shared app-data discovery location on Windows", () => {
@@ -382,6 +389,86 @@ describe("Ruijie Harness driver", () => {
     }
   });
 
+  it("does not count a read-only observation or nested MCP error as performing the requested action", async () => {
+    const dshHome = await mkdtemp(join(tmpdir(), "openmaus-rjh-test-"));
+    try {
+      const instance = await RuijieHarnessDriver.create({
+        instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
+        config: { endpoint: "http://127.0.0.1:49724", expectedAccountEmail: "wangyunshang@ruijie.com.cn", dshHome },
+      });
+      const events: RuntimeEvent[] = [];
+      instance.adapter.onEvent((event) => events.push(event));
+      const started = await instance.adapter.sendTurn({
+        threadId: "thread-computer-read-only",
+        text: "打开浏览器并搜索今天的 AI 新闻",
+        system: computerPrompt("vm-shared"),
+        integrations: {
+          localComputer: {
+            command: "C:\\OpenMaus\\cua-driver.exe",
+            args: ["mcp", "--direct"],
+            env: { OMB_CONTROL_TOKEN: "secret" },
+            scope: "local-computer",
+          },
+        },
+      });
+
+      const socket = FakeSocket.instances[0]!;
+      for (const turn of [1, 2]) {
+        const callId = `call-read-only-${turn}`;
+        const failedMutation = turn === 2;
+        socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+          type: "turn/start", data: { turn },
+        } });
+        socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+          type: "tool/call", data: {
+            turn,
+            callId,
+            name: failedMutation
+              ? "mcp__openmaus_fixture__launch_app"
+              : "mcp__openmaus_fixture__get_accessibility_tree",
+          },
+        } });
+        socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+          type: "tool/result", data: {
+            turn,
+            callId,
+            message: failedMutation
+              ? {
+                  toolCallId: callId,
+                  content: [{
+                    type: "tool-result",
+                    toolCallId: callId,
+                    isError: true,
+                    content: [{ type: "text", text: "Error: MCP error -32000: Connection closed" }],
+                  }],
+                }
+              : { toolCallId: callId, content: [] },
+          },
+        } });
+        socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+          type: "assistant/message", data: { turn, message: { content: [{ type: "text", text: "已经打开并搜索完成。" }] } },
+        } });
+        socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+          type: "turn/end", data: { turn, reason: { kind: "completed" } },
+        } });
+        if (turn === 1) {
+          await vi.waitFor(() => expect(calls.filter((call) => call.method === "session.prompt")).toHaveLength(2));
+        }
+      }
+
+      await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+        type: "turn.completed",
+        threadId: "thread-computer-read-only",
+        turnId: started.turnId,
+        ok: false,
+        stopReason: "computer_not_used",
+      })));
+      expect(events.some((event) => event.type === "item.completed" && event.itemType === "assistant_text")).toBe(false);
+    } finally {
+      await rm(dshHome, { recursive: true, force: true });
+    }
+  });
+
   it("retries a computer action once and only publishes the tool-backed answer", async () => {
     const dshHome = await mkdtemp(join(tmpdir(), "openmaus-rjh-test-"));
     try {
@@ -416,7 +503,7 @@ describe("Ruijie Harness driver", () => {
       const callId = "call-computer";
       socket.frame({ type: "session/event", sessionId: "session-fixture", event: { type: "turn/start", data: { turn: 2 } } });
       socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
-        type: "tool/call", data: { turn: 2, callId, name: "mcp__openmaus_fixture__get_desktop_state" },
+        type: "tool/call", data: { turn: 2, callId, name: "mcp__openmaus_fixture__launch_app" },
       } });
       socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
         type: "tool/result", data: { turn: 2, callId, message: { toolCallId: callId, content: [] } },
@@ -623,6 +710,52 @@ describe("Ruijie Harness driver", () => {
       const creates = calls.filter((call) => call.method === "session.create");
       expect(creates).toHaveLength(2);
       expect(creates[0]?.payload.agentPreset).not.toBe(creates[1]?.payload.agentPreset);
+    } finally {
+      await rm(dshHome, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses one Harness session when a turn capability rotates through a stable file", async () => {
+    const dshHome = await mkdtemp(join(tmpdir(), "openmaus-rjh-test-"));
+    try {
+      const instance = await RuijieHarnessDriver.create({
+        instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
+        config: {
+          endpoint: "http://127.0.0.1:49724",
+          expectedAccountEmail: "wangyunshang@ruijie.com.cn",
+          dshHome,
+        },
+      });
+      const integration = {
+        command: "C:\\OpenMaus\\electron.exe",
+        args: ["local-computer-proxy.js"],
+        env: { OMB_CONTROL_TOKEN_FILE: "C:\\OpenMaus\\runtime\\thread.token" },
+        scope: "local-computer" as const,
+      };
+
+      const first = await instance.adapter.sendTurn({
+        threadId: "thread-stable-computer", text: "你好", cwd: "C:\\work",
+        integrations: { localComputer: integration },
+      });
+      const socket = FakeSocket.instances[0]!;
+      socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+        type: "turn/start", data: { turn: 1 },
+      } });
+      socket.frame({ type: "session/event", sessionId: "session-fixture", event: {
+        type: "turn/end", data: { turn: 1, reason: { kind: "completed" } },
+      } });
+      await vi.waitFor(() => expect(calls.some((call) => (
+        call.method === "session.prompt" && call.payload.sessionId === "session-fixture"
+      ))).toBe(true));
+
+      await instance.adapter.sendTurn({
+        threadId: "thread-stable-computer", text: "继续", cwd: "C:\\work",
+        integrations: { localComputer: integration },
+      });
+
+      expect(first.turnId).toBeTruthy();
+      expect(calls.filter((call) => call.method === "session.create")).toHaveLength(1);
+      expect(calls.filter((call) => call.method === "session.prompt")).toHaveLength(2);
     } finally {
       await rm(dshHome, { recursive: true, force: true });
     }

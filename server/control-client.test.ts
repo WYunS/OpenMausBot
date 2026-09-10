@@ -85,4 +85,26 @@ describe("computer control client", () => {
     await expect(client.state()).resolves.toEqual(released);
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
+
+  it("reads a rotated capability immediately before each request", async () => {
+    let token = "turn-one";
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ held: false, helpOpen: false }));
+    const client = createControlClient({
+      url: options.url,
+      tokenProvider: () => token,
+      cacheMs: 0,
+      fetchImpl,
+    });
+
+    await client.state(true);
+    token = "turn-two";
+    await client.state(true);
+
+    expect(fetchImpl).toHaveBeenNthCalledWith(1, options.url, expect.objectContaining({
+      headers: { authorization: "Bearer turn-one", "content-type": "application/json" },
+    }));
+    expect(fetchImpl).toHaveBeenNthCalledWith(2, options.url, expect.objectContaining({
+      headers: { authorization: "Bearer turn-two", "content-type": "application/json" },
+    }));
+  });
 });

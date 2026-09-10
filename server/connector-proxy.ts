@@ -8,6 +8,7 @@
 // stdout is the MCP transport. Never log there.
 import readline from "node:readline";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 type Json = Record<string, unknown>;
 
@@ -15,7 +16,13 @@ const UPSTREAM = process.env.OMB_CONNECTOR_UPSTREAM_URL ?? "";
 const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
 const BOT_ID = process.env.OMB_BOT_ID ?? "";
 const THREAD_ID = process.env.OMB_THREAD_ID ?? "";
-const TOKEN = process.env.OMB_CONNECTOR_TOKEN ?? process.env.OMB_COMMS_TOKEN ?? "";
+const TOKEN_FILE = process.env.OMB_CONNECTOR_TOKEN_FILE ?? "";
+const connectorToken = () => {
+  if (TOKEN_FILE) {
+    try { return readFileSync(TOKEN_FILE, "utf8").trim(); } catch { return ""; }
+  }
+  return process.env.OMB_CONNECTOR_TOKEN ?? process.env.OMB_COMMS_TOKEN ?? "";
+};
 const MAX_RESPONSE_BYTES = 20 * 1024 * 1024;
 const INITIALIZE_RELAY_TIMEOUT_MS = 1_000;
 // Codex waits for every MCP server's tools/list before it submits even a
@@ -102,12 +109,14 @@ function parseUpstream(text: string, id: unknown): Json | null {
 
 async function relay(message: Json, timeoutMs = RELAY_TIMEOUT_MS): Promise<Json | null> {
   if (!UPSTREAM) throw new Error("connected apps are unavailable");
+  const token = connectorToken();
   const response = await fetch(UPSTREAM, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
       ...upstreamHeaders,
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
       ...(upstreamSessionId ? { "mcp-session-id": upstreamSessionId } : {}),
     },
     body: JSON.stringify(message),
@@ -157,9 +166,10 @@ function connectorAdds(args: unknown): ConnectorRequest[] {
 }
 
 async function showConnectorCards(items: ConnectorRequest[]): Promise<void> {
+  const token = connectorToken();
   const response = await fetch(`${HARNESS}/api/internal/connectors/request`, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
     body: JSON.stringify({ botId: BOT_ID, threadId: THREAD_ID, items, resumeKey: randomUUID() }),
     signal: AbortSignal.timeout(30_000),
   });
