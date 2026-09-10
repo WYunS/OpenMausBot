@@ -97,6 +97,7 @@ export function LiveBrowser({ bot }: { bot: Bot }) {
     finally { if (viewer.current === expected) setPending(false); }
   };
   const driving = control.controlling && connected && !pending;
+  const hasHumanControl = control.owned && control.controlling;
   return <div ref={panel} className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-hairline/40 bg-card text-ink">
     <div className="flex min-h-12 items-center gap-1 px-2 pt-1.5">
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
@@ -107,7 +108,10 @@ export function LiveBrowser({ bot }: { bot: Bot }) {
         </div>) : <div className="flex items-center gap-2 rounded-xl bg-inset px-3 py-2 text-[12px] text-ink-secondary"><Globe size={13} />{t("browser.live.newTab")}</div>}
         <button className={`${button} shrink-0`} disabled={!driving} aria-label={t("browser.live.newTab")} title={t("browser.live.newTab")} onClick={() => void execute({ type: "tab-new" })}><Plus size={17} /></button>
       </div>
-      <button className={button} title={t("browser.live.fullScreen")} aria-label={t("browser.live.fullScreen")} onClick={() => { void panel.current?.requestFullscreen().catch(() => setError(t("browser.live.fullScreenUnavailable"))); }}><Maximize2 size={16} /></button>
+      <button className={button} title={t("browser.live.fullScreen")} aria-label={t("browser.live.fullScreen")} onClick={() => {
+        const transition = document.fullscreenElement ? document.exitFullscreen() : panel.current?.requestFullscreen();
+        void transition?.catch(() => setError(t("browser.live.fullScreenUnavailable")));
+      }}><Maximize2 size={16} /></button>
       <button className={`${button} rounded-xl bg-inset p-2`} title={t("browser.live.profileNamed", { name: profileName })} aria-label={t("browser.live.profiles")} aria-expanded={showProfiles} onClick={() => setShowProfiles(true)}><UserRound size={16} /></button>
     </div>
     <form className="flex h-12 items-center gap-1 border-b border-hairline/40 px-2" onSubmit={(e) => { e.preventDefault(); if (driving && address.trim()) void execute({ type: "navigate", url: /^https?:\/\//i.test(address.trim()) ? address.trim() : `https://${address.trim()}` }); }}>
@@ -117,9 +121,9 @@ export function LiveBrowser({ bot }: { bot: Bot }) {
         <button type="button" className={button} disabled={!driving} aria-label={t("browser.live.reload")} onClick={() => void execute({ type: "reload" })}><RotateCw size={17} /></button>
       </div>
       <input ref={addressInput} aria-label={t("browser.live.address")} readOnly={!driving} value={address} onChange={(e) => setAddress(e.target.value)} onFocus={(e) => { urlEditing.current = true; if (driving) e.target.select(); }} onBlur={() => { urlEditing.current = false; }} placeholder={connected ? "about:blank" : t("browser.live.connecting")} spellCheck={false} className="mx-1 min-w-0 flex-1 rounded-lg bg-transparent px-2 py-1.5 text-center text-[12px] outline-none placeholder:text-ink-secondary focus:bg-inset focus:text-left" />
-      <button type="button" disabled={!connected || pending || (control.held && !control.owned)} onClick={() => void execute({ type: control.owned ? "release" : "take" })} title={control.owned ? t("browser.live.returnHint") : control.held ? t("browser.live.controlledElsewhere") : t("browser.live.takeHint")} aria-label={control.owned ? t("browser.live.return") : t("browser.live.take")} aria-pressed={control.owned} className={`${button} flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px] sm:text-[12px] ${control.owned ? "bg-accent/15 text-accent" : ""}`}>
+      <button type="button" disabled={!connected || pending || (control.held && !control.owned)} onClick={() => void execute({ type: hasHumanControl ? "release" : "take" })} title={hasHumanControl ? t("browser.live.returnHint") : control.held && !control.owned ? t("browser.live.controlledElsewhere") : t("browser.live.takeHint")} aria-label={hasHumanControl ? t("browser.live.return") : t("browser.live.take")} aria-pressed={hasHumanControl} className={`${button} flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px] sm:text-[12px] ${hasHumanControl ? "bg-accent/15 text-accent" : ""}`}>
         {pending ? <Loader2 size={16} className="animate-spin" /> : <Hand size={16} className="hidden sm:block" />}
-        <span>{control.owned ? t("browser.live.return") : t("browser.live.take")}</span>
+        <span>{hasHumanControl ? t("browser.live.return") : t("browser.live.take")}</span>
       </button>
       <details className="relative shrink-0">
         <summary className={`${button} list-none cursor-pointer [&::-webkit-details-marker]:hidden`} aria-label={t("browser.live.menu")} title={t("browser.live.menu")}><EllipsisVertical size={17} /></summary>

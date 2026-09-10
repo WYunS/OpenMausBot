@@ -125,4 +125,34 @@ describe("live browser control affordance", () => {
     expect(html).toContain('aria-label="Return to bot" aria-pressed="true"');
     expect(html).not.toContain('<span>Take control</span>');
   });
+
+  it("offers takeover again when this viewer owns only a non-controllable hold", () => {
+    fixture.control = { held: true, controlling: false, owned: true };
+    const html = render();
+    expect(html).toContain('<span>Take control</span>');
+    expect(html).toContain('aria-label="Take control" aria-pressed="false"');
+    expect(html).not.toContain('<span>Return to bot</span>');
+  });
+
+  it("uses the fullscreen toolbar button to leave fullscreen", async () => {
+    let tree!: ReturnType<typeof LiveBrowser>;
+    function Capture() { tree = LiveBrowser({ bot }); return tree; }
+    renderToStaticMarkup(createElement(Capture));
+    type Node = ReactElement<{ children?: ReactNode; "aria-label"?: string; ref?: RefObject<HTMLDivElement | null>; onClick?: () => void }>;
+    const elements = (node: ReactNode): Node[] => {
+      if (!isValidElement(node)) return [];
+      const element = node as Node;
+      return [element, ...Children.toArray(element.props.children).flatMap(elements)];
+    };
+    const nodes = elements(tree);
+    const root = nodes[0]!;
+    const fullscreen = nodes.find((node) => node.props["aria-label"] === "Full screen")!;
+    const panel = {} as HTMLDivElement;
+    root.props.ref!.current = panel;
+    const exitFullscreen = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("document", { fullscreenElement: panel, exitFullscreen });
+    fullscreen.props.onClick!();
+    await Promise.resolve();
+    expect(exitFullscreen).toHaveBeenCalledOnce();
+  });
 });
