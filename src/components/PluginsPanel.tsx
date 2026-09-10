@@ -14,6 +14,7 @@ import { FeishuCard } from "@/tuantuan/feishu/FeishuCard";
 import { feishuConnected, feishuVisible } from "@/tuantuan/feishu/model";
 import { useFeishu } from "@/tuantuan/feishu/useFeishu";
 import { McpServersPanel } from "./McpServersPanel";
+import { ServiceIcon } from "./ServiceIcon";
 
 interface ToolkitCard {
   slug: string;
@@ -188,40 +189,6 @@ export function onlyLatestConnectorResponses(
   );
 }
 
-function ServiceIcon({ card }: { card: ToolkitCard }) {
-  // 0 = official logo, 1 = favicon by domain, 2 = monogram
-  const [stage, setStage] = useState(card.logo ? 0 : card.domain ? 1 : 2);
-  // The full catalog is well over a thousand cards, so let the browser skip
-  // the logos that are scrolled out of view instead of fetching every one.
-  if (stage === 0 && card.logo) {
-    return (
-      <img
-        src={card.logo}
-        alt=""
-        loading="lazy"
-        className="size-11 rounded-xl object-contain"
-        onError={() => setStage(1)}
-      />
-    );
-  }
-  if (stage === 1 && card.domain) {
-    return (
-      <img
-        src={`https://www.google.com/s2/favicons?domain=${card.domain}&sz=64`}
-        alt=""
-        loading="lazy"
-        className="size-11 rounded-xl object-contain"
-        onError={() => setStage(2)}
-      />
-    );
-  }
-  return (
-    <div className="flex size-11 items-center justify-center rounded-xl bg-raised text-[15px] font-semibold text-ink-secondary">
-      {card.label.slice(0, 1).toUpperCase()}
-    </div>
-  );
-}
-
 export function PluginsPanel() {
   const { state: appState, dispatch } = useStore();
   const remoteClient = window.ogb?.remoteClient?.active === true;
@@ -229,6 +196,9 @@ export function PluginsPanel() {
   const dialogRef = useRef<HTMLDivElement>(null);
   const [surface, setSurface] = useState<"apps" | "mcp">("apps");
   const [cards, setCards] = useState<ToolkitCard[] | null>(null);
+  const [iconRevision, setIconRevision] = useState(0);
+  const catalogGeneration = useRef(0);
+  const hasCatalog = useRef(false);
   const [source, setSource] = useState<"api" | "curated">("curated");
   const [configured, setConfigured] = useState(true);
   const [mode, setMode] = useState<"managed" | "self-hosted" | "unavailable">("unavailable");
@@ -355,24 +325,48 @@ export function PluginsPanel() {
   }, [inventoryPhase, stale, status]);
 
   useEffect(() => {
-    let alive = true;
     void loadConnectionInventory();
-    api("/api/connectors/catalog")
-      .then((r) => {
-        if (!alive) return;
-        setCards(r.cards ?? []);
-        setSource(r.source ?? "curated");
-        setConfigured(Boolean(r.configured));
-        setMode(r.mode ?? "unavailable");
-      })
-      .catch((e) => {
-        if (!alive) return;
-        setError(e.message);
-      });
-    return () => {
-      alive = false;
-    };
   }, [loadConnectionInventory]);
+
+  const loadCatalog = useCallback(async () => {
+    const generation = ++catalogGeneration.current;
+    const apply = (r: any) => {
+      if (generation !== catalogGeneration.current) return;
+      hasCatalog.current = true;
+      setCards(r.cards ?? []);
+      setSource(r.source ?? "curated");
+      setConfigured(Boolean(r.configured));
+      setMode(r.mode ?? "unavailable");
+    };
+    // Render original brand URLs immediately, then update the optional full
+    // catalog in the background. Neither request gates login or chat.
+    try { apply(await api("/api/connectors/catalog?cached=1")); } catch { /* Try live below. */ }
+    if (generation !== catalogGeneration.current) return;
+    try { apply(await api("/api/connectors/catalog")); } catch (cause) {
+      // Retain usable cards on an optional refresh failure, but do not leave
+      // a fresh panel spinning forever if its local server is unreachable.
+      if (generation === catalogGeneration.current && !hasCatalog.current) {
+        setCards([]);
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadCatalog();
+    return () => { catalogGeneration.current += 1; };
+  }, [loadCatalog]);
+
+  const refreshPlugins = useCallback(() => {
+    setIconRevision((revision) => revision + 1);
+    void loadConnectionInventory(true);
+    void loadCatalog();
+  }, [loadCatalog, loadConnectionInventory]);
+
+  useEffect(() => {
+    window.addEventListener("online", refreshPlugins);
+    return () => window.removeEventListener("online", refreshPlugins);
+  }, [refreshPlugins]);
 
   useEffect(() => {
     const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -540,7 +534,7 @@ export function PluginsPanel() {
           <div className="flex items-center gap-1">
             {surface === "apps" && (
               <button
-                onClick={() => void loadConnectionInventory(true)}
+                onClick={refreshPlugins}
                 disabled={refreshing}
                 className={cn(
                   "relative rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-50",
@@ -697,7 +691,7 @@ export function PluginsPanel() {
                   className="min-h-[88px] border-b border-hairline/35 px-1 py-4"
                 >
                   <div className="flex items-center gap-3">
-                    <ServiceIcon card={card} />
+                    <ServiceIcon card={card} retryKey={iconRevision} />
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[14px] font-medium text-ink">{card.label}</div>
                       <div

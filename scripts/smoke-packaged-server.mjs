@@ -116,6 +116,13 @@ while (Date.now() < deadline) {
 }
 
 let browserReport = null;
+let catalogReport = null;
+if (listening) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/connectors/catalog?cached=1`, { signal: AbortSignal.timeout(5_000) });
+    catalogReport = await response.json();
+  } catch (error) { catalogReport = { error: String(error) }; }
+}
 if (browserBundle && listening) {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/api/config`, { signal: AbortSignal.timeout(5_000) });
@@ -283,10 +290,15 @@ if (
 }
 
 const count = Object.keys(proxyReport.resolved).length;
+assert.equal(catalogReport?.cards?.length, 24, "Fresh packaged catalog must be available without a broker round-trip");
+for (const card of catalogReport.cards) {
+  assert.equal(card.logo, `https://logos.composio.dev/api/${card.slug}`, "Packaged fallback must use original upstream brand images");
+}
 assert.equal(computerReport.code, 0, `packaged computer proxy crashed with closed stderr: ${JSON.stringify(computerReport)}`);
 assert.equal(JSON.parse(computerReport.stdout.trim()).result.tools[0].name, "list_windows");
 console.log(`packaged server started with no node_modules in reach (port ${port}) ✓`);
 console.log(`all ${count} spawned proxy paths resolve inside the packaged server dir ✓`);
 console.log("packaged MCP stdio server reached the API and flushed its final frames ✓");
 console.log("packaged computer proxy survives a closed parent stderr pipe and completes discovery ✓");
+console.log("fresh packaged connector catalog includes all 24 original brand URLs without waiting for the broker ✓");
 if (browserBundle) console.log(`packaged browser discovered without installation; access remains opt-in ✓ ${JSON.stringify(browserReport)}`);

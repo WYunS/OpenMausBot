@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 import { managedConnectorUnavailableReason } from "../shared/connector-availability.ts";
+import { readToolkitCatalogCache, writeToolkitCatalogCache } from "./toolkit-catalog-cache.ts";
 
 const DEFAULT_BACKEND_ORIGIN = "https://backend.composio.dev";
 const BROKER_READ_TIMEOUT_MS = 4_000;
@@ -993,8 +994,10 @@ export interface ToolkitCard {
   domain: string | null;
 }
 
-// Curated fallback — the official catalog supplies logos when reachable;
-// otherwise the client keeps the original favicon(domain) fallback.
+// Official public brand endpoints, independent of the account broker.
+// Source: ComposioHQ/composio docs/public/data/toolkits-list.json
+// blob 612ee303458928322b64a1d61a2df9ee924670bd; Zapier endpoint also verified.
+// These are upstream images, not embedded/generated replacements.
 const CURATED: ToolkitCard[] = [
   { slug: "slack", label: "Slack", blurb: "Post updates and read channels", domain: "slack.com", logo: null },
   { slug: "github", label: "GitHub", blurb: "Issues, pull requests, and code", domain: "github.com", logo: null },
@@ -1020,9 +1023,24 @@ const CURATED: ToolkitCard[] = [
   { slug: "airtable", label: "Airtable", blurb: "Bases and records", domain: "airtable.com", logo: null },
   { slug: "figma", label: "Figma", blurb: "Files and comments", domain: "figma.com", logo: null },
   { slug: "stripe", label: "Stripe", blurb: "Payments and customers", domain: "stripe.com", logo: null },
-];
+].map((card) => ({ ...card, logo: `https://logos.composio.dev/api/${card.slug}` }));
 
 let toolkitCache: { at: number; cards: ToolkitCard[]; identity: string } | null = null;
+
+function toolkitIdentity(cfg: AppConfig) {
+  const key = projectApiKey(cfg);
+  const broker = key ? null : brokerAccess();
+  return key ? backendFingerprint("project-catalog", toolkitBase(), key)
+    : broker ? backendFingerprint("managed-catalog", broker.url, broker.token) : null;
+}
+
+/** Fast first paint; fetching the optional catalog must not hold icons hostage. */
+export function cachedToolkits(cfg: AppConfig): { cards: ToolkitCard[]; source: "api" | "curated" } {
+  const identity = toolkitIdentity(cfg);
+  if (identity && toolkitCache?.identity !== identity) toolkitCache = readToolkitCatalogCache(identity);
+  return identity && toolkitCache?.identity === identity
+    ? { cards: toolkitCache.cards, source: "api" } : { cards: CURATED, source: "curated" };
+}
 
 /**
  * Marketplace catalog. Tries the v3 toolkits API (official names,
@@ -1031,11 +1049,8 @@ let toolkitCache: { at: number; cards: ToolkitCard[]; identity: string } | null 
 export async function listToolkits(cfg: AppConfig): Promise<{ cards: ToolkitCard[]; source: "api" | "curated" }> {
   const backendKey = projectApiKey(cfg);
   const broker = backendKey ? null : brokerAccess();
-  const identity = backendKey
-    ? backendFingerprint("project-catalog", toolkitBase(), backendKey)
-    : broker
-      ? backendFingerprint("managed-catalog", broker.url, broker.token)
-      : null;
+  const identity = toolkitIdentity(cfg);
+  cachedToolkits(cfg);
   if (identity && toolkitCache?.identity === identity && Date.now() - toolkitCache.at < 10 * 60_000) {
     return { cards: toolkitCache.cards, source: "api" };
   }
@@ -1051,14 +1066,20 @@ export async function listToolkits(cfg: AppConfig): Promise<{ cards: ToolkitCard
       for (let page = 0; page < MAX_CONNECTED_ACCOUNT_PAGES; page += 1) {
         const params = new URLSearchParams({ limit: "500", sort_by: "usage" });
         if (cursor) params.set("cursor", cursor);
-        const res = backendKey
+        let res: Response;
+        try {
+          res = backendKey
           ? await fetch(`${toolkitBase()}/toolkits?${params}`, {
               headers: { "x-api-key": backendKey },
               signal: AbortSignal.timeout(15_000),
             })
           : await brokerRequest(cursor ? `/v1/catalog?cursor=${encodeURIComponent(cursor)}` : "/v1/catalog", {
-              signal: AbortSignal.timeout(BROKER_READ_TIMEOUT_MS),
+              // Catalog is optional UI work, not a chat/login prerequisite.
+              // Keep the original allowance; four seconds discards slow but
+              // healthy official responses and strips their brand metadata.
+              signal: AbortSignal.timeout(15_000),
             });
+        } catch { break; } // Keep pages already read on a later transport failure.
         if (!res.ok) break;
         const json: any = await res.json();
         const pageItems = json.items ?? json.data ?? [];
@@ -1070,24 +1091,28 @@ export async function listToolkits(cfg: AppConfig): Promise<{ cards: ToolkitCard
         cursor = next;
       }
       if (items.length) {
-        const cards: ToolkitCard[] = items.map((t: any) => ({
-          slug: canonicalToolkitSlug(String(t.slug ?? t.key ?? t.name ?? "")),
-          label: t.name ?? t.slug ?? "",
-          blurb: (t.meta?.description ?? t.description ?? "").slice(0, 90),
-          logo: t.meta?.logo ?? t.logo ?? null,
-          noAuth: t.no_auth === true,
-          domain: null,
-        }));
+        const cards: ToolkitCard[] = items.map((t: any) => {
+          const slug = canonicalToolkitSlug(String(t.slug ?? t.key ?? t.name ?? ""));
+          const fallback = CURATED.find((card) => card.slug === slug);
+          return {
+            slug, label: t.name ?? t.slug ?? "",
+            blurb: (t.meta?.description ?? t.description ?? "").slice(0, 90),
+            logo: t.meta?.logo ?? t.logo ?? fallback?.logo ?? null,
+            noAuth: t.no_auth === true, domain: fallback?.domain ?? null,
+          };
+        });
         const uniqueCards = cards.filter(
           (card, index) => card.slug && cards.findIndex((candidate) => candidate.slug === card.slug) === index,
         );
         toolkitCache = { at: Date.now(), cards: uniqueCards, identity: identity! };
+        writeToolkitCatalogCache(toolkitCache);
         return { cards: uniqueCards, source: "api" };
       }
     } catch {
       /* fall through to curated */
     }
   }
+  if (identity && toolkitCache?.identity === identity) return { cards: toolkitCache.cards, source: "api" };
   return { cards: CURATED, source: "curated" };
 }
 

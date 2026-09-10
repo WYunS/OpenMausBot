@@ -13705,7 +13705,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
     // ── connectors (Composio) ──
     if (method === "GET" && path === "/api/connectors/catalog") {
-      const { cards, source } = await composio.listToolkits(cfg);
+      const { cards, source } = url.searchParams.get("cached") === "1"
+        ? composio.cachedToolkits(cfg) : await composio.listToolkits(cfg);
       return json(res, 200, { configured: composio.configured(cfg), mode: composio.connectionMode(cfg), source, cards });
     }
     if (method === "GET" && path === "/api/connectors/connected") {
