@@ -1,5 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
+import { createGzip } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,8 +26,8 @@ try {
   const archive = path.join(temporary, 'source.tar');
   stage = 'archive committed source';
   run('git', ['archive', '--format=tar', `--output=${archive}`, 'HEAD']);
-  stage = 'extract source archive';
-  run('tar', ['-xf', archive, '-C', staging]);
+  // Append only ASCII-named private inputs. Re-extracting the Git archive first
+  // corrupts some UTF-8 Chinese paths under Windows libarchive/code-page rules.
   stage = 'add private connection input';
   writePrivateJson(path.join(staging, 'release-inputs', 'ruijie-sandbox.json'), preset);
   writePrivateJson(path.join(staging, 'release-inputs', 'handoff.json'), {
@@ -33,8 +35,10 @@ try {
     warning: 'CONFIDENTIAL: shared sandbox access. Do not upload this archive or release-inputs to public GitHub.',
   });
   mkdirSync(path.dirname(output), { recursive: true });
+  stage = 'append private input';
+  run('tar', ['-rf', archive, '-C', staging, 'release-inputs']);
   stage = 'compress private handoff';
-  run('tar', ['-czf', output, '-C', staging, '.']);
+  await pipeline(createReadStream(archive), createGzip(), createWriteStream(output, { flags: 'wx', mode: 0o600 }));
   console.log(`Private source handoff created: ${output}`);
   console.log('Contains shared sandbox credentials. Deliver only to authorized packagers; never publish.');
 } catch (error) {
