@@ -7341,6 +7341,25 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it('keeps externally stored sandbox credentials configured through unrelated setting saves', async () => {
+    const requestJson = JSON.stringify({ client_id: 'sandbox-credential-fixture', vnc_key: 'sandbox-fixture-secret',
+      minio_url: 'http://fixture.invalid', attach_only: true });
+    try {
+      const saved = await api('PUT', '/api/config?secretStorage=external', {
+        ruijieSandbox: { managerUrl: 'http://127.0.0.1:9', requestJson },
+      });
+      expect(saved.status).toBe(200);
+      expect(saved.body.ruijieSandbox.configured).toBe(true);
+      const disk = JSON.parse(readFileSync(join(home, '.openmausbot', 'config.json'), 'utf8'));
+      expect(disk.ruijieSandbox.requestJson).toBe('');
+      expect(JSON.stringify(disk)).not.toContain('sandbox-fixture-secret');
+      expect((await api('PUT', '/api/config', { profile: { name: 'Sandbox credential fixture' } })).status).toBe(200);
+      expect((await api('GET', '/api/config')).body.ruijieSandbox.configured).toBe(true);
+    } finally {
+      await api('PUT', '/api/config', { ruijieSandbox: { managerUrl: '', requestJson: '' } });
+    }
+  });
+
   it("validates a Composio project key, creates a Session, and keeps externally stored secrets off disk", async () => {
     const oldKey = await api("PUT", "/api/config", { composio: { apiKey: "old_key" } });
     expect(oldKey.status).toBe(400);

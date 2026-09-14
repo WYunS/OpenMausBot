@@ -5,6 +5,12 @@ import path from 'node:path';
 export const SANDBOX_PRESET_MARKER = 'ruijieSandboxPreset';
 const record = (value) => value && typeof value === 'object' && !Array.isArray(value);
 
+export function desktopSandboxPresetPath({ packaged, built, ownsLocalServer, resourcesPath, appRoot }) {
+  if (!built || !ownsLocalServer) return null;
+  return packaged ? path.join(resourcesPath, 'ruijie-sandbox', 'bootstrap.json')
+    : path.join(appRoot, 'dist-native', 'ruijie-sandbox', 'bootstrap.json');
+}
+
 // Never include input values or JSON parser errors: the template contains keys.
 export function validateSandboxPreset(value) {
   const fail = () => { throw new Error('Invalid sandbox preset: require schemaVersion 1, managerUrl and requestJson'); };
@@ -59,8 +65,13 @@ export async function installSandboxPreset({ presetPath, configPath, credentials
     catch (error) { if (error.code !== 'ENOENT') throw error; config = {}; }
     if (!record(config)) throw new Error('Invalid existing config');
     if (marker?.state !== 'pending') {
-      // Even an intentionally blank existing section belongs to the user.
-      if (Object.hasOwn(config, 'ruijieSandbox') || Object.hasOwn(current, 'ruijieSandboxRequestJson')) {
+      // A manager-only configuration for THIS shared preset is an incomplete
+      // bootstrap, not a user override. Explicit blank fields, other managers
+      // and the permanent handled marker still preserve a deliberate clear.
+      const section = config.ruijieSandbox;
+      const incompletePreset = record(section) && !Object.hasOwn(section, 'requestJson') &&
+        typeof section.managerUrl === 'string' && section.managerUrl.trim().replace(/\/$/, '') === preset.managerUrl;
+      if ((Object.hasOwn(config, 'ruijieSandbox') && !incompletePreset) || Object.hasOwn(current, 'ruijieSandboxRequestJson')) {
         const next = { ...current, [SANDBOX_PRESET_MARKER]: { state: 'handled' } };
         await saveCredentials(next); current = next;
         return { credentials: current, status: 'preserved' };

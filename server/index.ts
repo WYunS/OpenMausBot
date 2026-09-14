@@ -14458,6 +14458,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           if (persisted.xai?.key !== undefined) persisted.xai.key = "";
           if (persisted.composio?.apiKey !== undefined) persisted.composio.apiKey = "";
           if (persisted.box?.token !== undefined) persisted.box.token = "";
+          if (persisted.ruijieSandbox?.requestJson !== undefined) persisted.ruijieSandbox.requestJson = "";
           if (persisted.opencodeGo?.apiKey !== undefined) persisted.opencodeGo.apiKey = "";
           if (persisted.tts?.key !== undefined) persisted.tts.key = "";
           if (persisted.imageGen?.key !== undefined) persisted.imageGen.key = "";

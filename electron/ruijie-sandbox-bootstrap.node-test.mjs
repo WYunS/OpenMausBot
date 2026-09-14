@@ -3,7 +3,7 @@ import test from 'node:test';
 import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { installSandboxPreset, readSandboxPreset, validateSandboxPreset, writePrivateJson, SANDBOX_PRESET_MARKER } from './ruijie-sandbox-bootstrap.mjs';
+import { desktopSandboxPresetPath, installSandboxPreset, readSandboxPreset, validateSandboxPreset, writePrivateJson, SANDBOX_PRESET_MARKER } from './ruijie-sandbox-bootstrap.mjs';
 import { prepareSandboxBootstrap, verifySandboxBootstrap, sandboxStagedPath } from '../scripts/prepare-ruijie-sandbox-bootstrap.mjs';
 import { workspaceCredentialEnv, workspaceCredentialSyncMessage, applyWorkspaceCredentialSyncMessage } from './workspace-credentials.mjs';
 
@@ -56,6 +56,28 @@ test('existing and deliberately cleared sandbox settings are preserved', async (
   }
   const f = fixture(t);
   assert.equal((await f.boot({ credentials: { ruijieSandboxRequestJson: 'custom' } })).status, 'preserved');
+});
+
+test('same preset manager without any saved credential repairs an incomplete existing setup', async (t) => {
+  const f = fixture(t);
+  writePrivateJson(f.configPath, { ruijieSandbox: { managerUrl: preset.managerUrl }, unrelated: 'keep' });
+  const result = await f.boot();
+  assert.equal(result.status, 'installed');
+  assert.equal(result.credentials.ruijieSandboxRequestJson, preset.requestJson);
+  assert.deepEqual(JSON.parse(readFileSync(f.configPath)), { ruijieSandbox: { managerUrl: preset.managerUrl }, unrelated: 'keep' });
+});
+
+test('compiled source preview and packaged boot both run the sandbox preset before server start', () => {
+  const main = readFileSync(new URL('./main.mjs', import.meta.url), 'utf8');
+  const body = main.slice(main.indexOf('async function bootstrapPackagedSandbox()'), main.indexOf('async function loadSecureCredentials()'));
+  assert.match(body, /desktopLayout\.built/);
+  assert.doesNotMatch(body, /if \(!app\.isPackaged/);
+  assert.match(body, /desktopSandboxPresetPath/);
+  const base = { resourcesPath: '/package-resources', appRoot: '/source', ownsLocalServer: true };
+  assert.equal(desktopSandboxPresetPath({ ...base, packaged: true, built: true }), path.join('/package-resources', 'ruijie-sandbox', 'bootstrap.json'));
+  assert.equal(desktopSandboxPresetPath({ ...base, packaged: false, built: true }), path.join('/source', 'dist-native', 'ruijie-sandbox', 'bootstrap.json'));
+  assert.equal(desktopSandboxPresetPath({ ...base, packaged: false, built: false }), null);
+  assert.equal(desktopSandboxPresetPath({ ...base, packaged: true, built: true, ownsLocalServer: false }), null);
 });
 
 test('unavailable store and failed encryption never replace saved credentials or config', async (t) => {

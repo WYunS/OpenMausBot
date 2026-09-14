@@ -19,7 +19,7 @@ import {
   readSafeLogTail,
 } from "./diagnostics.mjs";
 import { migrateWorkspaceCredentials, workspaceCredentialEnv, workspaceCredentialSyncMessage } from "./workspace-credentials.mjs";
-import { installSandboxPreset, SANDBOX_PRESET_MARKER } from './ruijie-sandbox-bootstrap.mjs';
+import { desktopSandboxPresetPath, installSandboxPreset, SANDBOX_PRESET_MARKER } from './ruijie-sandbox-bootstrap.mjs';
 import { activateExistingWindow, releaseSingleInstanceLock } from "./single-instance.mjs";
 import { pollServerIdentity } from "./server-boot-probe.mjs";
 import { packageUrlFromCommandLine, packageUrlFromDeepLink } from "./package-link.mjs";
@@ -366,9 +366,11 @@ let credentialStoreUnavailable = false;
 let importedSandboxManagerUrl;
 
 async function bootstrapPackagedSandbox() {
-  if (!app.isPackaged || !OWNS_LOCAL_SERVER) return;
+  const presetPath = desktopSandboxPresetPath({ packaged: app.isPackaged, built: desktopLayout.built,
+    ownsLocalServer: OWNS_LOCAL_SERVER, resourcesPath: process.resourcesPath, appRoot: app.getAppPath() });
+  if (!presetPath) return;
   const result = await installSandboxPreset({
-    presetPath: path.join(process.resourcesPath, 'ruijie-sandbox', 'bootstrap.json'),
+    presetPath,
     configPath: path.join(desktopDataDir(), 'config.json'),
     credentials: secureCredentials, storeAvailable: !credentialStoreUnavailable,
     saveCredentials: saveSecureCredentials,
@@ -2627,20 +2629,19 @@ async function saveWorkspaceCredential(name, value) {
   if (!patchFor || typeof value !== "string") {
     throw new Error("Unsupported credential");
   }
-  if (app.isPackaged && !(await safeStorage.isAsyncEncryptionAvailable())) {
+  if (OWNS_LOCAL_SERVER && !(await safeStorage.isAsyncEncryptionAvailable())) {
     throw new Error("The operating-system credential store is unavailable");
   }
   const secret = value.trim();
   const applyToHarness = async () => {
-    // In development the server is a separately launched process, so it
-    // cannot receive credentials from Electron at boot. Keep its established
-    // local config path there; production always uses the encrypted store.
-    const secretStorage = app.isPackaged ? "?secretStorage=external" : "";
+    // Only bare Vite development has a separate server. A compiled source
+    // preview owns its server and uses the same encrypted store as packaging.
+    const secretStorage = OWNS_LOCAL_SERVER ? "?secretStorage=external" : "";
     const response = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/config${secretStorage}`, {
       method: "PUT",
       headers: desktopServerHeaders(
         { "content-type": "application/json" },
-        { packaged: app.isPackaged, token: desktopMutationToken },
+        { packaged: OWNS_LOCAL_SERVER, token: desktopMutationToken },
       ),
       body: JSON.stringify(patchFor(secret)),
     });
@@ -2648,7 +2649,7 @@ async function saveWorkspaceCredential(name, value) {
     if (!response.ok) throw new Error(body?.error || `Could not save credential (HTTP ${response.status})`);
     return body;
   };
-  if (!app.isPackaged) return applyToHarness();
+  if (!OWNS_LOCAL_SERVER) return applyToHarness();
 
   // Commit the encrypted value before the server makes it live. The shared
   // state rolls credentials.bin back if validation/reload fails, while also

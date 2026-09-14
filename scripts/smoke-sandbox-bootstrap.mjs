@@ -8,7 +8,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { installSandboxPreset, writePrivateJson } from '../electron/ruijie-sandbox-bootstrap.mjs';
+import { desktopSandboxPresetPath, installSandboxPreset, writePrivateJson } from '../electron/ruijie-sandbox-bootstrap.mjs';
 import { readSecureCredentials } from '../electron/secure-credentials.mjs';
 import { workspaceCredentialEnv, workspaceCredentialSyncMessage } from '../electron/workspace-credentials.mjs';
 
@@ -27,12 +27,15 @@ void (async () => {
     await app.whenReady();
     assert(await safeStorage.isAsyncEncryptionAvailable(), 'Native secure storage unavailable; this is not a pass');
     manager.listen(0, '127.0.0.1'); await once(manager, 'listening');
-    const presetPath = path.join(temporary, 'resources', 'ruijie-sandbox', 'bootstrap.json');
+    const preview = process.argv.includes('--preview');
+    const presetPath = desktopSandboxPresetPath({ packaged: !preview, built: true, ownsLocalServer: true,
+      resourcesPath: path.join(temporary, 'resources'), appRoot: temporary });
     const configPath = path.join(temporary, 'data', 'config.json');
     const credentialFile = path.join(temporary, 'credentials.bin');
     const template = JSON.stringify({ client_id: 'fixture-desktop', vnc_key: 'synthetic-cua-secret', minio_url: 'http://fixture.invalid', attach_only: true });
     writePrivateJson(presetPath, { schemaVersion: 1, managerUrl: `http://127.0.0.1:${manager.address().port}`, requestJson: template });
-    writePrivateJson(configPath, { instances: { verification: { driver: 'claudeAgent', enabled: true,
+    writePrivateJson(configPath, { ...(preview ? { ruijieSandbox: { managerUrl: `http://127.0.0.1:${manager.address().port}` } } : {}),
+      instances: { verification: { driver: 'claudeAgent', enabled: true,
       config: { cli: path.join(root, 'server', 'testing', 'fake-claude-cli.ts') } } } });
     let writes = 0;
     const saveCredentials = async (value) => {
@@ -86,7 +89,7 @@ void (async () => {
     }
     const cleared = { ...loaded.credentials }; delete cleared.ruijieSandboxRequestJson;
     assert.equal((await installSandboxPreset({ presetPath, configPath, credentials: cleared, saveCredentials })).credentials.ruijieSandboxRequestJson, undefined);
-    console.log(JSON.stringify({ ok: true, platform: process.platform, checks: [
+    console.log(JSON.stringify({ ok: true, platform: process.platform, mode: preview ? 'preview-incomplete-config' : 'packaged-first-install', checks: [
       'real OS encryption and reload', 'no plaintext credential in profile config', 'unrelated accounts preserved',
       'second launch idempotent', 'real utility process with copied dist-server', 'two new bots default to shared sandbox',
       'synthetic sandbox status ready without manual setup', 'explicit clear stays cleared',
