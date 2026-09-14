@@ -9,6 +9,7 @@ import { sandboxInputPath } from './prepare-ruijie-sandbox-bootstrap.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const run = (command, args) => execFileSync(command, args, { cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
 let temporary;
+let stage = 'validate committed source and private input';
 try {
   // Archive only a known commit; never scoop up debug dumps, personal profiles,
   // caches or untracked files. The one private addition is explicitly validated.
@@ -21,19 +22,23 @@ try {
   const staging = path.join(temporary, 'source');
   mkdirSync(staging);
   const archive = path.join(temporary, 'source.tar');
+  stage = 'archive committed source';
   run('git', ['archive', '--format=tar', `--output=${archive}`, 'HEAD']);
+  stage = 'extract source archive';
   run('tar', ['-xf', archive, '-C', staging]);
+  stage = 'add private connection input';
   writePrivateJson(path.join(staging, 'release-inputs', 'ruijie-sandbox.json'), preset);
   writePrivateJson(path.join(staging, 'release-inputs', 'handoff.json'), {
     sourceCommit: commit, sandboxPresetSha256: sandboxPresetDigest(preset),
     warning: 'CONFIDENTIAL: shared sandbox access. Do not upload this archive or release-inputs to public GitHub.',
   });
   mkdirSync(path.dirname(output), { recursive: true });
+  stage = 'compress private handoff';
   run('tar', ['-czf', output, '-C', staging, '.']);
   console.log(`Private source handoff created: ${output}`);
   console.log('Contains shared sandbox credentials. Deliver only to authorized packagers; never publish.');
-} catch {
-  console.error('Private handoff failed: require a committed worktree, valid private input, tar and a new output path.');
+} catch (error) {
+  console.error(`Private handoff failed during ${stage} (${error.code ?? error.status ?? 'invalid input'}).`);
   process.exitCode = 1;
 } finally {
   // Only this process-owned mkdtemp directory; never the repository/user home.
