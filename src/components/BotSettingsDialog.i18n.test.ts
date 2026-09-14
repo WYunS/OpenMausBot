@@ -25,7 +25,8 @@ describe("Bot settings localization", () => {
     const source = readFileSync(new URL("./BotSettingsDialog.tsx", import.meta.url), "utf8");
     expect(source).toMatch(/className="relative z-10 flex shrink-0 items-center justify-between bg-panel px-5 py-3"/);
     expect(source).toMatch(/className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md/);
-    expect(source).toMatch(/onMouseDown=\{\(event\) => \{[\s\S]*?toggleSettings", open: false/);
+    expect(source).toContain("botSettingsCloseHandlers(() => dispatch({ type: \"toggleSettings\", open: false }))");
+    expect(source).toContain('WebkitAppRegion: "no-drag"');
     expect(source).toMatch(/<X size=\{18\} className="pointer-events-none"/);
   });
   it("translates every first-level section into Chinese", () => {
@@ -67,7 +68,8 @@ describe("Bot settings localization", () => {
     expect(html).toContain("角色设定");
     expect(html).toContain('placeholder="搜索"');
     expect(html).toContain('aria-label="关闭机器人设置"');
-    expect(html).toContain('style="top:env(titlebar-area-height, 0px)"');
+    expect(html).toContain('style="top:env(titlebar-area-height, 0px);-webkit-app-region:no-drag"');
+    expect(html).toContain('style="-webkit-app-region:no-drag" aria-label="关闭机器人设置"');
     expect(html).not.toContain(">Overview<");
   });
 
@@ -80,7 +82,8 @@ describe("Bot settings localization", () => {
     }));
     expect(html).toContain("云端后端");
     expect(html).toContain("自托管 VPS");
-    expect(html).toContain("锐捷沙箱 · 暂时不可用");
+    expect(html).toContain(">锐捷沙箱</button>");
+    expect(html).not.toContain("锐捷沙箱 · 暂时不可用");
     expect(html).not.toContain("Cloud backend");
   });
 });

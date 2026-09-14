@@ -4942,6 +4942,43 @@ describe("harness HTTP API", () => {
     expect(afterFail.messages.some((m: { role: string }) => m.role === "user")).toBe(false);
   });
 
+  it("keeps ordinary chat available when the bot's selected cloud computer is not configured", async () => {
+    expect((await api("PUT", "/api/config", { box: { token: "" } })).status).toBe(200);
+    const bot = (await api("POST", "/api/bots", {
+      name: "Offline computer chat",
+      modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+    })).body.bot;
+    try {
+      expect((await api("PATCH", `/api/bots/${bot.id}`, {
+        computer: "cloud",
+        cloudBackend: "box",
+      })).status).toBe(200);
+
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "你好" })).status).toBe(202);
+      // This suite deliberately runs Claude in `hang` mode. Reaching its dump
+      // proves the turn crossed the old pre-model failure point and ordinary
+      // chat was dispatched; the interrupt in finally settles the fixture.
+      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
+      const current = (await api("GET", "/api/bots?messages=20")).body.bots.find(
+        (candidate: { id: string }) => candidate.id === bot.id,
+      );
+      expect(current.busy).toBe(true);
+      expect(current.messages.at(-1)).toMatchObject({ role: "user", text: "你好" });
+      const dump = await readJsonFileWhenReady<{
+        systemPrompt?: string;
+        mcpConfig?: { mcpServers?: Record<string, unknown> };
+      }>(fakeClaudeDump);
+      expect(dump.systemPrompt).toContain("继续正常回答不依赖电脑的问题");
+      expect(dump.systemPrompt).toContain("不要拒绝整个请求");
+      expect(dump.mcpConfig?.mcpServers).not.toHaveProperty("computer");
+      expect(dump.mcpConfig?.mcpServers).not.toHaveProperty("localComputer");
+    } finally {
+      await api("POST", `/api/bots/${bot.id}/interrupt`).catch(() => undefined);
+      await api("DELETE", `/api/bots/${bot.id}`).catch(() => undefined);
+    }
+  });
+
   it("refuses to fork a message when the provider is unavailable, without mutating", async () => {
     const { body } = await api("GET", "/api/bots");
     const bot = body.bots[0];
@@ -7242,7 +7279,7 @@ describe("harness HTTP API", () => {
     expect(response.body.error).toContain("maximum 4000 characters");
   });
 
-  it("validates the non-secret VPS alias and keeps old bots on Box by default", async () => {
+  it("validates the non-secret VPS alias without rewriting stored bot profiles", async () => {
     const before = await api("GET", "/api/bots");
     const bot = before.body.bots[0];
     expect(bot.cloudBackend).toBeUndefined();
@@ -7286,17 +7323,22 @@ describe("harness HTTP API", () => {
     }
   });
 
-  it("rejects the disabled Ruijie sandbox at every public configuration boundary", async () => {
-    const bot = (await api("GET", "/api/bots?messages=0")).body.bots[0];
-    const selected = await api("PATCH", `/api/bots/${bot.id}`, { cloudBackend: "ruijie-sandbox" });
-    expect(selected.status).toBe(409);
-    expect(selected.body.error).toMatch(/temporarily unavailable/i);
-
-    const configured = await api("PUT", "/api/config", {
-      ruijieSandbox: { managerUrl: "http://127.0.0.1:1", requestJson: "{}" },
-    });
-    expect(configured.status).toBe(409);
-    expect(configured.body.error).toMatch(/temporarily unavailable/i);
+  it("allows a bot to select the enabled Ruijie sandbox", async () => {
+    const created = await api("POST", "/api/bots");
+    const bot = created.body.bot;
+    try {
+      const defaultComputer = await api("GET", `/api/bots/${bot.id}/computer`);
+      expect(defaultComputer.status).toBe(200);
+      expect(defaultComputer.body.backend).toBe("ruijie-sandbox");
+      const selected = await api("PATCH", `/api/bots/${bot.id}`, { cloudBackend: "ruijie-sandbox" });
+      expect(selected.status).toBe(200);
+      expect(selected.body.bot.cloudBackend).toBe("ruijie-sandbox");
+      const disconnected = await api("POST", `/api/bots/${bot.id}/computer/viewer-close`, {});
+      expect(disconnected.status).toBe(200);
+      expect(disconnected.body).toEqual({ closed: true, released: false });
+    } finally {
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
   });
 
   it("validates a Composio project key, creates a Session, and keeps externally stored secrets off disk", async () => {
@@ -8668,10 +8710,13 @@ describe("instance CLI override API", () => {
 
 describe("computer control API (who is driving)", () => {
   let botId = "";
+  let siblingBotId = "";
 
   beforeAll(async () => {
     const created = await api("POST", "/api/bots", {});
     botId = created.body.bot.id;
+    const sibling = await api("POST", "/api/bots", {});
+    siblingBotId = sibling.body.bot.id;
   });
 
   it("starts disengaged", async () => {
@@ -8697,6 +8742,16 @@ describe("computer control API (who is driving)", () => {
     } finally {
       sse.close();
     }
+  });
+
+  it("shares a human hold across bots bound to the same Ruijie desktop", async () => {
+    const took = await api("POST", `/api/bots/${botId}/computer/control`, { action: "take" });
+    expect(took.body.held).toBe(true);
+    expect((await api("GET", `/api/bots/${siblingBotId}/computer/control`)).body.held).toBe(true);
+
+    const released = await api("POST", `/api/bots/${siblingBotId}/computer/control`, { action: "release" });
+    expect(released.body.held).toBe(false);
+    expect((await api("GET", `/api/bots/${botId}/computer/control`)).body.held).toBe(false);
   });
 
   it("atomically owns and conditionally releases a workspace lease without returning its id", async () => {

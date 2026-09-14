@@ -1,9 +1,11 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 
 import type { AppConfig } from "./config.ts";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const HEARTBEAT_INTERVAL_MS = 5 * 60_000;
+const CUA_BRIDGE_PORT = 18_765;
+const CUA_BRIDGE_KEY_CONTEXT = "openmausbot-ruijie-cua-bridge-v1";
 
 type FetchLike = typeof fetch;
 
@@ -65,6 +67,42 @@ export function ruijieSandboxConfigProblem(cfg: AppConfig): string | null {
   if (!cleanBaseUrl(cfg.ruijieSandbox?.managerUrl)) return "Add the sandbox manager URL in App Settings → Connections";
   if (!requestTemplate(cfg)) return "Add a valid sandbox request JSON template in App Settings → Connections";
   return null;
+}
+
+export function ruijieCuaBridgeAccess(cfg: AppConfig, proxyUrl: string): { baseUrl: string; token: string } | null {
+  const template = requestTemplate(cfg);
+  if (!template) return null;
+  let proxyOrigin: string;
+  try {
+    const parsed = new URL(proxyUrl);
+    if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) return null;
+    const route = parsed.pathname.match(/^(\/sandboxes\/[^/]+\/proxy\/)\d+(?:\/.*)?$/);
+    if (!route) return null;
+    proxyOrigin = `${parsed.origin}${route[1]}${CUA_BRIDGE_PORT}`;
+  } catch {
+    return null;
+  }
+  return {
+    baseUrl: proxyOrigin,
+    token: createHmac("sha256", template.vnc_key).update(CUA_BRIDGE_KEY_CONTEXT).digest("hex"),
+  };
+}
+
+export async function ruijieCuaBridgeReady(
+  access: { baseUrl: string; token: string },
+  fetchImpl: FetchLike = fetch,
+): Promise<boolean> {
+  try {
+    const response = await fetchImpl(`${access.baseUrl}/health`, {
+      headers: { authorization: `Bearer ${access.token}` },
+      signal: AbortSignal.timeout(3_000),
+    });
+    if (!response.ok) return false;
+    const body: any = await response.json().catch(() => null);
+    return body?.ok === true;
+  } catch {
+    return false;
+  }
 }
 
 function taskFromBody(body: any, fallbackTaskId: string): RuijieSandboxTask {
@@ -176,11 +214,16 @@ export async function provisionRuijieSandbox(
   const problem = ruijieSandboxConfigProblem(cfg);
   const template = requestTemplate(cfg);
   if (problem || !template) throw Object.assign(new Error(problem ?? "sandbox is not configured"), { status: 409 });
+  if (template.attach_only === true) {
+    throw Object.assign(new Error('This installation connects to an existing shared sandbox only. Ask the sandbox administrator to restore it; automatic provisioning is disabled.'), { status: 409 });
+  }
   // The captured production request represents an unset optional password as
   // null, while the manager's current FastAPI schema accepts only a string or
   // an omitted field. Omission preserves the provider default and keeps the
-  // rest of the supplied request opaque.
-  const submission: Record<string, unknown> = { ...template };
+  // rest of the supplied request opaque. Persistence is the one product-level
+  // override: the caller, not the manager, owns this submit parameter. Always
+  // request it so closing a viewer never lets the pool reclaim the sandbox.
+  const submission: Record<string, unknown> = { ...template, never_reclaim: true };
   if (submission.xiaobing_pswd === null) delete submission.xiaobing_pswd;
   const response = await managerJson(cfg, "/submit", {
     method: "POST",
@@ -274,6 +317,15 @@ export function stopRuijieSandboxHeartbeat(clientId?: string): void {
   }
   for (const timer of heartbeatTimers.values()) clearInterval(timer);
   heartbeatTimers.clear();
+}
+
+/** End this app's live viewer/keepalive session without releasing the remote
+ * machine. `never_reclaim` keeps the provider allocation available for the
+ * next reconnect or bot turn. */
+export function disconnectRuijieSandbox(cfg: AppConfig): { closed: true; released: false } {
+  const template = requestTemplate(cfg);
+  stopRuijieSandboxHeartbeat(template?.client_id);
+  return { closed: true, released: false };
 }
 
 export async function releaseRuijieSandbox(

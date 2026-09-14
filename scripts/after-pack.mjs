@@ -7,6 +7,7 @@ import {
 } from "./prepare-cloudflared.mjs";
 import { verifyBrowserBundle } from "./prepare-browser.mjs";
 import { verifyFeishuRuntimeBundle } from "./prepare-feishu-runtime.mjs";
+import { readSandboxPreset, sandboxPresetDigest } from '../electron/ruijie-sandbox-bootstrap.mjs';
 
 async function requireRealDirectory(directory, mode = 0o755) {
   const details = await lstat(directory);
@@ -76,6 +77,12 @@ export default async function afterPack(context) {
       ? path.join(context.appOutDir, "OpenMausBot.app", "Contents", "Resources")
       : path.join(context.appOutDir, "resources")
   );
+  const sandboxDigest = context.packager?.config?.extraMetadata?.ruijieSandboxBootstrapSha256;
+  if (sandboxDigest) {
+    const file = path.join(resources, 'ruijie-sandbox', 'bootstrap.json');
+    await requireRegularFile(file, context.electronPlatformName === 'win32' ? undefined : 0o600);
+    if (sandboxPresetDigest(readSandboxPreset(file)) !== sandboxDigest) throw new Error('Packaged sandbox preset differs from the verified build input');
+  }
   if (context.packager && ['win32', 'darwin'].includes(context.electronPlatformName)) {
     const { verifyDesktopBuildReceipt } = await import('./desktop-build-receipt.mjs');
     verifyDesktopBuildReceipt(undefined, { ui: path.join(resources, 'ui'), server: path.join(resources, 'server') });

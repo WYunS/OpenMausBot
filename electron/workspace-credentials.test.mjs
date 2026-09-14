@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyWorkspaceCredentialSyncMessage,
   migrateWorkspaceCredentials,
+  workspaceCredentialSyncMessage,
   workspaceCredentialEnv,
   WORKSPACE_CREDENTIALS,
 } from "./workspace-credentials.mjs";
@@ -148,5 +150,36 @@ describe("workspace credential env", () => {
     const credentials = Object.fromEntries(WORKSPACE_CREDENTIALS.map((c) => [c.name, `v-${c.name}`]));
     const env = workspaceCredentialEnv(credentials);
     expect(Object.keys(env).sort()).toEqual(WORKSPACE_CREDENTIALS.map((c) => c.env).sort());
+  });
+});
+
+describe("workspace credential private sync", () => {
+  it("restores every recovered credential into the running server config", () => {
+    const message = workspaceCredentialSyncMessage({
+      ruijieSandboxRequestJson: "{\"endpoint\":\"saved\"}",
+      boxToken: "box-saved",
+    });
+    const target = {};
+    const environment = {};
+
+    expect(applyWorkspaceCredentialSyncMessage(message, { target, environment })).toBe(true);
+    expect(environment).toEqual({
+      BOX_TOKEN: "box-saved",
+      OMB_RUIJIE_SANDBOX_REQUEST_JSON: "{\"endpoint\":\"saved\"}",
+      OMB_CREDENTIAL_STORE: "ok",
+    });
+    expect(target).toEqual({
+      box: { token: "box-saved" },
+      ruijieSandbox: { requestJson: "{\"endpoint\":\"saved\"}" },
+    });
+  });
+
+  it("rejects malformed or non-private messages without changing state", () => {
+    const target = {};
+    const environment = {};
+    expect(applyWorkspaceCredentialSyncMessage({ type: "wrong", credentials: { boxToken: "leak" } }, { target, environment })).toBe(false);
+    expect(applyWorkspaceCredentialSyncMessage({ type: "openmausbot:workspace-credentials", credentials: "bad" }, { target, environment })).toBe(false);
+    expect(target).toEqual({});
+    expect(environment).toEqual({});
   });
 });

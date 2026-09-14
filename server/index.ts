@@ -8,6 +8,7 @@ import { extname, join } from "node:path";
 
 import { z } from "zod";
 import { botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
+import { applyWorkspaceCredentialSyncMessage } from "../electron/workspace-credentials.mjs";
 import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
 import {
   approvalModeFor,
@@ -133,6 +134,11 @@ import {
   customMcpServers,
 } from "./config.ts";
 import { ComputerControl } from "./computer-control.ts";
+import {
+  botIdFromComputerControlScope,
+  computerControlScope,
+  RUIJIE_COMPUTER_CONTROL_SCOPE,
+} from "./computer-control-scope.ts";
 import { ComputerTurnQueue, type ComputerTurnLease } from "./computer-turn-queue.ts";
 import { MAX_REMOTE_COMMAND_LENGTH } from "./remote-computer.ts";
 import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts";
@@ -291,6 +297,7 @@ import { checkSoulDrift, readSoulDrift, soulFile, writeSoulMirror } from "./bot-
 import {
   buildSystemPrompt,
   computerPrompt,
+  hostComputerRoutePrompt,
   mentionPrompt,
   COMPOSIO_PROMPT,
   CREDENTIAL_PROMPT,
@@ -301,6 +308,7 @@ import {
   ROUTINE_EXECUTION_PROMPT,
   WEBHOOK_PROMPT,
   type ComputerPromptKind,
+  type HostComputerRoute,
 } from "./system-prompt.ts";
 import { readCuaConnection, type LocalComputerConnection } from "./local-computer.ts";
 import {
@@ -314,7 +322,7 @@ import { RepeatDetector, callKey } from "./repeat-detector.ts";
 import { redactSecretsInText } from "./redact.ts";
 import * as vps from "./vps-computer.ts";
 import * as ruijieSandbox from "./ruijie-sandbox.ts";
-import { RUIJIE_SANDBOX_ENABLED, RUIJIE_SANDBOX_UNAVAILABLE_MESSAGE } from "./product-features.ts";
+import { DEFAULT_CLOUD_BACKEND, RUIJIE_SANDBOX_ENABLED, RUIJIE_SANDBOX_UNAVAILABLE_MESSAGE } from "./product-features.ts";
 import { RoutineManager, type RoutineRun, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
 import { CalendarCallManager, type CalendarCall } from "./calendar-calls.ts";
 import { BUILT_IN_BROWSER_SYSTEM_PROMPT } from "./browser-engine.ts";
@@ -364,7 +372,7 @@ import { installedPlaybookInstructions } from "./installed-playbooks.ts";
 import { createBotPackageExport, type ExportablePackageSkill } from "./package-export.ts";
 import { createTeamBackup, importTeamBackup } from "./team-backup.ts";
 import { MAX_TEAM_BACKUP_BYTES } from "../shared/team-backup.ts";
-import { shouldMountLocalComputer } from "./local-routing.ts";
+import { hostComputerIntent, shouldFallbackCloudToHost, shouldMountLocalComputer } from "./local-routing.ts";
 import { resolveSurface } from "./surface.ts";
 import {
   PendingTurnCancellations,
@@ -607,6 +615,13 @@ utilityParentPort?.on("message", (event) => {
   const message = event?.data;
   try {
     if (applyDesktopMutationTokenMessage(message)) return;
+    if (applyWorkspaceCredentialSyncMessage(message, { target: cfg, environment: process.env })) {
+      void reloadProviders().then(
+        () => broadcast({ kind: "config", ...configStatus() }),
+        (error) => console.error(`[desktop-sync] workspace credential reload failed: ${error instanceof Error ? error.message : String(error)}`),
+      );
+      return;
+    }
     if (applyDesktopBrowserConnectionMessage(message)) return;
     if (handleDesktopTrustedApprovalMessage(message)) return;
     if (browserCleanup.receive(message)) return;
@@ -1058,11 +1073,25 @@ async function ruijieDesktopIntegration(
   generation: string,
   joinUrl: string,
 ) {
+  const cua = ruijieSandbox.ruijieCuaBridgeAccess(cfg, joinUrl);
+  const control = controlIntegration(botId, threadId, generation);
+  if (cua && await ruijieSandbox.ruijieCuaBridgeReady(cua)) {
+    return {
+      command: process.execPath,
+      args: [SPAWNED_PROXIES.ruijieComputer],
+      env: {
+        ...AGENTS_NODE_FLAG,
+        OMB_RUIJIE_CUA_URL: cua.baseUrl,
+        OMB_RUIJIE_CUA_TOKEN: cua.token,
+        OMB_CONTROL_URL: control.url,
+        OMB_CONTROL_TOKEN: control.token,
+      },
+    };
+  }
   const connection = availableBrowserConnection();
   if (!connection) return null;
   const capability = await registerBrowserCapability(connection, botId);
   await attachRuijieDesktopCapability(connection, capability, joinUrl);
-  const control = controlIntegration(botId, threadId, generation);
   return {
     command: process.execPath,
     args: [SPAWNED_PROXIES.ruijieComputer],
@@ -1142,17 +1171,33 @@ async function connectedAppsIntegration(botId: string, threadId: string, generat
 // they hold it, the bot's computer proxies refuse every action. The record
 // lives here; the proxies consult it over loopback with the boot token.
 const computerControlRevision = new Map<string, number>();
-const computerControl = new ComputerControl((botId, snapshot) => {
-  computerControlRevision.set(botId, (computerControlRevision.get(botId) ?? 0) + 1);
-  // One-way, fail-closed mirror into the Electron process that owns the
-  // native browser. Never send release: a loopback caller can influence the
-  // server record, while only the trusted Browser panel may clear Electron's
-  // local gate after its server-first release succeeds.
-  if (snapshot.held && /^[A-Za-z0-9_-]{1,120}$/.test(botId)) {
-    postDesktopPrivateMessage({ type: "openmausbot:browser-control", botId, held: true });
+const computerControl = new ComputerControl((scope, _snapshot) => {
+  const botIds = scope === RUIJIE_COMPUTER_CONTROL_SCOPE
+    ? store.bots.filter((bot) => computerControlScope(bot) === scope).map((bot) => bot.id)
+    : [botIdFromComputerControlScope(scope)].filter((botId): botId is string => Boolean(botId));
+  for (const botId of botIds) {
+    const snapshot = computerControlSnapshotForBot(botId);
+    computerControlRevision.set(botId, (computerControlRevision.get(botId) ?? 0) + 1);
+    // One-way, fail-closed mirror into the Electron process that owns the
+    // native browser. Never send release: a loopback caller can influence the
+    // server record, while only the trusted Browser panel may clear Electron's
+    // local gate after its server-first release succeeds.
+    if (snapshot.held && /^[A-Za-z0-9_-]{1,120}$/.test(botId)) {
+      postDesktopPrivateMessage({ type: "openmausbot:browser-control", botId, held: true });
+    }
+    broadcast({ kind: "computer-control", botId, held: snapshot.held, helpReason: snapshot.helpReason });
   }
-  broadcast({ kind: "computer-control", botId, held: snapshot.held, helpReason: snapshot.helpReason });
 });
+
+function computerControlSnapshotForBot(botId: string) {
+  const bot = store.bot(botId);
+  if (!bot) return computerControl.snapshot(`bot:${botId}`);
+  const scope = computerControlScope(bot);
+  const scoped = computerControl.snapshot(scope);
+  if (scope !== RUIJIE_COMPUTER_CONTROL_SCOPE) return scoped;
+  const personal = computerControl.snapshot(`bot:${botId}`);
+  return { ...scoped, helpReason: personal.helpReason };
+}
 const controlLeaseIdSchema = z.string().min(16).max(120).regex(/^[A-Za-z0-9_-]+$/);
 const routineRequestSourceSchema = {
   fromBotId: z.string().min(1).max(128),
@@ -1537,9 +1582,9 @@ function previewSystemPrompt(bot: BotRecord) {
     bot.computer === "vm"
       ? caps?.computerMcp ? localVmMode(cfg) === "per-bot" ? "vm-private" : "vm-shared" : null
       : bot.computer === "cloud"
-        ? bot.cloudBackend === "ruijie-sandbox"
+        ? (bot.cloudBackend ?? DEFAULT_CLOUD_BACKEND) === "ruijie-sandbox"
           ? caps?.localComputerMcp ? "ruijie" : null
-          : instance?.driverKind === "boxAgent" ? "box-agent" : caps?.computerMcp ? bot.cloudBackend === "vps" ? "vps" : "box" : null
+          : instance?.driverKind === "boxAgent" ? "box-agent" : caps?.computerMcp ? (bot.cloudBackend ?? DEFAULT_CLOUD_BACKEND) === "vps" ? "vps" : "box" : null
         : bot.computer === "local"
           ? caps?.localComputerMcp ? "local" : null
           : null;
@@ -3154,7 +3199,7 @@ function managedBoxOwners(): box.ManagedBoxOwner[] {
       activeGroupTurnForBot(bot.id) !== null ||
       Boolean(routines?.activeRunForBot(bot.id)) ||
       activeVpsThreads.has(bot.id) ||
-      computerControl.snapshot(bot.id).held,
+      computerControlSnapshotForBot(bot.id).held,
   }))];
 }
 
@@ -3201,9 +3246,9 @@ function providerOperationConflict(provider: RemoteComputerProvider): string | n
 function turnProvider(bot: NonNullable<ReturnType<typeof store.bot>>, runOn?: RoutineRunOn): RemoteComputerProvider | null {
   if (runOn === "cloud" || registry.get(bot.modelSelection.instanceId)?.driverKind === "boxAgent") return "box";
   if (bot.computer !== undefined && bot.computer !== "cloud") return null;
-  return bot.cloudBackend === "vps"
+  return (bot.cloudBackend ?? DEFAULT_CLOUD_BACKEND) === "vps"
     ? "vps"
-    : bot.cloudBackend === "ruijie-sandbox"
+    : (bot.cloudBackend ?? DEFAULT_CLOUD_BACKEND) === "ruijie-sandbox"
       ? "ruijie-sandbox"
       : "box";
 }
@@ -4583,7 +4628,7 @@ function startScreenPoller(
       browser: guarded(captures.browser, browserSession ? `browser:${browserSession}` : undefined),
     },
     control: () => ({
-      held: computerControl.snapshot(botId).held,
+      held: computerControlSnapshotForBot(botId).held,
       revision: computerControlRevision.get(botId) ?? 0,
     }),
     onFrame: (frame) => broadcast({ kind: "screen", botId, threadId, ...frame }),
@@ -5020,7 +5065,7 @@ async function startTurn(
       if (dwebUrl) integrations.dweb = { url: dwebUrl };
       // Cloud routines always use Box/BoxAgent. The per-bot backend applies
       // only to ordinary turns that mount a computer into the local agent.
-      const cloudBackend = opts?.runOn === "cloud" ? "box" : (bot.cloudBackend ?? "box");
+      const cloudBackend = opts?.runOn === "cloud" ? "box" : (bot.cloudBackend ?? DEFAULT_CLOUD_BACKEND);
       const mountsComputerMcp = instance.adapter.capabilities.computerMcp === true;
       const mountsCloudComputer = mountsComputerMcp || instance.driverKind === "boxAgent";
       const mountsLocalComputer = instance.adapter.capabilities.localComputerMcp === true;
@@ -5040,11 +5085,60 @@ async function startTurn(
       if (bot.computer === "browser" && plan.computer === "off" && instance.driverKind === "boxAgent") {
         throw new Error("the Computer engine works on the cloud computer — set Works on to Cloud, or choose another engine");
       }
-      const wants = plan.computer;
+      const hostIntent = opts?.runOn === "cloud" ? "unspecified" : hostComputerIntent(text);
+      const wants = hostIntent === "require" ? "local" : plan.computer;
       let previewCapture: (() => Promise<{ png: string; format: string }>) | null = null;
       let computerKind: "box" | "vps" | "ruijie" | "vm" | "local" | null = null;
+      let computerSetupProblem: string | null = null;
+      let hostComputerRoute: HostComputerRoute = null;
       let autoVpsProblem: string | null = null;
       let ruijieDesktopJoinUrl: string | null = null;
+
+      const mountHostComputer = async (): Promise<string | null> => {
+        if (!shouldMountLocalComputer({
+          requested: "local",
+          hostPlatform: process.platform,
+          providerSupportsLocal: mountsLocalComputer,
+        })) {
+          return "当前模型不支持操控宿主机";
+        }
+        const cua = readCuaConnection();
+        if (!cua) return "宿主机控制暂时不可用";
+        if (!await waitForComputerTurn(
+          "local-computer",
+          threadId,
+          dispatchClaimId,
+          () => directTurnClaimIsCurrent(bot.id, dispatchClaimId, threadId),
+        )) {
+          throw new DirectTurnSetupCancelled("turn stopped while waiting for this computer");
+        }
+        const currentCua = readCuaConnection();
+        if (!currentCua) {
+          releaseComputerTurnClaim(threadId, dispatchClaimId);
+          return "宿主机控制暂时不可用";
+        }
+        bindTurnComputer(resourceOwner, "computer:host");
+        integrations.localComputer = observedLocalComputer(currentCua, bot.id, threadId, dispatchClaimId);
+        computerKind = "local";
+        return null;
+      };
+      const mountHostFallback = async (): Promise<void> => {
+        if (
+          wants !== "cloud" ||
+          !computerSetupProblem ||
+          !shouldFallbackCloudToHost({ cloudBackend, hostIntent }) ||
+          integrations.computer ||
+          integrations.localComputer
+        ) return;
+        const boundProblem = computerSetupProblem;
+        const hostProblem = await mountHostComputer();
+        if (!hostProblem) {
+          hostComputerRoute = "fallback";
+          computerSetupProblem = null;
+        } else {
+          computerSetupProblem = `${boundProblem}；${hostProblem}`;
+        }
+      };
 
       // Explicit destinations are strict. In particular, Local VM must never
       // fall through to host CUA and accidentally click on the user's Mac.
@@ -5102,26 +5196,8 @@ async function startTurn(
           return containerComputerFrame(undefined, undefined, localVmTarget);
         };
       } else if (wants === "local") {
-        if (!shouldMountLocalComputer({
-          requested: "local",
-          hostPlatform: process.platform,
-          providerSupportsLocal: mountsLocalComputer,
-        })) {
-          throw new Error("this model engine cannot control this computer — choose Claude or an ACP engine, or select another destination");
-        }
-        if (!await waitForComputerTurn(
-          "local-computer",
-          threadId,
-          dispatchClaimId,
-          () => directTurnClaimIsCurrent(bot.id, dispatchClaimId, threadId),
-        )) {
-          throw new DirectTurnSetupCancelled("turn stopped while waiting for this computer");
-        }
-        const cua = readCuaConnection();
-        if (!cua) throw new Error("CUA Driver is not ready for this computer — check permissions and restart OpenMausBot");
-        bindTurnComputer(resourceOwner, "computer:host");
-        integrations.localComputer = observedLocalComputer(cua, bot.id, threadId, dispatchClaimId);
-        computerKind = "local";
+        computerSetupProblem = await mountHostComputer();
+        if (!computerSetupProblem) hostComputerRoute = hostIntent === "require" ? "explicit" : null;
       }
 
       // A VPS is a local-agent computer mount, never a remote agent runner.
@@ -5129,16 +5205,16 @@ async function startTurn(
       // the person explicitly opted this bot into remote lifecycle actions.
       if ((wants === "cloud" || wants === undefined) && cloudBackend === "vps") {
         const unsupported = vps.vpsDriverError(instance.driverKind, mountsComputerMcp);
-        if (unsupported && wants === "cloud") throw new Error(unsupported);
+        if (unsupported && wants === "cloud") computerSetupProblem = "当前模型不支持绑定的云电脑";
         if (unsupported && wants === undefined) autoVpsProblem = unsupported;
         if (!unsupported) {
           // The remote lifecycle and container are shared by this bot. Keep
           // its explicit computer turns serialized; ordinary threads still run.
           bindTurnComputer(resourceOwner, `computer:vps:${vpsSshAlias(cfg)}:${bot.id}`, true);
           activeVpsThreads.set(bot.id, threadId);
-          const remote = wants === "cloud" || bot.autoStartVps
-            ? await vps.vpsComputerAction("provision", cfg, bot.id)
-            : await vps.inspectVpsForAuto(cfg, bot.id);
+          const remote = await (wants === "cloud" || bot.autoStartVps
+            ? vps.vpsComputerAction("provision", cfg, bot.id)
+            : vps.inspectVpsForAuto(cfg, bot.id)).catch(() => null);
           if (remote?.ready && remote.sshAlias) {
             const targetCfg = { ...cfg, vps: { sshAlias: remote.sshAlias } };
             const vpsMcp = vps.vpsComputerMcp(targetCfg, bot.id, remote.container_id ?? undefined);
@@ -5152,7 +5228,7 @@ async function startTurn(
           } else {
             activeVpsThreads.delete(bot.id);
             if (wants === "cloud") {
-              throw new Error(remote?.problem ?? "the VPS computer could not be created or reached");
+              computerSetupProblem = "绑定的云电脑暂时无法连接";
             }
             autoVpsProblem = remote?.problem ?? "the VPS computer could not be reached";
           }
@@ -5160,82 +5236,100 @@ async function startTurn(
       }
 
       if (wants === "cloud" && cloudBackend === "ruijie-sandbox") {
-        if (!RUIJIE_SANDBOX_ENABLED) throw new Error(RUIJIE_SANDBOX_UNAVAILABLE_MESSAGE);
-        if (!mountsLocalComputer) {
-          throw new Error("this model engine cannot use the Ruijie sandbox computer — choose an engine with computer tools");
+        if (!RUIJIE_SANDBOX_ENABLED) computerSetupProblem = "绑定的云电脑方案暂时不可用";
+        else if (!mountsLocalComputer) computerSetupProblem = "当前模型不支持绑定的云电脑";
+        else {
+          if (!await waitForComputerTurn(
+            "ruijie-sandbox",
+            threadId,
+            dispatchClaimId,
+            () => directTurnClaimIsCurrent(bot.id, dispatchClaimId, threadId),
+          )) {
+            throw new DirectTurnSetupCancelled("turn stopped while waiting for the Ruijie sandbox");
+          }
+          try {
+            await ruijieSandbox.readyRuijieSandboxForTurn(cfg);
+            const joined = await ruijieSandbox.joinRuijieSandbox(cfg);
+            ruijieDesktopJoinUrl = joined.joinUrl;
+            computerKind = "ruijie";
+          } catch {
+            computerSetupProblem = "绑定的云电脑暂时无法连接";
+          }
         }
-        if (!await waitForComputerTurn(
-          "ruijie-sandbox",
-          threadId,
-          dispatchClaimId,
-          () => directTurnClaimIsCurrent(bot.id, dispatchClaimId, threadId),
-        )) {
-          throw new DirectTurnSetupCancelled("turn stopped while waiting for the Ruijie sandbox");
-        }
-        await ruijieSandbox.readyRuijieSandboxForTurn(cfg);
-        const joined = await ruijieSandbox.joinRuijieSandbox(cfg);
-        ruijieDesktopJoinUrl = joined.joinUrl;
-        computerKind = "ruijie";
       }
 
-      // Cloud is also strict when explicitly selected. Auto (unset) reuses an
-      // existing cloud box, then falls back to host CUA without provisioning.
+      // Auto (unset) reuses an existing cloud box, then falls back to host CUA
+      // without provisioning. An explicitly selected Box is still the bot's
+      // only computer, but its availability must not gate ordinary chat.
       if ((wants === "cloud" || wants === undefined) && cloudBackend === "box" && box.boxConfigured(cfg)) {
-        // Explicit cloud turns can provision/wake the same bot's Box. Claim
-        // before any network await so setup itself cannot race another turn.
-        if (wants === "cloud") bindTurnComputer(resourceOwner, `computer:box-bot:${bot.id}`, true);
         if (!mountsCloudComputer && wants === "cloud") {
-          throw new Error("this model engine cannot use computer tools — choose Claude, an ACP engine, or the Computer engine");
-        }
-        let b = await box.findBox(cfg, bot.id).catch(() => null);
-        let lifecycle = box.boxTurnLifecycleAction({
-          explicitCloud: wants === "cloud",
-          canMount: mountsCloudComputer,
-          state: typeof b?.state === "string" ? b.state : null,
-        });
-        if (lifecycle === "provision") {
-          broadcast({ kind: "computer", botId: bot.id, state: "provisioning" });
-          await box.provisionBox(cfg, bot.id, bot.name);
-          b = await box.findBox(cfg, bot.id).catch(() => null);
-          lifecycle = box.boxTurnLifecycleAction({
-            explicitCloud: true,
-            canMount: mountsCloudComputer,
-            state: typeof b?.state === "string" ? b.state : null,
-          });
-        }
-        // an archived box answers every action with an error until it
-        // resumes — wake it here, once, instead of letting the agent
-        // discover it one failed tool call at a time. Explicit Cloud is the
-        // consent boundary for the resume (~8s, and it un-pauses billing).
-        if (lifecycle === "wake") {
-          broadcast({ kind: "computer", botId: bot.id, state: "waking" });
-          b = (await box.readyBox(cfg, bot.id).catch(() => null)) ?? b;
-          lifecycle = box.boxTurnLifecycleAction({
-            explicitCloud: true,
-            canMount: mountsCloudComputer,
-            state: typeof b?.state === "string" ? b.state : null,
-          });
-        }
-        if (b && lifecycle === "attach") {
-          bindTurnComputer(resourceOwner, `computer:box:${b.id}`, instance.driverKind === "boxAgent");
-          previewCapture = () => box.screenshotBox(cfg, bot.id, b!.id);
-          if (mountsCloudComputer) {
-            integrations.computer = {
-              kind: "box",
-              boxId: b.id,
-              token: cfg.box!.token!,
-              control: controlIntegration(bot.id, threadId, dispatchClaimId),
-            };
-            computerKind = "box";
+          computerSetupProblem = "当前模型不支持电脑工具";
+        } else {
+          // Explicit cloud turns can provision/wake the same bot's Box. Claim
+          // before any network await so setup itself cannot race another turn.
+          if (wants === "cloud") bindTurnComputer(resourceOwner, `computer:box-bot:${bot.id}`, true);
+          try {
+            let b = await box.findBox(cfg, bot.id).catch(() => null);
+            let lifecycle = box.boxTurnLifecycleAction({
+              explicitCloud: wants === "cloud",
+              canMount: mountsCloudComputer,
+              state: typeof b?.state === "string" ? b.state : null,
+            });
+            if (lifecycle === "provision") {
+              broadcast({ kind: "computer", botId: bot.id, state: "provisioning" });
+              await box.provisionBox(cfg, bot.id, bot.name);
+              b = await box.findBox(cfg, bot.id).catch(() => null);
+              lifecycle = box.boxTurnLifecycleAction({
+                explicitCloud: true,
+                canMount: mountsCloudComputer,
+                state: typeof b?.state === "string" ? b.state : null,
+              });
+            }
+            // an archived box answers every action with an error until it
+            // resumes — wake it here, once, instead of letting the agent
+            // discover it one failed tool call at a time. Explicit Cloud is the
+            // consent boundary for the resume (~8s, and it un-pauses billing).
+            if (lifecycle === "wake") {
+              broadcast({ kind: "computer", botId: bot.id, state: "waking" });
+              b = (await box.readyBox(cfg, bot.id).catch(() => null)) ?? b;
+              lifecycle = box.boxTurnLifecycleAction({
+                explicitCloud: true,
+                canMount: mountsCloudComputer,
+                state: typeof b?.state === "string" ? b.state : null,
+              });
+            }
+            if (b && lifecycle === "attach") {
+              bindTurnComputer(resourceOwner, `computer:box:${b.id}`, instance.driverKind === "boxAgent");
+              previewCapture = () => box.screenshotBox(cfg, bot.id, b!.id);
+              if (mountsCloudComputer) {
+                integrations.computer = {
+                  kind: "box",
+                  boxId: b.id,
+                  token: cfg.box!.token!,
+                  control: controlIntegration(bot.id, threadId, dispatchClaimId),
+                };
+                computerKind = "box";
+              }
+            }
+          } catch {
+            // The computer is an optional execution surface, not a prerequisite
+            // for speaking to the bot. The prompt below tells the model exactly
+            // how to degrade without pretending that desktop work succeeded.
+            computerSetupProblem = "绑定的电脑暂时无法连接";
+          }
+          if (wants === "cloud" && !integrations.computer && !computerSetupProblem) {
+            computerSetupProblem = "绑定的电脑暂时无法连接";
           }
         }
       }
       if (wants === "cloud" && cloudBackend === "box" && !box.boxConfigured(cfg)) {
-        throw new Error("Cloud box is not configured — add a Box API key or choose Local VM");
+        computerSetupProblem = "绑定的电脑尚未配置或暂时无法连接";
       }
-      if (wants === "cloud" && cloudBackend === "box" && !integrations.computer) {
-        throw new Error("the cloud computer could not be created or reached");
-      }
+
+      // The bound computer remains the default. A host mount is an explicit
+      // user choice, or a fallback only after that default actually failed.
+      // An explicit prohibition always wins.
+      await mountHostFallback();
 
       // Auto-only host fallback. Electron owns cua-driver/TCC attribution;
       // the harness only reads its already-running connection descriptor.
@@ -5379,8 +5473,12 @@ async function startTurn(
           dispatchClaimId,
           ruijieDesktopJoinUrl,
         );
-        if (!ruijieDesktop) throw new Error("the desktop control bridge is unavailable — restart OpenMausBot");
-        integrations.localComputer = ruijieDesktop;
+        if (ruijieDesktop) integrations.localComputer = ruijieDesktop;
+        else {
+          computerKind = null;
+          computerSetupProblem = "绑定的云电脑控制通道暂时不可用";
+          await mountHostFallback();
+        }
       }
       // A cancelled adapter can be between accepting sendTurn and revealing
       // its provider turn id. Never overlap a replacement with that ambiguous
@@ -5409,6 +5507,14 @@ async function startTurn(
         // false when they are not — see agentsMounted above)
         { id: "setup", label: "Setup", text: setupSystemPrompt(setupMode, { skills: skillAuthoring, cwd: liveBot?.cwd ?? bot.cwd }) },
         { id: "computer", label: "Computer", text: computerPrompt(computerPromptKind) },
+        { id: "host-routing", label: "Host computer routing", text: hostComputerRoutePrompt(hostComputerRoute) },
+        {
+          id: "computer-status",
+          label: "Computer status",
+          text: computerSetupProblem
+            ? `当前电脑状态：${computerSetupProblem}。继续正常回答不依赖电脑的问题，并完成请求中不依赖电脑的部分。只有确实需要网页、应用、文件或桌面操作的部分才向用户简短说明电脑暂时不可用；不要拒绝整个请求，也不要声称已经完成未执行的电脑操作。`
+            : "",
+        },
         { id: "plan", label: "Surface", text: plan.note },
         // gated on the integration, not the key: the hint only goes to a
         // bot whose driver actually mounted the tools
@@ -10232,7 +10338,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const bot = store.bot(botId);
         if (!bot) return json(res, 404, { error: "no such bot" });
         if (method === "GET") {
-          const snapshot = computerControl.snapshot(botId);
+          const snapshot = computerControlSnapshotForBot(botId);
           const computer = turnComputerResources.get(internalCapability.threadId);
           if (!snapshot.held && computer && computer.owner.generation === internalCapability.generation &&
               !claimTurnResource(computer.owner, computer.resource)) {
@@ -10254,7 +10360,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             broadcast({ kind: "screen", botId, png, mime });
             return json(res, 200, { accepted: true });
           }
-          const { snapshot, requestId } = computerControl.requestHelpLease(botId, body.reason);
+          const { requestId } = computerControl.requestHelpLease(`bot:${botId}`, body.reason);
+          const snapshot = computerControlSnapshotForBot(botId);
           // worth a buzz: the bot is blocked on the person's hands, which
           // is exactly the "blocked on you" rule notify.ts encodes.
           // A bot stuck mid-room is not in its 1:1 thread — the turn and the
@@ -10271,7 +10378,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         }
         if (method === "DELETE") {
           const body = await readInternalBody();
-          const snapshot = computerControl.expireHelp(botId, body.requestId);
+          computerControl.expireHelp(`bot:${botId}`, body.requestId);
+          const snapshot = computerControlSnapshotForBot(botId);
           return json(res, 200, { held: snapshot.held, helpOpen: snapshot.helpReason !== null });
         }
         return json(res, 405, { error: "method not allowed" });
@@ -10623,7 +10731,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         groups: store.groups.map((g) => ({ ...publicGroupState(g), ...messagePage(g.threadId, limit) })),
         computerControl: Object.fromEntries(
           store.bots.map((bot) => {
-            const snapshot = computerControl.snapshot(bot.id);
+            const snapshot = computerControlSnapshotForBot(bot.id);
             return [bot.id, { held: snapshot.held, helpReason: snapshot.helpReason }];
           }),
         ),
@@ -12381,7 +12489,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           // now, and its caller would otherwise wait out the 15-minute timeout
           cancelPeerApprovalsFor(bot.id);
           discardDelegations(commsBus, bot.threadId);
-          computerControl.forget(bot.id);
+          computerControl.forget(`bot:${bot.id}`);
           computerControlRevision.delete(bot.id);
           const target = perBotLocalVmTarget(bot.id);
           localVmIdles.get(target.key)?.cancel();
@@ -14713,12 +14821,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (m && method === "GET") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
-      if (bot.cloudBackend === "ruijie-sandbox" && !RUIJIE_SANDBOX_ENABLED) {
+      const cloudBackend = bot.cloudBackend ?? DEFAULT_CLOUD_BACKEND;
+      if (cloudBackend === "ruijie-sandbox" && !RUIJIE_SANDBOX_ENABLED) {
         return json(res, 503, { backend: "ruijie-sandbox", error: RUIJIE_SANDBOX_UNAVAILABLE_MESSAGE });
       }
-      return bot.cloudBackend === "vps"
+      return cloudBackend === "vps"
         ? json(res, 200, { backend: "vps", ...(await vps.vpsComputerStatus(cfg, bot.id)) })
-        : bot.cloudBackend === "ruijie-sandbox"
+        : cloudBackend === "ruijie-sandbox"
           ? json(res, 200, { backend: "ruijie-sandbox", ...(await ruijieSandbox.ruijieSandboxStatus(cfg)) })
         : json(res, 200, { backend: "box", ...(await box.boxStatus(cfg, bot.id)) });
     }
@@ -14729,7 +14838,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (m) {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
-      if (method === "GET") return json(res, 200, computerControl.snapshot(bot.id));
+      if (method === "GET") return json(res, 200, computerControlSnapshotForBot(bot.id));
       if (method === "POST") {
         // JSON-only for the same anti-form-POST reason as every other
         // computer mutation below.
@@ -14750,20 +14859,29 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return json(res, 409, { error: "this bot's cloud computer is being changed — wait before taking control" });
         }
         if (action === "take" && controlLeaseId) {
-          const result = computerControl.acquireLease(bot.id, controlLeaseId);
+          const result = computerControl.acquireLease(computerControlScope(bot), controlLeaseId);
           return json(res, 200, {
-            ...result.snapshot,
+            ...computerControlSnapshotForBot(bot.id),
             owned: result.owned,
             acquired: result.acquired,
           });
         }
         if (action === "release" && controlLeaseId) {
-          const result = computerControl.releaseLease(bot.id, controlLeaseId);
-          return json(res, 200, { ...result.snapshot, released: result.released });
+          const result = computerControl.releaseLease(computerControlScope(bot), controlLeaseId);
+          return json(res, 200, { ...computerControlSnapshotForBot(bot.id), released: result.released });
         }
-        if (action === "take") return json(res, 200, computerControl.take(bot.id));
-        if (action === "release") return json(res, 200, computerControl.release(bot.id));
-        if (action === "dismiss-help") return json(res, 200, computerControl.dismissHelp(bot.id));
+        if (action === "take") {
+          computerControl.take(computerControlScope(bot));
+          return json(res, 200, computerControlSnapshotForBot(bot.id));
+        }
+        if (action === "release") {
+          computerControl.release(computerControlScope(bot));
+          return json(res, 200, computerControlSnapshotForBot(bot.id));
+        }
+        if (action === "dismiss-help") {
+          computerControl.dismissHelp(`bot:${bot.id}`);
+          return json(res, 200, computerControlSnapshotForBot(bot.id));
+        }
         return json(res, 400, { error: "action must be take, release, or dismiss-help" });
       }
       return json(res, 405, { error: "method not allowed" });
@@ -14775,16 +14893,22 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
       }
-      if (bot.cloudBackend === "ruijie-sandbox" && !RUIJIE_SANDBOX_ENABLED) {
+      const cloudBackend = bot.cloudBackend ?? DEFAULT_CLOUD_BACKEND;
+      if (cloudBackend === "ruijie-sandbox" && !RUIJIE_SANDBOX_ENABLED) {
         return json(res, 503, { error: RUIJIE_SANDBOX_UNAVAILABLE_MESSAGE });
       }
-      return json(res, 200, bot.cloudBackend === "vps" ? vps.closeVpsDesktopTunnel(bot.id) : { closed: false });
+      if (cloudBackend === "ruijie-sandbox") {
+        ruijieSandbox.disconnectRuijieSandbox(cfg);
+        return json(res, 200, { closed: true, released: false });
+      }
+      return json(res, 200, cloudBackend === "vps" ? vps.closeVpsDesktopTunnel(bot.id) : { closed: false });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/computer\/(provision|join|sleep|exec|screenshot|remove)$/);
     if (m && method === "POST") {
       const botId = m[1];
       const bot = store.bot(botId);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      const cloudBackend = bot.cloudBackend ?? DEFAULT_CLOUD_BACKEND;
       // Requiring JSON makes every computer mutation a non-simple browser
       // request (same reasoning as the Local VM lifecycle routes above): a
       // hostile page cannot submit it with a form, and its cross-origin JSON
@@ -14793,12 +14917,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
       }
-      if (bot.cloudBackend === "ruijie-sandbox" && !RUIJIE_SANDBOX_ENABLED) {
+      if (cloudBackend === "ruijie-sandbox" && !RUIJIE_SANDBOX_ENABLED) {
         return json(res, 503, { error: RUIJIE_SANDBOX_UNAVAILABLE_MESSAGE });
       }
-      const remoteProvider: RemoteComputerProvider = bot.cloudBackend === "vps"
+      const remoteProvider: RemoteComputerProvider = cloudBackend === "vps"
         ? "vps"
-        : bot.cloudBackend === "ruijie-sandbox"
+        : cloudBackend === "ruijie-sandbox"
           ? "ruijie-sandbox"
           : "box";
       if (computerProviderConfigTransitions.has(remoteProvider)) {
@@ -14807,7 +14931,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (boxLifecycleBusyBots.has(botId)) {
         return json(res, 409, { error: "this bot's cloud computer is being changed — wait for it to finish" });
       }
-      if (bot.cloudBackend === "ruijie-sandbox") {
+      if (cloudBackend === "ruijie-sandbox") {
         const releaseComputerLifecycle = claimBotComputerLifecycle(botId);
         try {
           if (m[2] === "join") return json(res, 200, await ruijieSandbox.joinRuijieSandbox(cfg));
@@ -14824,7 +14948,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           releaseComputerLifecycle();
         }
       }
-      if (bot.cloudBackend === "vps") {
+      if (cloudBackend === "vps") {
         const releaseComputerLifecycle = claimBotComputerLifecycle(botId);
         try {
           if (m[2] === "exec") {

@@ -153,6 +153,11 @@ const bridge = {
       ipcRenderer.on("desktop-viewer:state", handler);
       return () => ipcRenderer.removeListener("desktop-viewer:state", handler);
     },
+    onUserInput: (cb) => {
+      const handler = (_event, state) => cb(state);
+      ipcRenderer.on("desktop-viewer:user-input", handler);
+      return () => ipcRenderer.removeListener("desktop-viewer:user-input", handler);
+    },
   },
   /** Two sandboxed Local VM viewers embedded in the owning app window. */
   desktopWorkspace: {

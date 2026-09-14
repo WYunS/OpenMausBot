@@ -33,7 +33,8 @@ describe("Store", () => {
       text: `Hi, I'm ${bot.name}. What would you like me to do?`,
     });
     expect(bot.modelSelection).toEqual(selection());
-    expect(bot.computer).toBe("off");
+    expect(bot.computer).toBe("cloud");
+    expect(bot.cloudBackend).toBe("ruijie-sandbox");
   });
 
   it("dismisses an open options card when the user talks, and leaves live asks", () => {

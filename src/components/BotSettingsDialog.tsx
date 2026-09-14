@@ -3,7 +3,7 @@
 // aside. Every section now lives under bot-settings/; this dialog owns
 // only the fetches (overview, system-prompt, history) and the section
 // switch.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Search, X } from "lucide-react";
 
 import { api, useStore, type Bot } from "@/state/store";
@@ -14,6 +14,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { botSettingsSections } from "./bot-settings/sections";
 import { useBotSettingsDerived } from "./bot-settings/useBotSettingsDerived";
 import { OverviewSection } from "./bot-settings/OverviewSection";
+import { botSettingsCloseHandlers } from "./bot-settings-close";
 import { IdentitySection } from "./bot-settings/IdentitySection";
 import { SoulSection } from "./bot-settings/SoulSection";
 import { SkillsSection } from "./bot-settings/SkillsSection";
@@ -31,6 +32,8 @@ function sectionMatches(entry: ReturnType<typeof botSettingsSections>[number], q
   if (!query) return true;
   return [entry.label, ...entry.keywords].some((part) => part.toLowerCase().includes(query));
 }
+
+const noWindowDrag = { WebkitAppRegion: "no-drag" } as CSSProperties;
 
 export function BotSettingsDialog({ bot }: { bot: Bot }) {
   const { state, dispatch, flushBotPatches } = useStore();
@@ -241,7 +244,7 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
   return (
     <div
       className="fixed inset-x-0 bottom-0 z-50 flex items-center justify-center bg-black/50 p-6"
-      style={{ top: "env(titlebar-area-height, 0px)" }}
+      style={{ top: "env(titlebar-area-height, 0px)", ...noWindowDrag }}
       onMouseDown={(e) => e.target === e.currentTarget && dispatch({ type: "toggleSettings", open: false })}
     >
       <div
@@ -314,12 +317,8 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
             </span>
             <button
               type="button"
-              onClick={() => dispatch({ type: "toggleSettings", open: false })}
-              onMouseDown={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                dispatch({ type: "toggleSettings", open: false });
-              }}
+              {...botSettingsCloseHandlers(() => dispatch({ type: "toggleSettings", open: false }))}
+              style={noWindowDrag}
               aria-label={t("botSettings.close")}
               className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"
             >

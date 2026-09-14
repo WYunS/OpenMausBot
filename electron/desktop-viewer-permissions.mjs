@@ -1,7 +1,9 @@
 // Permission policy for the in-app desktop viewer window. A VNC page needs a
 // few browser capabilities that are gated behind permission checks: keyboard
-// capture (so ⌘/Alt chords reach the guest instead of the host), pointer
-// capture, the clipboard for paste, and full screen. Denying those along with
+// capture (so ⌘/Alt chords reach the guest instead of the host), the clipboard
+// for paste, and full screen. Pointer lock is deliberately denied: noVNC uses
+// it for relative-pointer mode, which can make an ordinary desktop cursor jump
+// or race around when the framebuffer is scaled.
 // everything else leaves a viewer where the mouse works but typing does not.
 //
 // Every privileged capability — camera, microphone, geolocation,
@@ -12,7 +14,6 @@
 
 const DESKTOP_VIEWER_PERMISSIONS = new Set([
   "keyboardLock",
-  "pointerLock",
   "clipboard-read",
   "clipboard-sanitized-write",
   "fullscreen",

@@ -1,11 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useStore } from "./store";
-
-type AccountViewState = {
-  status: RuijieAccountState["status"] | "checking" | "unavailable";
-  summary?: RuijieAccountSummary;
-  message?: string;
-};
+import { adoptRuijieAccountState, type AccountViewState } from "./ruijie-account-sync";
 
 interface AccountContextValue {
   state: AccountViewState;
@@ -41,22 +36,17 @@ export function RuijieAccountProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AccountViewState>(bridge ? { status: "checking" } : { status: "unavailable" });
 
   const adopt = useCallback(async (next: RuijieAccountState) => {
-    const nextProfile = next.status === "ready" || next.summary
-      ? {
-          name: next.summary?.account.name ?? next.summary?.account.email?.split("@")[0] ?? "锐捷用户",
-          email: next.summary?.account.email ?? "",
-        }
-      : { name: "", email: "" };
-    const current = appState.config?.profile;
-    const profileChanged = current?.name !== nextProfile.name || current?.email !== nextProfile.email;
-    if (profileChanged) await saveProfile(next.status === "ready" || next.summary ? next.summary : undefined);
-    setState(next);
-    if (profileChanged) {
-      await refreshRuijieHarness();
+    await adoptRuijieAccountState({
+      next,
+      currentProfile: appState.config?.profile,
+      saveProfile,
+      setState,
+      refreshRuijieHarness,
       // Keep catalogs and unrelated engine health fresh, but never hold the
       // account UI on their multi-second CLI probes.
-      void refreshInstances();
-    }
+      refreshInstances,
+      reportSupplementalFailure: (stage, cause) => console.warn(`[ruijie-account] ${stage} sync failed`, cause),
+    });
   }, [appState.config?.profile, refreshInstances, refreshRuijieHarness]);
 
   const refresh = useCallback(async () => {

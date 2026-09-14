@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import type { AppConfig } from "./config.ts";
 import {
+  disconnectRuijieSandbox,
   joinRuijieSandbox,
   provisionRuijieSandbox,
   readyRuijieSandboxForTurn,
   releaseRuijieSandbox,
+  ruijieCuaBridgeAccess,
+  ruijieCuaBridgeReady,
   ruijieSandboxConfigured,
   ruijieSandboxStatus,
 } from "./ruijie-sandbox.ts";
@@ -28,24 +31,52 @@ function response(body: unknown, status = 200): Response {
 }
 
 describe("Ruijie sandbox adapter", () => {
+  it('shared installation attaches to a ready desktop but never submits a replacement', async () => {
+    const attached = config({ attach_only: true });
+    const calls: string[] = [];
+    const readyFetch = async (url: string | URL | Request) => {
+      calls.push(String(url));
+      return response({ task_id: 'client-1', status: 'finished', vnc_proxy: 'http://viewer.internal/vnc.html' });
+    };
+    expect((await readyRuijieSandboxForTurn(attached, readyFetch as typeof fetch)).ready).toBe(true);
+    await expect(provisionRuijieSandbox(attached, readyFetch as typeof fetch)).rejects.toThrow('existing shared sandbox only');
+    const missingFetch = async (url: string | URL | Request) => { calls.push(String(url)); return response({}, 404); };
+    await expect(readyRuijieSandboxForTurn(attached, missingFetch as typeof fetch)).rejects.toThrow('administrator');
+    expect(calls.every((url) => url.endsWith('/task/client-1'))).toBe(true);
+  });
+
   it("requires the manager URL and complete request template", () => {
     expect(ruijieSandboxConfigured(config())).toBe(true);
     expect(ruijieSandboxConfigured({ ruijieSandbox: { managerUrl: "http://manager", requestJson: "{}" } })).toBe(false);
   });
 
-  it("submits the opaque provider template without rewriting its fields", async () => {
+  it("derives authenticated CUA bridge access without exposing the viewer secret", async () => {
+    const access = ruijieCuaBridgeAccess(config(), "http://172.24.37.151:11095/sandboxes/client-1/proxy/6080/vnc.html");
+    expect(access?.baseUrl).toBe("http://172.24.37.151:11095/sandboxes/client-1/proxy/18765");
+    expect(access?.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(access?.token).not.toContain("viewer-secret");
+
+    const fetchImpl = async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toEqual({ authorization: `Bearer ${access?.token}` });
+      return response({ ok: true });
+    };
+    await expect(ruijieCuaBridgeReady(access!, fetchImpl as typeof fetch)).resolves.toBe(true);
+  });
+
+  it("submits the provider template while forcing the persistent sandbox contract", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
       calls.push({ url: String(url), init });
       return response({ task_id: "client-1", status: "queued", vnc_proxy: null });
     };
-    const result = await provisionRuijieSandbox(config({ priority: 10 }), fetchImpl as typeof fetch);
+    const result = await provisionRuijieSandbox(config({ priority: 10, never_reclaim: false }), fetchImpl as typeof fetch);
     expect(result.status).toBe("queued");
     expect(calls[0]?.url).toBe("http://172.24.37.150:12581/submit");
     expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({
       client_id: "client-1",
       vnc_key: "viewer-secret",
       priority: 10,
+      never_reclaim: true,
     });
   });
 
@@ -114,5 +145,9 @@ describe("Ruijie sandbox adapter", () => {
     };
     await expect(releaseRuijieSandbox(config(), fetchImpl as typeof fetch)).resolves.toEqual({ ok: true });
     expect(body).toEqual({ client_id: "client-1" });
+  });
+
+  it("disconnects locally without calling the provider release endpoint", () => {
+    expect(disconnectRuijieSandbox(config())).toEqual({ closed: true, released: false });
   });
 });

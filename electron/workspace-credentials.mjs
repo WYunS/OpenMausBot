@@ -70,3 +70,44 @@ export function workspaceCredentialEnv(credentials) {
   }
   return env;
 }
+
+/** Full recovered credential snapshot sent only over Electron's private
+ * utility-process port. The renderer and loopback HTTP API never see it. */
+export function workspaceCredentialSyncMessage(credentials, sandboxManagerUrl) {
+  const snapshot = {};
+  for (const { name } of WORKSPACE_CREDENTIALS) {
+    const value = credentials?.[name];
+    if (typeof value === "string" && value) snapshot[name] = value;
+  }
+  return { type: "openmausbot:workspace-credentials", credentials: snapshot,
+    ...(sandboxManagerUrl ? { sandboxManagerUrl } : {}) };
+}
+
+/** Apply a private recovery message to the already-running server. This is a
+ * one-way boot recovery path: only whitelisted string fields are accepted. */
+export function applyWorkspaceCredentialSyncMessage(raw, { target, environment }) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+  if (raw.type !== "openmausbot:workspace-credentials") return false;
+  const credentials = raw.credentials;
+  if (!credentials || typeof credentials !== "object" || Array.isArray(credentials)) return false;
+  // Only a completed packaged bootstrap supplies this non-secret URL. Needed
+  // when the keychain recovers AFTER the child has already loaded config.json.
+  if (typeof raw.sandboxManagerUrl === 'string') {
+    try {
+      const url = new URL(raw.sandboxManagerUrl);
+      if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password &&
+          url.pathname === '/' && !url.search && !url.hash) {
+        target.ruijieSandbox = { ...target.ruijieSandbox, managerUrl: url.origin };
+      }
+    } catch { /* Do not accept arbitrary non-URL config over this channel. */ }
+  }
+  for (const { section, field, name, env } of WORKSPACE_CREDENTIALS) {
+    const value = credentials[name];
+    if (typeof value !== "string" || !value) continue;
+    environment[env] = value;
+    const home = target[section];
+    target[section] = home && typeof home === "object" && !Array.isArray(home) ? { ...home, [field]: value } : { [field]: value };
+  }
+  environment.OMB_CREDENTIAL_STORE = "ok";
+  return true;
+}

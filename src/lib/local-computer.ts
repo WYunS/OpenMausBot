@@ -1,4 +1,5 @@
 import type { Bot, InstanceInfo } from "@/state/store";
+import { DEFAULT_CLOUD_BACKEND } from "../../server/product-features";
 
 export function instanceSupportsLocalComputer(
   instances: InstanceInfo[],
@@ -147,7 +148,7 @@ export function persistedComputerSelectionMatches({
   persistedBot: Pick<Bot, "computer" | "cloudBackend">;
 }): boolean {
   return persistedBot.computer === computer
-    && (persistedBot.cloudBackend ?? "box") === cloudBackend;
+    && (persistedBot.cloudBackend ?? DEFAULT_CLOUD_BACKEND) === cloudBackend;
 }
 
 export function autoSelectsLocalComputer({

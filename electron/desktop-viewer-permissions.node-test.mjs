@@ -6,10 +6,11 @@ import { desktopViewerPermissionAllowed } from "./desktop-viewer-permissions.mjs
 const VIEWER = "https://desktop.example";
 const VIEWER_PAGE = "https://desktop.example/vnc.html?_token=secret";
 
-test("grants the viewer page keyboard, pointer, clipboard and fullscreen", () => {
-  for (const permission of ["keyboardLock", "pointerLock", "clipboard-read", "clipboard-sanitized-write", "fullscreen"]) {
+test("grants the viewer page keyboard, clipboard and fullscreen without trapping the pointer", () => {
+  for (const permission of ["keyboardLock", "clipboard-read", "clipboard-sanitized-write", "fullscreen"]) {
     assert.equal(desktopViewerPermissionAllowed(permission, VIEWER_PAGE, VIEWER), true, permission);
   }
+  assert.equal(desktopViewerPermissionAllowed("pointerLock", VIEWER_PAGE, VIEWER), false);
 });
 
 test("accepts a bare origin or a full URL on either side", () => {

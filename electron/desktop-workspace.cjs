@@ -328,6 +328,12 @@ function createDesktopWorkspaceManager({ owner, createView, notify, partitionPre
       const entry = entries.get(contextId);
       if (!entry || !entry.remotePreview) throw new Error("That remote desktop is not open");
       const contents = entry.view.webContents;
+      // Hidden capture views do not reliably retain Chromium focus across a
+      // renderer reload or after the person closes Take Control. noVNC still
+      // acknowledges injected events in that state, but drops their keyboard
+      // payload before RFB. Focus the exact target before every action.
+      contents.focus();
+      await wait(0);
       const bounds = entry.view.getBounds();
       const frameSize = entry.lastFrameSize ?? { width: bounds.width, height: bounds.height };
       const scalePoint = (value, axis) => {
@@ -348,11 +354,43 @@ function createDesktopWorkspaceManager({ owner, createView, notify, partitionPre
       } else if (action === "type") {
         const text = String(input.text ?? "");
         if (!text || text.length > 20_000) throw new Error("Desktop text is empty or too long");
-        for (const character of text) contents.sendInputEvent({ type: "char", keyCode: character });
+        // noVNC listens to keydown/keyup and does not reliably forward a lone
+        // Electron `char` event to terminal emulators. Send the complete key
+        // sequence while retaining `char` for Chromium text controls.
+        for (const character of text) {
+          const uppercase = /^[A-Z]$/.test(character);
+          const keyCode = uppercase ? character.toLowerCase() : character;
+          const modifiers = uppercase ? ["shift"] : undefined;
+          if (uppercase) contents.sendInputEvent({ type: "keyDown", keyCode: "Shift" });
+          contents.sendInputEvent({ type: "keyDown", keyCode, ...(modifiers ? { modifiers } : {}) });
+          contents.sendInputEvent({ type: "char", keyCode: character, ...(modifiers ? { modifiers } : {}) });
+          contents.sendInputEvent({ type: "keyUp", keyCode, ...(modifiers ? { modifiers } : {}) });
+          if (uppercase) contents.sendInputEvent({ type: "keyUp", keyCode: "Shift" });
+          // Electron only queues these events; noVNC still has to translate
+          // and forward each pair over its RFB websocket. A synchronous burst
+          // is acknowledged locally but is dropped by the live viewer. Yield
+          // briefly per character so terminal input observes the sequence.
+          await wait(4);
+        }
       } else if (action === "key") {
         const { keyCode, modifiers } = desktopKeyEvent(input.key);
+        const modifierKeyCodes = { control: "Control", alt: "Alt", shift: "Shift", meta: "Meta" };
+        for (let index = 0; index < modifiers.length; index += 1) {
+          contents.sendInputEvent({
+            type: "keyDown",
+            keyCode: modifierKeyCodes[modifiers[index]],
+            ...(index > 0 ? { modifiers: modifiers.slice(0, index) } : {}),
+          });
+        }
         contents.sendInputEvent({ type: "keyDown", keyCode, modifiers });
         contents.sendInputEvent({ type: "keyUp", keyCode, modifiers });
+        for (let index = modifiers.length - 1; index >= 0; index -= 1) {
+          contents.sendInputEvent({
+            type: "keyUp",
+            keyCode: modifierKeyCodes[modifiers[index]],
+            ...(index > 0 ? { modifiers: modifiers.slice(0, index) } : {}),
+          });
+        }
       } else if (action === "scroll") {
         const x = input.x == null ? Math.floor(bounds.width / 2) : scalePoint(input.x, "x");
         const y = input.y == null ? Math.floor(bounds.height / 2) : scalePoint(input.y, "y");

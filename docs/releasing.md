@@ -1,5 +1,39 @@
 # Releasing
 
+## RuijieBot downstream (WYunS/OpenMausBot)
+
+Use the [four numbered delivery guides](../发布交付指南/04-通用回归与发布门禁.md).
+The 2026-09-14 sandbox bootstrap is implemented for the existing Windows/Mac
+build paths. Authorized private source handoffs include the ignored
+`release-inputs/ruijie-sandbox.json`; public GitHub does not carry shared keys.
+Standard package commands stage this input automatically and reject missing or
+unverified presets. This change does not implement Universal packaging or prove
+final installer acceptance. Never publish shared-credential artifacts publicly.
+The required Mac delivery target is **one Universal DMG** for Apple silicon and
+Intel: `RuijieBot-<version>-mac-universal.dmg`, with a matching Universal updater
+ZIP. As of the 2026-09-11 documentation update, the implementation baseline
+(`d7cd142712c11f44a7a13d9e75c8d31ad9799891`) still uses separate-architecture
+packaging. Universal configuration, resource routing, signature gates and
+release asset rules have not been implemented by this documentation change.
+
+Follow the [Mac implementation prerequisites](../发布交付指南/02-macOS打包指导.md)
+before an authorized candidate build. The target app path will be
+`release/mac-universal/OpenMausBot.app`; both CPU acceptance reports must
+reference the same final DMG hash. Renaming a single-architecture file is not
+Universal support. This documentation-only task does not authorize source edits,
+workflow runs, installer generation, commits or uploads.
+
+Main pushes do not start an installer release. The manual release and mirror
+workflows still need a downstream/Universal review. The existing no-installer
+prerelease workflow can provide native checks when separately requested, but
+does not prove that Universal packaging or final installation works.
+
+## Historical upstream release workflow (not downstream release authorization)
+
+The remainder of this file describes the historical upstream process, including
+its repositories, signing identity and automatic triggers. It is not the current
+WYunS release procedure; use the numbered delivery guides for RuijieBot.
+
 For a normal release, run **Actions → Prepare next release → Run workflow** and
 choose a patch, minor, or custom version. It opens a tiny version-bump PR;
 merging that PR automatically starts **Release** and assembles a draft from the
@@ -7,7 +41,7 @@ exact merge commit. Review and publish the draft when it is ready.
 
 The existing **Actions → Release → Run workflow** button remains available for
 reruns and recovery. It
-builds macOS (arm64 + x64, signed, notarized, stapled), Windows, and Ubuntu
+builds macOS (separate arm64 + x64 artifacts, signed, notarized, stapled), Windows, and Ubuntu
 from a single pinned commit, verifies every artifact the way a user would
 receive it, and assembles the canonical draft in
 [OpenMausBot releases](https://github.com/milind-soni/OpenMausBot/releases).

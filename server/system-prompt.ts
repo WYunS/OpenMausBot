@@ -25,7 +25,7 @@ const VOLATILE_SECTIONS = new Set(["memory", "mentions"]);
 // Product-wide response language, independent of the provider, tool-output
 // language, workspace or memory. Keep tool contracts and source text intact.
 export const RESPONSE_LANGUAGE_PROMPT =
-  "\n\n回复语言：默认使用简体中文与用户交流，包括进度说明、解释、总结和错误说明。不要因为系统提示词、工具结果或参考资料是英文就改用英文。仅在用户明确要求其他语言或保留原文时按其要求处理；代码、命令、文件路径、API/工具名称及必要的原文引用保持原样。";
+  "\n\n回复语言：默认使用简体中文与用户交流，包括进度说明、解释、总结和错误说明。不要因为系统提示词、工具结果或参考资料是英文就改用英文。仅在用户明确要求其他语言或保留原文时按其要求处理；代码、命令、文件路径、API/工具名称及必要的原文引用保持原样。电脑面板是否打开只影响用户能否观看画面，不影响你使用已绑定的电脑。电脑未绑定、未连接或暂时不可用时，继续正常回答不依赖电脑的问题，并完成请求中不依赖电脑的部分；只有确实需要网页、应用、文件或桌面操作的部分才说明暂时无法执行，不得因此拒绝整个请求，也不得假装已经完成。";
 
 export function buildSystemPrompt(
   persona: string,
@@ -52,7 +52,19 @@ const PROTECTED_INPUT_GUARD =
   " At a sign-in, password, MFA, CAPTCHA, or other protected-input step, stop and ask the user to complete it on the visible computer. Never type their password or ask them to paste a password or one-time code into chat.";
 
 const SELECTED_COMPUTER_GUARD =
-  " This selected computer is the work surface for the turn. The OpenMausBot or provider chat pane is only the control surface, not the place to carry out the task. When the user asks to open, search, click, type, or otherwise operate software, use the mounted computer tools on this selected computer and verify the result there instead of only describing what the user could do.";
+  " This mounted computer is the workspace selected for this turn. The OpenMausBot or provider chat pane is only the control surface, not the place to carry out the task. When the user's wording is ambiguous, treat the bot's bound computer as the default; never switch to the host merely because it is convenient. When the user asks to open, search, click, type, or otherwise operate software, use the mounted computer tools and verify the result there instead of only describing what the user could do.";
+
+export type HostComputerRoute = "explicit" | "fallback" | null;
+
+export function hostComputerRoutePrompt(route: HostComputerRoute): string {
+  if (route === "explicit") {
+    return " 用户已明确要求操作本机、这台电脑或宿主机；本轮已挂载宿主机电脑工具。仅在宿主机完成并核验本轮操作，不要改到绑定的云电脑。";
+  }
+  if (route === "fallback") {
+    return " 右上角绑定的电脑本轮不可用，宿主机电脑工具已作为备用挂载。仅当当前任务能够在宿主机完成且用户没有禁止操作本机时才使用；一旦使用，要简短告知用户本轮改在本机执行。不得把绑定电脑中的文件、登录状态或应用假定为宿主机也具备。";
+  }
+  return "";
+}
 
 const COMPUTER_PARAGRAPH: Record<ComputerPromptKind, string> = {
   "vm-private":

@@ -60,6 +60,35 @@ provider-specific execution of elevated approval modes.
 
 ## Last exercised
 
+### Settings close regression (2026-09-14)
+
+The standalone settings fixture did not reproduce the reported close failure.
+The full App did: BotSettingsDialog and ComputerPanel were siblings with the
+same bot-id key. With the computer panel open, React warned about duplicate
+keys and retained orphan settings DOM. A single root could contain four
+dialogs, and closing settings left an unresponsive copy visible. Distinct
+`settings:`, `computer:`, `remote-desktop:` and `inspector:` key prefixes preserve
+per-bot remounting without collisions.
+
+Start the fixture above, then exercise the **root page** using its printed
+preview origin (replace PORT):
+
+```sh
+node node_modules/electron/cli.js scripts/verify-bot-settings-close.mjs http://127.0.0.1:PORT/
+```
+
+For the production bundle, build the UI, start a Vite `preview` with its
+`/api` proxy explicitly targeting the isolated fixture server, and pass that
+preview's root URL instead. Never use the live app's port. The script
+opens the computer panel, opens settings and visits Access, sends native
+Chromium mouse-down/up to X, and asserts exactly one dialog before closing
+and zero afterward. It repeats 30 times with two page reloads and two window
+sizes. The original full-App run failed in cycle 0 with four dialogs; the
+patched run passed. Both source and production-bundle runs passed; the built
+run also passed two reloads at 1440×900 and 1024×720. The harness waits for
+Electron's content viewport to match a resized window before sending pointer
+coordinates. The Electron profile is disposable and its path is printed.
+
 The isolated browser run on 2026-09-06 confirmed immediate Identity/Soul
 saves on section changes, SOUL duplication, memory draft retention and
 preview refresh, skill disable/review-enable overview refresh, nested

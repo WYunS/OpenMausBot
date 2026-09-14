@@ -1,5 +1,31 @@
 # 锐捷 Bot：Windows 打包指导
 
+## 2026-09-14 补充：源码交付必须自带私密沙箱配置
+
+目标：相同源码、相同原生依赖和同一份沙箱预置，打出的安装版首次新建 Bot 默认使用锐捷云沙箱，
+用户不用再填 manager URL / request JSON。不是复制开发者全部账号、聊天记录或浏览器 cookie。
+
+- 公开 `WYunS/main` 只放程序和构建规则，不放沙箱访问密钥。**仅 clone 公开源码不等于取得连接凭据。**
+- 优先接收维护者提供的私密 `RuijieBot-source-<SHA>.tar.gz`：其中包含源码及
+  `release-inputs/ruijie-sandbox.json`，解压后直接从该目录打包。该文件已被 Git 忽略，不要强制提交。
+- 归档不含 `.git`：解压后先 `git init`、`git add .`、`git commit -m "Import authorized source handoff"`，
+  再按当前工作树重新生成验收记录；源提交号可查 `release-inputs/handoff.json`。不要冒充原提交 SHA。
+  若直接检出 WYunS/main，由维护者通过私密渠道提供同一配置文件，放回上述相对路径即可。
+- `pnpm package:win` 自动先执行 `build:sandbox`，缺失/非法配置立即失败。
+  单独准备或检查可运行 `node scripts/prepare-ruijie-sandbox-bootstrap.mjs`；CI 可用
+  `RUIJIE_SANDBOX_PRESET_FILE` 指向受控输入文件，不能把 JSON 内容写进命令行或日志。
+- 安装资源为 `resources/ruijie-sandbox/bootstrap.json`，首启写入当前用户的配置和 OS 加密凭据库。
+  已有配置不覆盖、显式清除不自动复活，重启不重复导入；没有读取成功的凭据库绝不被空配置替换。
+- 共享凭据意味着同一云桌面、同一访问权限；安装包本身也须私密分发，不能把包内文件当成不可提取的保险箱。
+  预置仅含连接字段（`attach_only: true`），不含原始创建模板的 models/custom_env 密钥；
+  只能连接已有桌面，远端消失时由管理员恢复，不让安装端重建或更改对面环境。
+  飞连/内网仍须可达。同一安装中的多 Bot 按共享桌面排队，多个安装实例之间目前没有中央互斥锁。
+- 维护者完成提交后运行 `node scripts/create-private-source-handoff.mjs` 生成私密交付归档。
+  不上传该归档或含共享凭据的安装器到公开 Release。
+
+验收新增：全新测试用户首启→新建两个 Bot→确认默认云沙箱且无需填连接信息→只读连通测试；
+重开、覆盖升级、已有自定义连接、主动清除后重开均须检查。四份指南配套要求见通用门禁新增节。
+
 > 2026-09-11：先执行 [通用回归与发布门禁](04-通用回归与发布门禁.md)。
 > 用户已确认本地开发版测试无异常；浏览器真实 MCP/完整桌面断流回归已通过。
 > 此确认只覆盖本地开发版，不代替新安装包、Mac 或每个云应用的独立授权验收。
@@ -96,7 +122,9 @@ corepack pnpm exec electron-builder --config electron-builder.ruijie.mjs --win -
 下载失败时修复网络/代理或提供脚本支持的校验缓存，不关闭 TLS 或哈希校验。
 
 Windows 浏览器必须是 `0.36.0-omb.2`，不能使用会弹终端的 `.1` 或未修复 stdio 的上游 0.37.0。
-当前 `.2` 尚未发布下载地址：从交付人取得已核对的 vendor 目录（exe、provenance），
+`.2` 已发布到 [独立浏览器依赖 Release](https://github.com/WYunS/OpenMausBot/releases/tag/browser-engine-v0.36.0-omb.2)，
+其正文和附件 `RuijieBot-browser-vendor-0.36.0-omb.2-Actions-handoff.md` 提供 Windows Actions 的下载、ZIP/EXE 校验与环境变量步骤。
+下载完整 vendor ZIP 后解压得到 exe、provenance、补丁及许可证，
 通过 `OMB_BROWSER_VENDOR_DIR` 指定绝对路径；当前开发目录默认读取
 `dist-native/browser-vendor-candidate-omb2`。生产准备脚本核对固定 SHA
 `775127b9d77326acf80478b484c0d9ce587bd47ae9390339c25f7e629bb05857` 和来源记录。
@@ -107,6 +135,9 @@ Windows 浏览器必须是 `0.36.0-omb.2`，不能使用会弹终端的 `.1` 或
 该地址会写入包内元数据，验收记录必须绑定同一个地址，不能依赖安装者机器的环境变量。
 Mac/Linux 则使用源码各自的 pin。完整 staged tree 包含 agent-browser、Chrome
 Headless Shell、manifest 和 licenses，不能只复制一个 exe。
+Mac 的交付要求是一个 Universal DMG，但当前配置仍是分架构，尚待按 02 指南实施改造、
+按 03 指南完成同一 DMG 的双架构验收；本次仅更新文档，不表示源码或 Actions 已改好。
+后续 Mac 改造须保持 Windows x64 安装器、平面资源路径和开发/安装数据隔离不变。
 默认 Windows 无代码签名，准确报告“未签名”；不得添加虚假的 publisherName。
 
 ## 4. 检查实际打出的资源，不只检查文件名

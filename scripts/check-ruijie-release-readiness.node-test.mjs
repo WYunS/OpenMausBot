@@ -31,6 +31,9 @@ test('release gate rejects skips, stale code, wrong architecture, expiry and mis
       .map((key) => [key, { status: 'passed', evidence: 'fixture-test-log-with-runtime-and-command',
         command: 'fixture-test-command', evidenceSha256: 'c'.repeat(64) }])) };
   assert.equal(validateReleaseReceipt(receipt, options), true);
+  assert.throws(() => validateReleaseReceipt(receipt, { ...options, sandboxDigest: 'f'.repeat(64) }), /Sandbox preset/);
+  assert.equal(validateReleaseReceipt({ ...receipt, sandboxBootstrapSha256: 'f'.repeat(64) },
+    { ...options, sandboxDigest: 'f'.repeat(64) }), true);
   assert.throws(() => validateReleaseReceipt(receipt, { ...options, brokerUrl: 'https://broker.example' }));
   assert.equal(validateReleaseReceipt({ ...receipt, connectedAppsBrokerUrl: 'https://broker.example' },
     { ...options, brokerUrl: 'https://broker.example' }), true);

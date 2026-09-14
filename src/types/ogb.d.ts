@@ -196,6 +196,8 @@ const __APP_VERSION__: string;
         /** The current viewer state, for a panel to initialize from on mount. */
         currentState(): Promise<{ open: boolean; contextId: string | null }>;
         onState(cb: (state: { open: boolean; contextId: string | null }) => void): () => void;
+        /** Fires once on the first deliberate click, wheel or key press. */
+        onUserInput(cb: (state: { contextId: string }) => void): () => void;
       };
       /** Two Local VM viewers embedded in one app window. URLs are accepted
        * only by main-process validation and never return over this bridge. */

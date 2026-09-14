@@ -5,11 +5,12 @@ import { lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { releaseBrokerUrl } from '../electron/connected-apps-release.mjs';
+import { verifySandboxBootstrap } from './prepare-ruijie-sandbox-bootstrap.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 export const REQUIRED_RELEASE_CHECKS = ['desktop-preview-acceptance', 'source-regression', 'reply-language-chinese', 'native-browser', 'browser-control-and-close',
   'browser-search-routing-no-firecrawl', 'browser-stream-background-recovery',
-  'connected-apps-proxy-recovery', 'connected-apps-live-authorization-and-read', 'feishu-live', 'fresh-profile-isolation'];
+  'connected-apps-proxy-recovery', 'connected-apps-live-authorization-and-read', 'feishu-live', 'fresh-profile-isolation', 'sandbox-first-install'];
 
 export function releaseSourceFingerprint(directory = root) {
   const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
@@ -25,10 +26,12 @@ export function releaseSourceFingerprint(directory = root) {
   return hash.digest('hex');
 }
 
-export function validateReleaseReceipt(receipt, { target, fingerprint, brokerUrl, desktopBuild, now = Date.now() }) {
+export function validateReleaseReceipt(receipt, { target, fingerprint, brokerUrl, desktopBuild, sandboxDigest, now = Date.now() }) {
   assert(['win32-x64', 'darwin-arm64', 'darwin-x64'].includes(target), 'Unsupported branded release target');
   assert(receipt?.schemaVersion === 1 && receipt.target === target, 'Missing or wrong-target native verification receipt');
   assert(receipt.sourceFingerprint === fingerprint, 'Source changed after verification; rerun checks');
+  if (sandboxDigest !== undefined) assert.equal(receipt.sandboxBootstrapSha256, sandboxDigest,
+    'Sandbox preset differs from the tested release input');
   if (desktopBuild) for (const component of ['ui', 'server']) {
     assert(/^[a-f0-9]{64}$/.test(receipt.desktopBuild?.[component] ?? '') && receipt.desktopBuild[component] === desktopBuild[component],
       `RELEASE BLOCKED: ${component} differs from the tested desktop build; accept the rebuilt preview first`);
@@ -50,6 +53,9 @@ export function validateReleaseReceipt(receipt, { target, fingerprint, brokerUrl
 }
 
 export async function beforeRuijiePack(context) {
+  const sandboxDigest = verifySandboxBootstrap(root);
+  if (context.packager) assert.equal(context.packager.config.extraMetadata.ruijieSandboxBootstrapSha256, sandboxDigest,
+    'Sandbox preset changed after builder configuration was loaded');
   const { verifyDesktopBuildReceipt } = await import('./desktop-build-receipt.mjs');
   const desktopBuild = verifyDesktopBuildReceipt(root);
   const arch = { 1: 'x64', 3: 'arm64' }[context.arch];
@@ -59,7 +65,7 @@ export async function beforeRuijiePack(context) {
   try { receipt = JSON.parse(readFileSync(file, 'utf8')); }
   catch { throw new Error(`RELEASE BLOCKED: no verified ${target} receipt at ${file}. See 发布交付指南/04-通用回归与发布门禁.md`); }
   const brokerUrl = releaseBrokerUrl(context.packager?.config?.extraMetadata?.ruijieConnectedAppsBrokerUrl ?? process.env.RUIJIE_COMPOSIO_BROKER_URL);
-  validateReleaseReceipt(receipt, { target, fingerprint: releaseSourceFingerprint(), brokerUrl, desktopBuild });
+  validateReleaseReceipt(receipt, { target, fingerprint: releaseSourceFingerprint(), brokerUrl, desktopBuild, sandboxDigest });
   const evidenceRoot = path.join(root, 'release', 'verification');
   for (const check of Object.values(receipt.checks)) {
     const evidence = path.resolve(evidenceRoot, check.evidence);

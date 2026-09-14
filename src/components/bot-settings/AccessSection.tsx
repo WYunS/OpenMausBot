@@ -19,6 +19,7 @@ import { Switch } from "../SettingsPrimitives";
 import { preloadConnectedApps, type ConnectorInventory } from "../PluginsPanel";
 import { inputCls } from "./field";
 import type { useBotSettingsDerived } from "./useBotSettingsDerived";
+import { DEFAULT_CLOUD_BACKEND } from "../../../server/product-features";
 
 /** Where a bot's shell tools run. Set per bot; each task pins its own copy
  * on its first turn (the server does the pinning — Claude keeps sessions
@@ -204,7 +205,7 @@ export function AccessSection({
               </div>
             )}
             <CloudBackendPicker
-              value={bot.cloudBackend ?? "box"}
+              value={bot.cloudBackend ?? DEFAULT_CLOUD_BACKEND}
               vpsSupported={canUseVps}
               onChange={(backend) => patch({ cloudBackend: backend })}
             />

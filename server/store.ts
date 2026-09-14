@@ -24,6 +24,7 @@ import type { RoutineRequestCardData } from "../shared/routine-request.ts";
 import type { RoutineRunCardData } from "../shared/routine-run.ts";
 import type { SkillRequestCardData } from "../shared/skill-request.ts";
 import type { GroupGoalRunCardData } from "../shared/group-goal-run.ts";
+import { DEFAULT_CLOUD_BACKEND } from "./product-features.ts";
 
 export type MausColor =
   | "green"
@@ -1533,7 +1534,8 @@ export class Store {
       ...(profile.mascotBody ? { mascotBody: profile.mascotBody } : {}),
       unread: false,
       modelSelection: profile.modelSelection ?? this.defaultSelection(),
-      computer: "off",
+      computer: "cloud",
+      cloudBackend: DEFAULT_CLOUD_BACKEND,
       resumeCursors: {},
       createdAt: Date.now(),
     };

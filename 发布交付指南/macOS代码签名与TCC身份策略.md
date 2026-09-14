@@ -8,6 +8,9 @@
 先执行 [通用回归与发布门禁](04-通用回归与发布门禁.md)；Mac 飞书源码已补，签名后运行与真实授权仍须验收。
 源码来自 WYunS/OpenMausBot 的 main 固定 SHA；不以 Windows 开发版用户确认代替 Mac 权限结论。
 新增任何 CLI/Node/Mach-O 都要补签名前来源与架构校验、签名闭包、签名后运行验证。
+交付目标是一个 Universal App/DMG；两个 CPU 验收同一 DMG 哈希，不按 CPU 分发两份安装器。
+2026-09-11 当前源码仍是分架构配置，Universal 尚未实施；本次只更新文档。
+下述双树和签名门禁是待实现要求，实施步骤见 [Mac 打包指南](02-macOS打包指导.md) 第 2.1 节。
 上游 SHA 在重新签名后可能改变，不能直接放宽为“文件存在就通过”，也不能借 Windows 许可记录批准 Mac 文件。
 
 ## 1. 必须保持的身份
@@ -18,16 +21,19 @@
 | 开发入口 | 与安装版不同的开发身份和目录 | 不能用开发版的 TCC 成功替安装版验收 |
 | 安装版服务数据 | 当前用户主目录 `~/.ruijiebot` | 开发版为 `~/.openmausbot`，不复制个人开发缓存 |
 | 安装版 Electron userData | 用户 Application Support 下 `锐捷Bot Installed` | 仅放窗口、浏览器等 Electron 状态，不与服务数据混淆 |
-| CUA | Resources/cua-driver + cua-sdk | 桌面截图/输入能力，独立检查原生代码 |
+| CUA | 当前 Resources/cua-driver + cua-sdk | Universal 改造后两套放入 native/darwin-<运行架构>，按 Electron process.arch 选用 |
 | 语音 helper | Resources/OpenMausBot Speech.app | 独立嵌套 bundle 与麦克风/语音权限 |
-| 内置浏览器 | Resources/browser-engine | 独立 agent-browser/Chromium，非系统 Chrome |
+| 内置浏览器 | 当前 Resources/browser-engine | Universal 目标为两棵 native 树内的 agent-browser/Chromium，非系统 Chrome |
+| 隧道 / 飞书 | 当前 Resources/cloudflared / tuantuan-feishu-runtime | Universal 改造后各放两棵 native 树，分别验架构、来源和同 Team 签名 |
 | Harness | 另行安装的应用 | 不能借其签名、TCC 或许可证替 Bot 背书 |
 
 浏览器默认开启和设置页关闭按钮使用同一套跨平台 UI/配置代码；Mac 候选必须重新构建
 `dist` 并在实体 Mac 验收，不能仅凭 Windows 安装包已通过就继承结论。当前飞书本机
 连接器已新增 Mac 分支及双架构 CLI/Node 资源接入，但新增实现未完成原生和授权验收。
-飞书运行时按 `Resources/tuantuan-feishu-runtime` 独立交付，不能只把 `.exe` 改名。
-`afterPack` 在签名前核对来源哈希、架构、执行位和完整许可通知；重新签名后，
+Universal 改造后，飞书运行时须按 `Resources/native/darwin-{arm64,x64}/tuantuan-feishu-runtime` 独立交付，不能只把 `.exe` 改名。
+改造资源选取时，主进程签名信任根须保留真正 `.app/Contents/Resources`，不得从嵌套的 native 目录错误推算主 App。
+现有分架构来源/许可校验必须保留；Universal `afterPack` 还须在签名前核对双树来源哈希、架构、执行位和完整许可通知。
+重新签名后，
 主进程仅允许主 App 签名闭包完整、且 CLI/Node 均为同一 Developer ID Team 的哈希变化。
 校验失败直接报错，不退回 Homebrew/PATH，也不临时下载另一个版本。
 Windows 制品许可批准不得继承给 Mac；本次平台制品复核与两项限定例外决策已单独记录在
@@ -58,9 +64,12 @@ staple 和最终复验。不能复制上游作者的证书/Team ID 或宣称拥�
 
 ## 3. 签名顺序与最终产物门禁
 
+以下是 Universal 改造完成后的执行顺序和验收要求，不表示当前 hooks 已支持合并结果。
+
 ```text
 固定源码 SHA / 锁文件 / 架构
 → 生成 Bot 代码与校验 native 资源
+→ 合并双架构 Electron/Helpers，双 native 树保持原始字节并再次验全
 → 内部原生代码和嵌套 bundle 签名
 → 外层 App 签名
 → DMG / ZIP
@@ -73,6 +82,14 @@ staple 和最终复验。不能复制上游作者的证书/Team ID 或宣称拥�
 `codesign --verify --strict --verbose=2`，外层再执行
 `codesign --verify --deep --strict --verbose=2`；`codesign -dr -` 必须有可验证 requirement。
 不是给所有带可执行位的脚本盲签，也不是只看主 executable。
+
+必须新增可在 afterSign 和最终 DMG 上复用的 Universal 检查入口；当前仓库没有
+`scripts/verify-mac-universal.mjs`，该名称不能当成现有可执行命令。
+验收要求：主程序、Helpers、Framework、共享 speech/其他 Mach-O 均含 arm64+x86_64；
+仅 `Resources/native/darwin-arm64` / `darwin-x64` 允许匹配的独立侧车架构。
+自动门禁须逐一枚举代码对象并检查完整签名；正式身份须为 Apple Developer ID、同 Team，缺签即失败。
+内部 ad-hoc 检查须明确返回非正式批准；飞书签名信任规则不放宽。
+实现之前可用上述 `codesign` 和打包指南第 5 节的 `lipo` 采集证据，但手工抽查不能替代完整门禁。
 
 重点包含 Electron/Helper/Framework、speech helper、cua-driver、cua-sdk 的 `.dylib/.node`、
 agent-browser、Chrome Headless Shell 与其 native 依赖、cloudflared、附带的其他原生工具。
@@ -131,9 +148,12 @@ sw_vers
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 codesign -dv --verbose=4 "$APP_PATH"
 codesign -dr - "$APP_PATH"
-codesign --verify --strict --verbose=2 "$APP_PATH/Contents/Resources/cua-driver"
-codesign -dv --verbose=4 "$APP_PATH/Contents/Resources/cua-driver"
-codesign -dr - "$APP_PATH/Contents/Resources/cua-driver"
+# 当前分架构包的 embedded CUA 路径。先用运行日志确认实际责任进程。
+# 将来 Universal 改造后，按日志替换为 native/darwin-<实际运行架构>/cua-driver。
+CUA_PATH="$APP_PATH/Contents/Resources/cua-driver"
+codesign --verify --strict --verbose=2 "$CUA_PATH"
+codesign -dv --verbose=4 "$CUA_PATH"
+codesign -dr - "$CUA_PATH"
 ```
 
 同样核对实际责任 helper；若实际运行 standalone，单独采集 CuaDriver.app 的身份，不能冒充包内结果。

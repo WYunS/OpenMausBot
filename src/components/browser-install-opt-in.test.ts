@@ -8,10 +8,11 @@ const fixture = vi.hoisted(() => {
   vi.stubGlobal("window", {});
   vi.stubGlobal("document", { visibilityState: "visible" });
   vi.stubGlobal("localStorage", { getItem: () => "browser" });
-  return { config: {} as FeatureFlagConfig, browserMcp: true, dispatch: vi.fn() };
+  return { config: {} as FeatureFlagConfig, browserMcp: true, streamlined: false, dispatch: vi.fn() };
 });
 
 vi.mock("@/lib/analytics", () => ({ analyticsEnabled: () => false, setAnalyticsEnabled: vi.fn() }));
+vi.mock("@/lib/brand", () => ({ brand: () => ({ name: fixture.streamlined ? "锐捷Bot" : "OpenMausBot" }) }));
 
 vi.mock("@/state/store", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/state/store")>();
@@ -56,6 +57,7 @@ const panel = (browser: boolean) => renderToStaticMarkup(createElement(ComputerP
 beforeEach(() => {
   fixture.config = { features: { browser: false }, browserEngine: { kind: "unavailable", installable: true } };
   fixture.browserMcp = true;
+  fixture.streamlined = false;
   fixture.dispatch.mockClear();
 });
 afterAll(() => vi.unstubAllGlobals());
@@ -94,5 +96,14 @@ describe("browser installation opt-in", () => {
     fixture.config.features = { browser: true };
     fixture.browserMcp = false;
     expect(switchTag(access(), "Give this bot a built-in browser")).toContain("disabled=");
+  });
+
+  it("uses the compact Grok-like computer proportions for the Ruijie skin", () => {
+    fixture.streamlined = true;
+    const markup = panel(false);
+    expect(markup).toContain('style="width:296px"');
+    expect(markup).toContain("aspect-[16/10]");
+    expect(markup).toContain("例行任务");
+    expect(markup).not.toContain("Install the browser engine");
   });
 });

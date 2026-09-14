@@ -8,6 +8,7 @@ import { soulSystemPrompt } from "./bot-folder.ts";
 import {
   buildSystemPrompt,
   computerPrompt,
+  hostComputerRoutePrompt,
   mentionPrompt,
   COMPOSIO_PROMPT,
   CREDENTIAL_PROMPT,
@@ -94,15 +95,22 @@ describe("computerPrompt", () => {
     expect(computerPrompt("ruijie")).toContain("pooled Ruijie Linux sandbox");
     expect(computerPrompt("local")).toContain("act on the user's computer");
     for (const kind of ["vm-private", "vm-shared", "box", "vps", "ruijie", "local"] as const) {
-      expect(computerPrompt(kind)).toContain("This selected computer is the work surface for the turn");
+      expect(computerPrompt(kind)).toContain("the bot's bound computer as the default");
       expect(computerPrompt(kind)).toContain("chat pane is only the control surface");
       expect(computerPrompt(kind).endsWith(guard)).toBe(true);
       expect(computerPrompt(kind).startsWith(" ")).toBe(true);
     }
     // a box driven by the box agent gets no computer paragraph — the agent
     // already lives on the box — but the guard still applies
-    expect(computerPrompt("box-agent")).toContain("This selected computer is the work surface for the turn");
+    expect(computerPrompt("box-agent")).toContain("the bot's bound computer as the default");
     expect(computerPrompt("box-agent").endsWith(guard)).toBe(true);
+  });
+
+  it("explains explicit and fallback host routing without making the host the default", () => {
+    expect(hostComputerRoutePrompt("explicit")).toContain("用户已明确要求操作本机");
+    expect(hostComputerRoutePrompt("fallback")).toContain("绑定的电脑本轮不可用");
+    expect(hostComputerRoutePrompt("fallback")).toContain("用户没有禁止操作本机");
+    expect(hostComputerRoutePrompt(null)).toBe("");
   });
 });
 

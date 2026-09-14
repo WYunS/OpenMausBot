@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
@@ -10,6 +11,13 @@ const {
 } = require("./browser-connection-sync.cjs");
 
 describe("packaged browser connection transport", () => {
+  it("synchronizes the browser bridge after the utility server is published", () => {
+    const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
+    expect(main).toMatch(
+      /serverProc = started\.proc;[\s\S]*?syncWorkspaceCredentials\(serverProc\);[\s\S]*?syncBrowserConnection\(serverProc\);[\s\S]*?return true;/,
+    );
+  });
+
   it("removes only the stale browser descriptor and tolerates a clean install", () => {
     const unlinkSync = vi.fn();
     expect(removeBrowserConnectionDescriptor({ userData: "/app/user-data", fileSystem: { unlinkSync } })).toBe(true);

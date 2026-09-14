@@ -56,3 +56,32 @@ export async function readSecureCredentials({
   }
   return { status: "unavailable", credentials: {}, error: lastError };
 }
+
+/** Keep probing an OS credential store that was unavailable during boot.
+ * A transient keychain/safeStorage failure must not leave the whole desktop
+ * process permanently credential-less. The caller owns cancellation so this
+ * loop can run for the lifetime of the app without keeping shutdown alive. */
+export async function recoverSecureCredentials({
+  read,
+  sleep,
+  onRecovered,
+  shouldContinue = () => true,
+  delays = [2_000, 5_000, 15_000, 30_000],
+}) {
+  if (!Array.isArray(delays) || delays.length === 0) throw new TypeError("credential recovery needs at least one delay");
+  let attempt = 0;
+  while (shouldContinue()) {
+    await sleep(delays[Math.min(attempt, delays.length - 1)]);
+    if (!shouldContinue()) return false;
+    const result = await read();
+    // This loop only follows an unavailable read of an existing encrypted
+    // file. If the file disappears meanwhile, "empty" is not enough evidence
+    // to replace the unknown document with {}.
+    if (result?.status === "ok") {
+      await onRecovered(result.credentials ?? {});
+      return true;
+    }
+    attempt += 1;
+  }
+  return false;
+}

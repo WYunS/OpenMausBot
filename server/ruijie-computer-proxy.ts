@@ -8,6 +8,9 @@ import { join } from "node:path";
 
 const host = String(process.env.OMB_DESKTOP_URL ?? "").replace(/\/$/, "");
 const token = String(process.env.OMB_DESKTOP_TOKEN ?? "");
+const cuaHost = String(process.env.OMB_RUIJIE_CUA_URL ?? "").replace(/\/$/, "");
+const cuaToken = String(process.env.OMB_RUIJIE_CUA_TOKEN ?? "");
+const cuaConfigured = /^https?:\/\//.test(cuaHost) && /^[0-9a-f]{64}$/.test(cuaToken);
 const botId = String(process.env.OMB_BOT_ID ?? "");
 const control = createControlClient();
 const CONTROL_POLL_MS = Math.max(Number(process.env.OMB_CONTROL_POLL_MS) || 1_500, 25);
@@ -118,6 +121,20 @@ async function desktop(operation: string, body: Record<string, unknown> = {}): P
   return result;
 }
 
+async function cuaRpc(message: any): Promise<any> {
+  if (!cuaConfigured) throw new Error("the Ruijie CUA bridge is not configured for this turn");
+  const response = await fetch(`${cuaHost}/rpc`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${cuaToken}`, "content-type": "application/json" },
+    body: JSON.stringify(message),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const result: any = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(result?.error || `CUA bridge HTTP ${response.status}`);
+  if (!result || typeof result !== "object") throw new Error("CUA bridge returned an invalid response");
+  return result;
+}
+
 async function requestHelp(id: unknown, reason: string): Promise<void> {
   if (!control.configured) return text(id, "nobody can be paged for this computer right now", true);
   const initial = await control.state(true);
@@ -172,6 +189,30 @@ async function call(id: unknown, name: string, args: any): Promise<void> {
 }
 
 async function handle(message: any): Promise<void> {
+  if (cuaConfigured) {
+    if (message.method === "tools/call" && message.params?.name === "computer_request_help") {
+      return requestHelp(message.id, String(message.params?.arguments?.reason ?? ""));
+    }
+    if (message.method === "tools/call" && (await control.state(true)).held) {
+      return text(message.id, CONTROL_REFUSAL, true);
+    }
+    if (["initialize", "notifications/initialized", "ping", "tools/list", "tools/call"].includes(message.method)) {
+      try {
+        const response = await cuaRpc(message);
+        if (message.id == null) return;
+        if (message.method === "tools/list" && Array.isArray(response?.result?.tools)) {
+          const help = TOOLS.find((tool) => tool.name === "computer_request_help");
+          if (help && !response.result.tools.some((tool: any) => tool?.name === help.name)) {
+            response.result.tools.push(help);
+          }
+        }
+        send(response);
+      } catch (error) {
+        text(message.id, `computer tool failed: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+      return;
+    }
+  }
   if (message.method === "initialize") {
     return send({
       jsonrpc: "2.0", id: message.id,

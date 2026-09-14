@@ -8,9 +8,10 @@ import type { ModelPicker } from "./ModelPicker";
 const fixture = vi.hoisted(() => {
   vi.stubGlobal("window", {});
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} });
-  return { dispatch: vi.fn(), model: null as ComponentProps<typeof ModelPicker> | null,
+  return { dispatch: vi.fn(), streamlined: false, model: null as ComponentProps<typeof ModelPicker> | null,
     approval: null as ComponentProps<typeof ApprovalModeSelector> | null };
 });
+vi.mock("@/lib/brand", () => ({ brand: () => ({ name: fixture.streamlined ? "锐捷Bot" : "OpenMausBot" }) }));
 vi.mock("@/state/store", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/state/store")>();
   return { ...original, useStore: () => ({
@@ -78,5 +79,16 @@ describe("thread control placement", () => {
     expect(markup).not.toContain("data-test-model-control");
     expect(markup).not.toContain("data-test-approval-control");
     delete window.ogb;
+  });
+
+  it("keeps the branded chat header focused on the computer", () => {
+    fixture.streamlined = true;
+    try {
+      const markup = renderToStaticMarkup(createElement(ChatView, { bot }));
+      expect(markup).not.toContain("data-test-model-control");
+      expect(markup).toContain('title="Bot&#x27;s computer"');
+    } finally {
+      fixture.streamlined = false;
+    }
   });
 });

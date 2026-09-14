@@ -226,10 +226,11 @@ See [MCP server setup and tool reference](docs/mcp-server.md).
 
 **Released builds ([latest release](https://github.com/milind-soni/OpenMausBot/releases/latest)):** the harness server is embedded, so no separate server setup is required.
 
+RuijieBot's macOS Universal entry below is a delivery specification, not a released download. The current build configuration still produces separate architectures; implementation and native acceptance are pending.
+
 | | Download | Install |
 |---|---|---|
-| **macOS** (Apple silicon) | [OpenMausBot.dmg](https://github.com/milind-soni/OpenMausBot/releases/latest/download/OpenMausBot.dmg) | Drag it to Applications, open it. Signed & notarized. |
-| **macOS** (Intel) | [OpenMausBot-intel.dmg](https://github.com/milind-soni/OpenMausBot/releases/latest/download/OpenMausBot-intel.dmg) | Same app, built for Intel Macs. Signed & notarized. |
+| **macOS** (Apple silicon + Intel, planned) | [RuijieBot Universal delivery specification](发布交付指南/02-macOS打包指导.md) | Target: one `RuijieBot-<version>-mac-universal.dmg`. Not yet implemented or verified; this guide is not an installer. |
 | **Windows** (x64) | [RuijieBot-setup.exe](https://github.com/milind-soni/OpenMausBot/releases/latest/download/RuijieBot-setup.exe) | Run it — one-click, per-user, no admin rights. The installer isn't code-signed yet, so SmartScreen shows "unknown publisher": **More info → Run anyway**. |
 | **Ubuntu 24.04** (x64) | [OpenMausBot-amd64.deb](https://github.com/milind-soni/OpenMausBot/releases/latest/download/OpenMausBot-amd64.deb) · [OpenMausBot.AppImage](https://github.com/milind-soni/OpenMausBot/releases/latest/download/OpenMausBot.AppImage) | Install the `.deb` with APT (recommended), or make the AppImage executable and run it. Beta; GNOME is the supported desktop. |
 
@@ -255,7 +256,7 @@ in the model picker automatically.
 Package the desktop application:
 
 ```sh
-pnpm package:mac      # macOS: DMG + ZIP; requires Swift/Xcode tools
+pnpm package:mac      # Current macOS: separate-arch DMG + ZIP, NOT Universal; see the RuijieBot guide before packaging
 pnpm package:win      # Windows: installer + ZIP
 pnpm package:linux    # Ubuntu x64: .deb + AppImage + verified CUA runtime
 ```

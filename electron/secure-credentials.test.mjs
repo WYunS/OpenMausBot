@@ -3,7 +3,7 @@
 // keychain hiccup look like the user had never connected anything.
 import { describe, expect, it, vi } from "vitest";
 
-import { readSecureCredentials } from "./secure-credentials.mjs";
+import { readSecureCredentials, recoverSecureCredentials } from "./secure-credentials.mjs";
 
 const transient = () =>
   new Error("safeStorage.decryptStringAsync is temporarily unavailable. Please try again.");
@@ -70,5 +70,32 @@ describe("readSecureCredentials", () => {
     const result = await readSecureCredentials(deps({ decrypt }));
     expect(result.status).toBe("unavailable");
     expect(decrypt).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("recoverSecureCredentials", () => {
+  it("keeps retrying after boot and publishes the first readable document", async () => {
+    const read = vi.fn()
+      .mockResolvedValueOnce({ status: "unavailable", credentials: {}, error: "busy" })
+      .mockResolvedValueOnce({ status: "unavailable", credentials: {}, error: "still busy" })
+      .mockResolvedValueOnce({ status: "ok", credentials: { ruijieSandboxRequestJson: "{\"endpoint\":\"saved\"}" } });
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const onRecovered = vi.fn();
+
+    const result = await recoverSecureCredentials({ read, sleep, onRecovered, delays: [2_000, 5_000] });
+
+    expect(sleep).toHaveBeenNthCalledWith(1, 2_000);
+    expect(sleep).toHaveBeenNthCalledWith(2, 5_000);
+    expect(onRecovered).toHaveBeenCalledOnce();
+    expect(onRecovered).toHaveBeenCalledWith({ ruijieSandboxRequestJson: "{\"endpoint\":\"saved\"}" });
+    expect(result).toBe(true);
+  });
+
+  it("accepts Electron's async decrypt result envelope", async () => {
+    const result = await readSecureCredentials(deps({
+      decrypt: async () => ({ result: JSON.stringify({ ruijieSandboxRequestJson: "saved" }), shouldReEncrypt: false }),
+    }));
+    expect(result.status).toBe("ok");
+    expect(result.credentials).toEqual({ ruijieSandboxRequestJson: "saved" });
   });
 });

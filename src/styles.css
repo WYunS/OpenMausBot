@@ -563,6 +563,35 @@ body {
   overflow: hidden;
 }
 
+/* The Windows-facing Ruijie build uses one CJK-capable family for both Latin
+   and Chinese. Falling through from Inter to a separate Chinese font made a
+   single sentence look like two weights and was visibly heavier than the
+   compact GrokBot reference. */
+html[data-product="ruijie"] {
+  --font-sans: "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC",
+    "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  font-synthesis: none;
+}
+
+html[data-product="ruijie"] body {
+  font-weight: 400;
+  letter-spacing: -0.012em;
+}
+
+/* Keep transcript typography quieter than controls. The reference uses a
+   compact 14px text rhythm with much less vertical padding than the original
+   15px/relaxed OpenMausBot bubble. */
+html[data-product="ruijie"] .chat-bubble {
+  padding: 7px 14px;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+}
+
+html[data-product="ruijie"] .chat-bubble .chat-md > * + * {
+  margin-top: 6px;
+}
+
 /* Windows draws only its caption buttons over this empty drag strip. The
    transparent native overlay lets the active skin provide one continuous color. */
 body {

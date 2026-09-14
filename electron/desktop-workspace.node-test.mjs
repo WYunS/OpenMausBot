@@ -60,6 +60,7 @@ function managerFixture() {
       this.closed = false;
       this.handlers = new Map();
       this.inputEvents = [];
+      this.focusCount = 0;
       this.session = {
         setPermissionCheckHandler: (handler) => { this.permissionCheck = handler; },
         setPermissionRequestHandler: (handler) => { this.permissionRequest = handler; },
@@ -75,6 +76,7 @@ function managerFixture() {
     getURL() { return this.url; }
     isDestroyed() { return this.closed; }
     close() { this.closed = true; }
+    focus() { this.focusCount += 1; }
     sendInputEvent(event) { this.inputEvents.push(event); }
     async capturePage() {
       const image = {
@@ -191,13 +193,47 @@ test("manager captures a private-network Ruijie VNC preview with an ASCII user a
   await manager.setAgentInput("ruijie-preview:bot-a");
   assert.equal(views[0].webContents.url.includes("view_only=false"), true);
   await manager.act("ruijie-preview:bot-a", "click", { x: 20, y: 30, double: true, settleMs: 0 });
+  assert.equal(views[0].webContents.focusCount, 1);
   assert.deepEqual(views[0].webContents.inputEvents.map((event) => event.type), [
     "mouseMove", "mouseDown", "mouseUp", "mouseDown", "mouseUp",
   ]);
   await manager.act("ruijie-preview:bot-a", "type", { text: "abc", settleMs: 0 });
   assert.deepEqual(
-    views[0].webContents.inputEvents.slice(-3).map((event) => event.keyCode),
-    ["a", "b", "c"],
+    views[0].webContents.inputEvents.slice(-9),
+    [
+      { type: "keyDown", keyCode: "a" },
+      { type: "char", keyCode: "a" },
+      { type: "keyUp", keyCode: "a" },
+      { type: "keyDown", keyCode: "b" },
+      { type: "char", keyCode: "b" },
+      { type: "keyUp", keyCode: "b" },
+      { type: "keyDown", keyCode: "c" },
+      { type: "char", keyCode: "c" },
+      { type: "keyUp", keyCode: "c" },
+    ],
+  );
+  await manager.act("ruijie-preview:bot-a", "type", { text: "A", settleMs: 0 });
+  assert.deepEqual(
+    views[0].webContents.inputEvents.slice(-5),
+    [
+      { type: "keyDown", keyCode: "Shift" },
+      { type: "keyDown", keyCode: "a", modifiers: ["shift"] },
+      { type: "char", keyCode: "A", modifiers: ["shift"] },
+      { type: "keyUp", keyCode: "a", modifiers: ["shift"] },
+      { type: "keyUp", keyCode: "Shift" },
+    ],
+  );
+  await manager.act("ruijie-preview:bot-a", "key", { key: "ctrl+alt+t", settleMs: 0 });
+  assert.deepEqual(
+    views[0].webContents.inputEvents.slice(-6),
+    [
+      { type: "keyDown", keyCode: "Control" },
+      { type: "keyDown", keyCode: "Alt", modifiers: ["control"] },
+      { type: "keyDown", keyCode: "t", modifiers: ["control", "alt"] },
+      { type: "keyUp", keyCode: "t", modifiers: ["control", "alt"] },
+      { type: "keyUp", keyCode: "Alt", modifiers: ["control"] },
+      { type: "keyUp", keyCode: "Control" },
+    ],
   );
   await manager.act("ruijie-preview:bot-a", "scroll", { deltaY: 300, settleMs: 0 });
   assert.equal(views[0].webContents.inputEvents.at(-1).type, "mouseWheel");

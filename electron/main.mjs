@@ -18,7 +18,8 @@ import {
   installDesktopCrashListeners,
   readSafeLogTail,
 } from "./diagnostics.mjs";
-import { migrateWorkspaceCredentials, workspaceCredentialEnv } from "./workspace-credentials.mjs";
+import { migrateWorkspaceCredentials, workspaceCredentialEnv, workspaceCredentialSyncMessage } from "./workspace-credentials.mjs";
+import { installSandboxPreset, SANDBOX_PRESET_MARKER } from './ruijie-sandbox-bootstrap.mjs';
 import { activateExistingWindow, releaseSingleInstanceLock } from "./single-instance.mjs";
 import { pollServerIdentity } from "./server-boot-probe.mjs";
 import { packageUrlFromCommandLine, packageUrlFromDeepLink } from "./package-link.mjs";
@@ -76,7 +77,8 @@ import {
   loadAuthorizationWithDirectFallback,
 } from "./ruijie-sso-window-policy.mjs";
 import { isKnownSkin } from "./skin-overlay.cjs";
-import { readSecureCredentials } from "./secure-credentials.mjs";
+import { readSecureCredentials, recoverSecureCredentials } from "./secure-credentials.mjs";
+import { createDesktopViewerTakeoverNotifier } from "./desktop-viewer-takeover.mjs";
 import { createControlPlaneClient } from "./control-plane-client.mjs";
 import {
   companionAccountCleanupPending,
@@ -361,6 +363,20 @@ const CREDENTIALS_FILE = path.join(app.getPath("userData"), "credentials.bin");
  * server's view of "configured", and whether we may register a fresh
  * installation — keys off this rather than off an empty object. */
 let credentialStoreUnavailable = false;
+let importedSandboxManagerUrl;
+
+async function bootstrapPackagedSandbox() {
+  if (!app.isPackaged || !OWNS_LOCAL_SERVER) return;
+  const result = await installSandboxPreset({
+    presetPath: path.join(process.resourcesPath, 'ruijie-sandbox', 'bootstrap.json'),
+    configPath: path.join(desktopDataDir(), 'config.json'),
+    credentials: secureCredentials, storeAvailable: !credentialStoreUnavailable,
+    saveCredentials: saveSecureCredentials,
+  });
+  secureCredentials = result.credentials;
+  if (result.managerUrl) importedSandboxManagerUrl = result.managerUrl;
+  if (result.status === 'retry') slog('sandbox preset import incomplete; saved accounts preserved, retry on next launch');
+}
 
 async function loadSecureCredentials() {
   const result = await readSecureCredentials({
@@ -1230,6 +1246,15 @@ async function startServerPackaged() {
       if (started.proc) {
         serverProc = started.proc;
         SERVER_PORT = port;
+        // Close the narrow race where safeStorage recovers after this child
+        // was forked but before startServerOn publishes it globally.
+        syncWorkspaceCredentials(serverProc);
+        // The browser/noVNC host can become ready while startServerOn is
+        // still polling the child, before serverProc is published above. Its
+        // first publish then has nobody to notify. Synchronize once after the
+        // assignment so a fresh desktop never spends a turn without the
+        // Ruijie bridge (the periodic refresh is only a repair backstop).
+        syncBrowserConnection(serverProc);
         return true;
       }
       if (started.abort) return false;
@@ -1253,6 +1278,16 @@ function syncManagedComposioCredentials() {
     });
   } catch (error) {
     slog(`connected-apps credential sync failed: ${error?.message ?? error}`);
+  }
+}
+
+function syncWorkspaceCredentials(proc) {
+  if (!proc || credentialStoreUnavailable) return;
+  try {
+    proc.postMessage(workspaceCredentialSyncMessage(secureCredentials, importedSandboxManagerUrl));
+    importedSandboxManagerUrl = undefined;
+  } catch (error) {
+    slog(`workspace credential recovery sync failed: ${error?.message ?? error}`);
   }
 }
 
@@ -1364,7 +1399,8 @@ function openDesktopViewer(owner, rawUrl, rawTitle, contextId) {
       previousOwner.send("desktop-viewer:state", { open: false, contextId: previousContextId });
     }
   }
-  desktopViewerOwner = owner.webContents;
+  const viewerOwner = owner.webContents;
+  desktopViewerOwner = viewerOwner;
   desktopViewerContextId = nextContextId;
 
   const viewer = new BrowserWindow({
@@ -1398,10 +1434,23 @@ function openDesktopViewer(owner, rawUrl, rawTitle, contextId) {
   // example "锐捷Bot"), which makes those proxies return HTTP 500 before
   // noVNC loads. Keep this isolated remote-content window ASCII-only.
   viewer.webContents.setUserAgent(DESKTOP_VIEWER_USER_AGENT);
+  const requestTakeover = createDesktopViewerTakeoverNotifier((payload) => {
+    if (!viewerOwner.isDestroyed()) {
+      viewerOwner.send("desktop-viewer:user-input", payload);
+    }
+  }, nextContextId);
+  viewer.webContents.on("before-input-event", (_event, input) => {
+    requestTakeover({ source: "keyboard", type: input?.type });
+  });
+  viewer.webContents.on("before-mouse-event", (_event, input) => {
+    requestTakeover({ source: "mouse", type: input?.type });
+  });
 
   // VNC needs rendering, keyboard/mouse input and WebSockets, plus the few
-  // permission-gated input capabilities a viewer page asks for: keyboard and
-  // pointer capture, the clipboard for paste, full screen. Those go to the
+  // permission-gated input capabilities a viewer page asks for: keyboard
+  // capture, the clipboard for paste, full screen. Pointer lock is denied
+  // because noVNC relative-pointer mode makes a scaled desktop cursor jump.
+  // The allowed capabilities go to the
   // viewer's own origin only — never camera, microphone, geolocation,
   // notifications, USB, or any other privileged browser capability in this
   // remote-content window (see desktop-viewer-permissions.mjs).
@@ -2608,6 +2657,7 @@ async function saveWorkspaceCredential(name, value) {
     (credentials) => {
       if (secret) credentials[name] = secret;
       else delete credentials[name];
+      if (name === 'ruijieSandboxRequestJson') credentials[SANDBOX_PRESET_MARKER] = { state: 'handled' };
       return credentials;
     },
     applyToHarness,
@@ -2693,6 +2743,7 @@ app.whenReady().then(async () => {
   if (OWNS_LOCAL_SERVER) {
     await secureComposioConfig();
     await secureWorkspaceConfig();
+    await bootstrapPackagedSandbox();
   }
   // Boot migrations above are deliberately sequential. From this point on,
   // every account/API-key writer must use the shared serialized state.
@@ -2701,6 +2752,38 @@ app.whenReady().then(async () => {
     writable: !credentialStoreUnavailable,
   });
   secureCredentials = secureCredentialState.read();
+  if (credentialStoreUnavailable) {
+    // Boot must remain fast even if Windows/macOS has not unlocked safeStorage
+    // yet. Keep retrying in the background and repair the already-running
+    // server over its private utility-process channel as soon as it opens.
+    void recoverSecureCredentials({
+      read: () => readSecureCredentials({
+        exists: () => fs.existsSync(CREDENTIALS_FILE),
+        isAvailable: () => safeStorage.isAsyncEncryptionAvailable(),
+        readFile: () => fs.readFileSync(CREDENTIALS_FILE),
+        decrypt: (buffer) => safeStorage.decryptStringAsync(buffer),
+        sleep: () => Promise.resolve(),
+        delays: [],
+      }),
+      sleep: (ms) => new Promise((resolve) => {
+        const timer = setTimeout(resolve, ms);
+        timer.unref?.();
+      }),
+      shouldContinue: () => !desktopShutdownStarted && credentialStoreUnavailable,
+      onRecovered: async (credentials) => {
+        secureCredentials = credentials;
+        credentialStoreUnavailable = false;
+        if (OWNS_LOCAL_SERVER) {
+          await secureWorkspaceConfig();
+          await bootstrapPackagedSandbox();
+        }
+        secureCredentialState = createSecureCredentialState(secureCredentials, saveSecureCredentials);
+        syncWorkspaceCredentials(serverProc);
+        syncManagedComposioCredentials();
+        slog("credential store recovered in background; restored credentials without restarting the app");
+      },
+    }).catch((error) => slog(`credential store background recovery stopped: ${error?.message ?? error}`));
+  }
   if (OWNS_LOCAL_SERVER) await ensurePhoneSecretIdentity();
   desktopRemoteAccess = desktopCompanionAccess(secureCredentials);
   const hostedAccount = desktopRemoteAccess ? null : ensureCompanionAccountService();

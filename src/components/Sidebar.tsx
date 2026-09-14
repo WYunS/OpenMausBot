@@ -92,6 +92,7 @@ import { AccountSignOutConfirm } from "./AccountSignOutConfirm";
 import { useRuijieAccount } from "@/state/ruijie-account";
 import { useShowThreads } from "@/lib/thread-preferences";
 import { SidebarBotActivity, sidebarBotActivityTasks } from "./SidebarBotActivity";
+import { brand } from "@/lib/brand";
 
 const SECTION_LABEL_KEYS: Record<string, LocaleKey> = {
   [PINNED_SECTION_ID]: "sidebar.section.pinned",
@@ -1488,6 +1489,7 @@ function ArchivedBotsPanel({
 }
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const streamlined = brand().name === "锐捷Bot";
   const showThreads = useShowThreads();
   const remoteClient = window.ogb?.remoteClient?.active === true;
   const { state, dispatch } = useStore();
@@ -1816,7 +1818,9 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       data-sidebar
       className={cn(
         "flex h-full shrink-0 flex-col border-r border-hairline/40 bg-panel transition-[width] duration-200",
-        density === "icons" ? "w-[80px]" : density === "compact" ? "w-[272px]" : "w-[320px]",
+        streamlined
+          ? density === "icons" ? "w-[68px]" : density === "compact" ? "w-[252px]" : "w-[272px]"
+          : density === "icons" ? "w-[80px]" : density === "compact" ? "w-[272px]" : "w-[320px]",
         // Below md only: the sidebar leaves the flow and slides in over the chat.
         // Scoped with max-md: rather than cancelled with md: on purpose — Tailwind
         // v4 emits the native `translate` property, and any value other than

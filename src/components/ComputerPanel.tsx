@@ -20,6 +20,7 @@ import {
   Maximize2,
   Monitor,
   Moon,
+  Plus,
   Power,
   Settings,
   Smartphone,
@@ -59,7 +60,9 @@ import {
 } from "@/lib/computer-panel-view";
 import { approvalModeFor } from "../../shared/approval-mode";
 import { t } from "@/lib/i18n";
+import { brand } from "@/lib/brand";
 import type { LocaleKey } from "@/locales";
+import { DEFAULT_CLOUD_BACKEND } from "../../server/product-features";
 
 class LocalizedPanelError extends Error {
   constructor(
@@ -138,18 +141,24 @@ const computerControlSnapshotSchema = z.object({
 }).passthrough();
 
 const PANEL_WIDTH_KEY = "omb-computer-panel-width";
+const STREAMLINED_PANEL_WIDTH_KEY = "ruijie-computer-panel-width";
 const PANEL_MIN_WIDTH = 360;
 const PANEL_MAX_WIDTH = 960;
 const PANEL_DEFAULT_WIDTH = 400;
+const STREAMLINED_PANEL_MIN_WIDTH = 280;
+const STREAMLINED_PANEL_DEFAULT_WIDTH = 296;
 
-function readPanelWidth(): number {
+function readPanelWidth(streamlined = false): number {
+  const key = streamlined ? STREAMLINED_PANEL_WIDTH_KEY : PANEL_WIDTH_KEY;
+  const minimum = streamlined ? STREAMLINED_PANEL_MIN_WIDTH : PANEL_MIN_WIDTH;
+  const fallback = streamlined ? STREAMLINED_PANEL_DEFAULT_WIDTH : PANEL_DEFAULT_WIDTH;
   try {
-    const stored = Number(localStorage.getItem(PANEL_WIDTH_KEY));
-    if (Number.isFinite(stored) && stored >= PANEL_MIN_WIDTH && stored <= PANEL_MAX_WIDTH) return stored;
+    const stored = Number(localStorage.getItem(key));
+    if (Number.isFinite(stored) && stored >= minimum && stored <= PANEL_MAX_WIDTH) return stored;
   } catch {
     /* storage blocked — default width */
   }
-  return PANEL_DEFAULT_WIDTH;
+  return fallback;
 }
 
 export function ComputerPanel({
@@ -159,9 +168,10 @@ export function ComputerPanel({
   bot: Bot;
   onOpenVmWorkspace?: (botId: string) => void;
 }) {
+  const streamlined = brand().name === "锐捷Bot";
   // The panel is a fixed column by default; a drag handle on its left edge
   // makes it wide enough to actually read a page in the Browser tab.
-  const [panelWidth, setPanelWidth] = useState(readPanelWidth);
+  const [panelWidth, setPanelWidth] = useState(() => readPanelWidth(streamlined));
   const resizeFrom = useRef<{ x: number; width: number } | null>(null);
   const onResizeStart = (event: React.PointerEvent<HTMLDivElement>) => {
     resizeFrom.current = { x: event.clientX, width: panelWidth };
@@ -169,7 +179,8 @@ export function ComputerPanel({
   };
   const onResizeMove = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!resizeFrom.current) return;
-    const next = Math.min(PANEL_MAX_WIDTH, Math.max(PANEL_MIN_WIDTH, resizeFrom.current.width + (resizeFrom.current.x - event.clientX)));
+    const minimum = streamlined ? STREAMLINED_PANEL_MIN_WIDTH : PANEL_MIN_WIDTH;
+    const next = Math.min(PANEL_MAX_WIDTH, Math.max(minimum, resizeFrom.current.width + (resizeFrom.current.x - event.clientX)));
     setPanelWidth(next);
   };
   const onResizeEnd = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -177,7 +188,7 @@ export function ComputerPanel({
     resizeFrom.current = null;
     event.currentTarget.releasePointerCapture(event.pointerId);
     try {
-      localStorage.setItem(PANEL_WIDTH_KEY, String(panelWidth));
+      localStorage.setItem(streamlined ? STREAMLINED_PANEL_WIDTH_KEY : PANEL_WIDTH_KEY, String(panelWidth));
     } catch {
       /* storage blocked — width lives for this session */
     }
@@ -191,6 +202,7 @@ export function ComputerPanel({
   const [localAutoWarningTarget, setLocalAutoWarningTarget] = useState<string | null>(null);
   const localDisabledReason = localComputerDisabledReason({ capabilities, providerSupportsLocal });
   const [phase, setPhase] = useState<Phase>("checking");
+  const [ruijieDisconnected, setRuijieDisconnected] = useState(false);
   const [persistedComputerSelection, setPersistedComputerSelection] = useState<{
     botId: string;
     computer: Bot["computer"];
@@ -201,7 +213,7 @@ export function ComputerPanel({
     computer: Bot["computer"];
     cloudBackend: CloudBackend;
   } | null>(null);
-  const cloudBackend = bot.cloudBackend ?? "box";
+  const cloudBackend = bot.cloudBackend ?? DEFAULT_CLOUD_BACKEND;
   const computerSelectionPersisted = Boolean(
     persistedComputerSelection
       && persistedComputerSelection.botId === bot.id
@@ -224,8 +236,9 @@ export function ComputerPanel({
     resolvedCloudBackend: resolvedComputerSelection?.cloudBackend ?? null,
   });
   const cloudDesktopReady = Boolean(
-    cloudPreviewReady ||
-      (cloudBackend === "ruijie-sandbox" && computerStatusCurrent && bot.computer === "cloud" && phase === "ready"),
+    !ruijieDisconnected && (cloudPreviewReady ||
+      (cloudBackend === "ruijie-sandbox" && computerStatusCurrent && bot.computer === "cloud" && phase === "ready")
+    )
   );
   const updateComputerSelection = useCallback((patch: {
     computer?: Bot["computer"] | null;
@@ -273,11 +286,14 @@ export function ComputerPanel({
   const [vpsStatus, setVpsStatus] = useState<VpsComputerStatus | null>(null);
   const [localFrame, setLocalFrame] = useState<string | null>(null);
   const [pending, setPending] = useState<
-    "join" | "sleep" | "provision" | "vps-replace" | "vm-create" | "vm-recreate" | "vm-delete" | null
+    "join" | "sleep" | "disconnect" | "provision" | "vps-replace" | "vm-create" | "vm-recreate" | "vm-delete" | null
   >(null);
   const [controlPending, setControlPending] = useState(false);
   const [viewerOpen, setViewerOpen] = useState(false);
+  const viewerTakeoverPending = useRef(false);
   const [error, setError] = useState<Error | string | null>(null);
+
+  useEffect(() => setRuijieDisconnected(false), [bot.id, bot.computer, cloudBackend]);
   const errorText = panelErrorText(error);
   const [panelView, setPanelView] = useState<ComputerPanelView>(() => readComputerPanelView(bot.id));
   const androidStatus = useAndroidUsbDevices();
@@ -749,6 +765,7 @@ export function ComputerPanel({
       panelView !== "computer" ||
       cloudBackend !== "ruijie-sandbox" ||
       bot.computer !== "cloud" ||
+      ruijieDisconnected ||
       phase !== "ready" ||
       !computerStatusCurrent ||
       viewerOpen ||
@@ -805,6 +822,7 @@ export function ComputerPanel({
     pageVisible,
     panelView,
     phase,
+    ruijieDisconnected,
     viewerOpen,
   ]);
 
@@ -946,11 +964,20 @@ export function ComputerPanel({
     }
   }, [transitionControl]);
 
+  useEffect(() => {
+    return window.ogb?.desktopViewer?.onUserInput?.((viewer) => {
+      if (viewer.contextId !== bot.id || control.held || viewerTakeoverPending.current) return;
+      viewerTakeoverPending.current = true;
+      void controlAction("take").finally(() => {
+        viewerTakeoverPending.current = false;
+      });
+    });
+  }, [bot.id, control.held, controlAction]);
+
   const openDesktop = async () => {
     setPending("join");
     setControlPending(true);
     setError(null);
-    let tookControl = false;
     // A plain-web development session still needs a synchronous blank tab;
     // the packaged app uses the reliable Electron viewer window below.
     let fallbackTab: Window | null = null;
@@ -959,11 +986,6 @@ export function ComputerPanel({
       if (fallbackTab) fallbackTab.opener = null;
     }
     try {
-      if (!control.held) {
-        await transitionControl("take");
-        tookControl = true;
-      }
-
       let viewerUrl = vmViewerUrl;
       if (cloudDesktopReady) {
         const result = await api(`/api/bots/${bot.id}/computer/join`, { method: "POST" });
@@ -984,9 +1006,6 @@ export function ComputerPanel({
       }
     } catch (e) {
       fallbackTab?.close();
-      // Release the bot before waiting on best-effort tunnel cleanup. A sick
-      // SSH process must never leave the agent paused indefinitely.
-      if (tookControl) await transitionControl("release").catch(() => {});
       if (cloudDesktopReady && cloudBackend === "vps") {
         await api(`/api/bots/${bot.id}/computer/viewer-close`, { method: "POST", body: "{}" }).catch(() => {});
       }
@@ -995,6 +1014,36 @@ export function ComputerPanel({
       setPending(null);
       setControlPending(false);
     }
+  };
+
+  const disconnectRuijie = async () => {
+    if (cloudBackend !== "ruijie-sandbox" || bot.computer !== "cloud") return;
+    setPending("disconnect");
+    setError(null);
+    try {
+      if (control.held) await transitionControl("release");
+      await Promise.allSettled([
+        window.ogb?.desktopViewer?.close(bot.id) ?? Promise.resolve(false),
+        window.ogb?.desktopWorkspace?.close(`ruijie-preview:${bot.id}`) ?? Promise.resolve(false),
+        api(`/api/bots/${bot.id}/computer/viewer-close`, { method: "POST", body: "{}" }),
+      ]);
+      setRuijieFrame(null);
+      setRuijieDisconnected(true);
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const closeComputerPanel = () => {
+    // Panel close has the same non-destructive semantics as Disconnect: end
+    // local VNC/control activity, but never call the provider's /release.
+    if (cloudBackend === "ruijie-sandbox" && bot.computer === "cloud") {
+      if (control.held) void transitionControl("release").catch(() => {});
+      void window.ogb?.desktopViewer?.close(bot.id);
+      void window.ogb?.desktopWorkspace?.close(`ruijie-preview:${bot.id}`);
+      void api(`/api/bots/${bot.id}/computer/viewer-close`, { method: "POST", body: "{}" }).catch(() => {});
+    }
+    dispatch({ type: "toggleComputer", open: false });
   };
 
   const run = (kind: "sleep" | "provision") => {
@@ -1122,6 +1171,140 @@ export function ComputerPanel({
     error: "Couldn't reach the computer",
   } satisfies Record<Exclude<Phase, "ready" | "local" | "vm">, string>;
 
+  if (streamlined) {
+    const connected = Boolean(frameSrc);
+    const canOpen = previewOpensDesktop || cloudDesktopReady || (phase === "vm" && Boolean(vmViewerUrl));
+    const waiting = !ruijieDisconnected && ["checking", "starting", "ready", "vm", "local"].includes(phase) && !connected;
+    const compactStatus = ruijieDisconnected
+      ? "已断开连接"
+      : connected
+      ? "已连接"
+      : waiting
+        ? "正在连接…"
+        : errorText || phase === "error"
+          ? "电脑暂时无法连接"
+          : "暂无可用电脑";
+
+    return (
+      <aside
+        className="animate-panel-in relative flex h-full shrink-0 flex-col border-l border-hairline/40 bg-panel"
+        style={{ width: panelWidth }}
+      >
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("computer.resizeAria")}
+          onPointerDown={onResizeStart}
+          onPointerMove={onResizeMove}
+          onPointerUp={onResizeEnd}
+          onPointerCancel={onResizeEnd}
+          className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize hover:bg-accent/40"
+        />
+
+        <div className="flex h-12 shrink-0 items-center justify-end px-3">
+          <button
+            type="button"
+            onClick={closeComputerPanel}
+            aria-label={t("common.close")}
+            className="rounded-lg p-1.5 text-ink-secondary transition-colors hover:bg-control hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <X size={18} className="pointer-events-none" />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6">
+          <div className="relative flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl border border-hairline/30 bg-gradient-to-br from-control via-card to-inset shadow-[0_14px_36px_rgba(0,0,0,0.2)]">
+            {frameSrc ? (
+              <img
+                src={frameSrc}
+                alt={t("computer.screenOf", { name: bot.name })}
+                className="h-full w-full object-contain"
+              />
+            ) : (
+              <div className="flex flex-col items-center gap-3 text-ink-secondary/45">
+                {waiting ? <Loader2 size={27} className="animate-spin" /> : <Monitor size={30} strokeWidth={1.5} />}
+              </div>
+            )}
+            {canOpen && (
+              <button
+                type="button"
+                onClick={() => void openDesktop()}
+                disabled={controlPending || pending === "join"}
+                className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-full bg-black/75 px-3.5 py-1.5 text-[12px] font-medium text-white shadow-xl backdrop-blur-sm transition hover:bg-black/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:cursor-wait disabled:opacity-70"
+                aria-label={t("computer.openLiveDesktopAria", { name: bot.name })}
+              >
+                {pending === "join" ? <Loader2 size={14} className="animate-spin" /> : <Maximize2 size={14} />}
+                {t("computer.open")}
+              </button>
+            )}
+          </div>
+
+          <div className="mt-3 text-center">
+            <div className="text-[12px] font-medium text-ink-secondary">{bot.name} 的电脑</div>
+            <div className={cn("mt-0.5 text-[10.5px]", connected ? "text-emerald-400/80" : "text-ink-secondary/65")}>
+              {compactStatus}
+            </div>
+            {cloudBackend === "ruijie-sandbox" && bot.computer === "cloud" && phase === "ready" && (
+              <button
+                type="button"
+                onClick={() => ruijieDisconnected ? setRuijieDisconnected(false) : void disconnectRuijie()}
+                disabled={pending === "disconnect"}
+                className="mt-2 rounded-lg border border-hairline/50 bg-control px-3 py-1.5 text-[11px] text-ink transition-colors hover:bg-raised-hover disabled:cursor-wait disabled:opacity-60"
+              >
+                {pending === "disconnect" ? "正在断开…" : ruijieDisconnected ? "重新连接" : "断开连接"}
+              </button>
+            )}
+          </div>
+
+          <section className="mt-7" aria-label="例行任务">
+            <div className="flex items-center justify-between">
+              <h2 className="text-[15px] font-semibold tracking-tight text-ink">例行任务</h2>
+              <button
+                type="button"
+                onClick={() => dispatch({ type: "showRoutines", section: "schedule", view: "list", botId: bot.id })}
+                aria-label="添加例行任务"
+                className="rounded-lg p-1.5 text-ink-secondary transition-colors hover:bg-control hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                <Plus size={18} />
+              </button>
+            </div>
+
+            <div className="mt-3 space-y-1">
+              {botRoutines.length ? botRoutines.map((routine) => (
+                <button
+                  key={routine.id}
+                  type="button"
+                  onClick={() => dispatch({ type: "showRoutines", section: "schedule", view: "list", botId: bot.id, routineId: routine.id })}
+                  className="group flex w-full items-start gap-3 rounded-xl px-2 py-3 text-left transition-colors hover:bg-control/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  <CalendarClock size={18} className={cn("mt-0.5 shrink-0", routine.enabled ? "text-accent" : "text-ink-secondary/55")} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] font-medium text-ink">{routine.name}</span>
+                    <span className="mt-0.5 block truncate text-[11px] text-ink-secondary">
+                      {routine.enabled
+                        ? routine.nextRunAt
+                          ? `下次运行：${new Date(routine.nextRunAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
+                          : "已启用"
+                        : t("routines.pausedSchedule")}
+                    </span>
+                  </span>
+                </button>
+              )) : (
+                <button
+                  type="button"
+                  onClick={() => dispatch({ type: "showRoutines", section: "schedule", view: "list", botId: bot.id })}
+                  className="w-full rounded-xl border border-dashed border-hairline/40 px-3 py-4 text-left text-[11.5px] text-ink-secondary transition-colors hover:border-hairline hover:bg-control/30 hover:text-ink"
+                >
+                  暂无例行任务，点击添加
+                </button>
+              )}
+            </div>
+          </section>
+        </div>
+      </aside>
+    );
+  }
+
   return (
     <>
     <aside
@@ -1195,10 +1378,12 @@ export function ComputerPanel({
           </div>
         )}
         <button
-          onClick={() => dispatch({ type: "toggleComputer", open: false })}
+          type="button"
+          onClick={closeComputerPanel}
+          aria-label={t("common.close")}
           className="rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
         >
-          <X size={18} />
+          <X size={18} className="pointer-events-none" />
         </button>
       </div>
 
@@ -1529,7 +1714,7 @@ export function ComputerPanel({
                 {t("computer.openLiveDesktop")}
               </button>
             )}
-            {(cloudBackend === "vps" || boxState !== "archived") && (
+            {cloudBackend !== "ruijie-sandbox" && (cloudBackend === "vps" || boxState !== "archived") && (
               <button
                 onClick={() => run("sleep")}
                 disabled={pending === "sleep"}
@@ -1541,6 +1726,17 @@ export function ComputerPanel({
               </button>
             )}
           </div>
+        )}
+        {cloudBackend === "ruijie-sandbox" && bot.computer === "cloud" && phase === "ready" && (
+          <button
+            type="button"
+            onClick={() => ruijieDisconnected ? setRuijieDisconnected(false) : void disconnectRuijie()}
+            disabled={pending === "disconnect"}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:cursor-wait disabled:opacity-50"
+          >
+            {pending === "disconnect" ? <Loader2 size={14} className="animate-spin" /> : <Power size={14} />}
+            {pending === "disconnect" ? "正在断开…" : ruijieDisconnected ? "重新连接" : "断开连接"}
+          </button>
         )}
 
         <LocalScreenPreview />

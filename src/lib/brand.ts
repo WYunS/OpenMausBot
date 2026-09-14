@@ -102,6 +102,8 @@ export function applyBrand(status: BrandStatus): void {
   document.title = status.brand.name;
   applyIcon(status.brand.favicon);
   const root = document.documentElement;
+  if (status.brand.name === "锐捷Bot") root.dataset.product = "ruijie";
+  else delete root.dataset.product;
   for (const name of ["--color-accent", "--color-accent-border", "--color-focus", "--color-accent-text", "--color-accent-ink"]) {
     root.style.removeProperty(name);
   }
