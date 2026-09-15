@@ -31,7 +31,7 @@ export function PermissionsSection({
   bot: Bot;
   derived: ReturnType<typeof useBotSettingsDerived>;
 }) {
-  const { patch, engine, canCoordinate, canAutoReview, approvalMode, trustedModesAvailable, sectionName, currentChief } = derived;
+  const { patch, engine, canCoordinate, approvalMode, trustedModesAvailable, sectionName, currentChief } = derived;
   const { dispatch } = useStore();
   const [localAutoWarning, setLocalAutoWarning] = useState<string | null>(null);
   const [fullAccessTarget, setFullAccessTarget] = useState<string | null>(null);
@@ -129,51 +129,6 @@ export function PermissionsSection({
           />
         </div>
       </div>
-
-      {!(engine?.driverKind === "antigravityAgent" && approvalMode === "full") && <div className="rounded-xl bg-card p-4">
-        <div className="text-[15px] font-medium text-ink">{t("botSettings.permissions.autoReview")}</div>
-        <div className="mt-0.5 text-[13px] text-ink-secondary">
-          {approvalMode === "custom"
-            ? t("botSettings.permissions.autoReviewCustom")
-            : canAutoReview
-              ? t("botSettings.permissions.autoReviewHelp")
-              : t("botSettings.permissions.autoReviewUnsupported")}
-        </div>
-        <div className="mt-3 flex gap-1 rounded-lg bg-inset p-0.5">
-          {(
-            [
-              ["off", t("common.off"), t("botSettings.permissions.reviewOffHint")],
-              ["shadow", t("botSettings.permissions.reviewWatch"), t("botSettings.permissions.reviewWatchHint")],
-              ["enforce", t("common.on"), t("botSettings.permissions.reviewOnHint")],
-            ] as const
-          ).map(([value, label, hint]) => {
-            const current = approvalMode === "custom"
-              ? "off"
-              : bot.autoReview === "shadow" || bot.autoReview === "enforce"
-                ? bot.autoReview
-                : "off";
-            const disabled = value !== "off" && (approvalMode === "custom" || !canAutoReview);
-            return (
-              <button
-                key={value}
-                title={disabled
-                  ? approvalMode === "custom"
-                    ? t("botSettings.permissions.customControlled")
-                    : t("botSettings.permissions.notSupported")
-                  : hint}
-                disabled={disabled}
-                onClick={() => patch({ autoReview: value })}
-                className={cn(
-                  "flex-1 rounded-md px-2.5 py-1.5 text-[13px] font-medium disabled:cursor-not-allowed disabled:opacity-40",
-                  current === value ? "bg-raised text-ink" : "text-ink-secondary hover:text-ink",
-                )}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      </div>}
 
       <LocalComputerAutoWarning
         open={localAutoWarning !== null}

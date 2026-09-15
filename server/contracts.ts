@@ -146,6 +146,8 @@ export type RuntimeEvent = RuntimeEventBase &
         /** Provider asks to widen its configured sandbox. Only explicit Full
          * access may answer this automatically; Auto/remembered grants may not. */
         requiresExplicitApproval?: boolean;
+        /** The provider can keep an allow for the rest of its session. */
+        allowSession?: boolean;
       }
     | {
         type: "request.resolved";
@@ -319,7 +321,15 @@ export interface ProviderAdapter {
   respondToRequest(
     threadId: ThreadId,
     requestId: string,
-    decision: { behavior: "allow" | "deny" | "answer"; message?: string },
+    decision: {
+      behavior: "allow" | "deny" | "answer";
+      message?: string;
+      /** "Always allow this session": hand the provider its own remembered
+       * approval (Claude's suggested permission rules, ACP `allow_always`)
+       * so it stops asking about this operation for the rest of the
+       * session. The app keeps no grant of its own. */
+      always?: boolean;
+    },
   ): Promise<RequestOutcome>;
   /** Deliver a user message into the RUNNING turn on this thread. Resolves
    * false when there is no live turn to steer (the caller then sends it as

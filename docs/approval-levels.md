@@ -75,31 +75,16 @@ Session recall still enforces own-bot access and records its existing room
 disclosure audit. These hints do not grant access to another bot's conversations.
 Writes, credential requests, proposals, and third-party tools do not inherit
 these hints. The metadata is available to every engine using this integration;
-whether an engine consumes it remains that engine's behavior.
+whether an engine consumes it remains that engine's behavior. Arbitrary MCP
+display titles or `readOnlyHint` claims from a third-party server are not
+authorization to bypass a prompt.
 
-Grok previously launched Auto as `default`, making the setting behave like Ask
-even on a CLI with automatic review. Auto now passes `auto` on every turn,
-including resumed sessions and custom/local models run through Grok. This mapping
-was checked against Grok 1.0.3's CLI help and the [official permission documentation](https://docs.x.ai/build/features/permissions).
-Grok can still disable its reviewer through provider-side feature gating or
-managed policy; OpenMausBot never changes that into bypass-permissions.
-
-The fix does not make every operation silent: native denials, permission
-escalations, questions, and separate OpenMausBot confirmations remain intact.
-Arbitrary MCP display titles or `readOnlyHint` claims from a third-party server
-are not authorization to bypass a prompt. Claude, Codex, and Pi's existing
-built-in integration routes remain unchanged.
-
-The mapping follows the provider-boundary approach in
-[T3 Code's permission modes](https://github.com/pingdotgg/t3code/blob/e16b8b059c9f5ff6dfed1addecffb831c6aee043/docs/user/permission-modes.md).
-Its [Grok adapter](https://github.com/pingdotgg/t3code/blob/e16b8b059c9f5ff6dfed1addecffb831c6aee043/apps/server/src/provider/acp/GrokAcpSupport.ts#L29-L41)
-also maps Auto to `--permission-mode auto`. This is an engine setting, not a
-per-model allowlist. T3 likewise falls back to asking on providers without native
-Auto; its quieter default is Full access, not a universal safe-action classifier.
-OpenMausBot keeps its own opt-in desktop confirmation; Full access is not the default.
-T3's separate Grok "Always allow this session" remembers explicitly approved
-matching commands/tool inputs. That is not a grant for every tool sharing a
-display name, and this patch does not introduce a new remembered-approval mode.
+The level set follows the provider-boundary approach in
+[T3 Code's permission modes](https://github.com/pingdotgg/t3code/blob/e16b8b059c9f5ff6dfed1addecffb831c6aee043/docs/user/permission-modes.md):
+Supervised, Auto-accept edits, Auto, and Full access, each a provider mode
+rather than an app rule, with a remembered approval that belongs to the
+provider's session. Its quieter default is Full access; OpenMausBot keeps its
+own opt-in desktop confirmation and Ask as the default.
 
 ## Verification for contributors
 
