@@ -1,5 +1,7 @@
 > ⚠️ **No affiliation with any cryptocurrency.** OpenMausBot has no token. Any coin using the OpenMausBot, Maus, or SupaMaus name is not created, endorsed, or affiliated with this project or its maintainer. I have received no tokens, payment, or allocation from anyone, and I will not be endorsing any token.
 
+> 企业内部打包：进入 [Actions → 打包发布](https://github.com/AI-Applications-Team/OpenMausBot/actions/workflows/package-release.yml)，填写版本即可构建 macOS Universal DMG、Windows EXE 和 Linux 包。使用方式与测试签名说明见 [企业发布指南](.release/README.md)。
+
 <div align="center">
 
 # OpenMausBot

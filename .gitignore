@@ -52,3 +52,6 @@ deploy/podman/.env
 deploy/podman/.env.*
 !deploy/podman/.env.example
 /.env
+
+# Generated enterprise release candidates and reports
+.release-out/

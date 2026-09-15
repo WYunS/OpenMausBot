@@ -1,0 +1,212 @@
+name: 打包发布
+run-name: RuijieBot ${{ inputs.version || '仓库版本' }} · ${{ inputs.platforms }} · ${{ inputs.mode }}
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（例如 v0.1.76；留空读取 package.json）'
+        type: string
+        required: false
+      source_ref:
+        description: '源码分支、标签或提交'
+        type: string
+        default: main
+        required: true
+      platforms:
+        description: '构建平台：all / macos / windows / linux'
+        type: choice
+        options: [all, macos, windows, linux]
+        default: all
+      mode:
+        description: '交付方式：draft 草稿 / artifacts 仅产物 / prerelease 内部测试发布'
+        type: choice
+        options: [prerelease, draft, artifacts]
+        default: prerelease
+permissions:
+  contents: read
+concurrency:
+  group: desktop-release-${{ github.repository }}-${{ inputs.version }}
+  cancel-in-progress: false
+env:
+  RELEASE_VERSION: ${{ inputs.version }}
+  RELEASE_MODE: ${{ inputs.mode }}
+  RELEASE_CONFIG: .release/config.json
+  RELEASE_PLATFORMS: ${{ inputs.platforms }}
+  CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+  DSH_TELEMETRY_DISABLED: '1'
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.prepare.outputs.sha }}
+      version: ${{ steps.prepare.outputs.version }}
+      node: ${{ steps.prepare.outputs.node }}
+      matrix: ${{ steps.prepare.outputs.matrix }}
+      build: ${{ steps.prepare.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.20.0'
+      - name: Check requirements and pin one versioned source commit
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .release/toolkit/bin/release.mjs prepare
+      - name: Preserve preflight report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-preflight-${{ github.run_id }}
+          path: .release-out/preflight.json
+          if-no-files-found: warn
+          retention-days: 30
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+          submodules: recursive
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ needs.prepare.outputs.node }}
+      - name: Enable pinned package manager
+        run: corepack enable
+      - name: Install Linux build and test dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb dbus-x11 libfuse2 squashfs-tools libnss3 libatk-bridge2.0-0 libgtk-3-0 libasound2t64 libgbm1 libx11-xcb1 rpm at-spi2-core desktop-file-utils libxi6 libxkbcommon0 x11-utils xdotool
+      - name: Install project dependencies
+        run: node .release/toolkit/bin/release.mjs install
+      - name: Build and verify candidate structure
+        if: runner.os != 'Linux'
+        run: node .release/toolkit/bin/release.mjs build
+      - name: Build Linux under isolated virtual display
+        if: runner.os == 'Linux'
+        run: dbus-run-session -- xvfb-run -a node .release/toolkit/bin/release.mjs build
+      - name: Preserve immutable candidate before acceptance
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: candidate-${{ matrix.target }}-${{ github.run_id }}
+          path: .release-out/candidate/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Verify final candidate
+        if: runner.os != 'Linux'
+        run: node .release/toolkit/bin/release.mjs verify
+      - name: Verify Linux final candidate
+        if: runner.os == 'Linux'
+        run: dbus-run-session -- xvfb-run -a node .release/toolkit/bin/release.mjs verify
+      - name: Upload verified platform assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-${{ matrix.target }}-${{ github.run_id }}
+          path: .release-out/assets/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - name: Preserve diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: evidence-${{ matrix.target }}-${{ github.run_id }}
+          path: .release-out/evidence/**
+          if-no-files-found: warn
+          retention-days: 14
+  intel:
+    name: Verify same Universal DMG on native Intel
+    needs: [prepare, build]
+    if: contains(needs.prepare.outputs.matrix, 'macos-universal')
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    env:
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_TARGET: macos-universal
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+          submodules: recursive
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ needs.prepare.outputs.node }}
+      - run: corepack enable
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: release-macos-universal-${{ github.run_id }}
+          path: .release-out/intel-input
+      - run: node .release/toolkit/bin/release.mjs install
+      - run: node .release/toolkit/bin/release.mjs verify-intel
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: intel-verification-${{ github.run_id }}
+          path: .release-out/intel-verification.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Preserve Intel diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: evidence-intel-${{ github.run_id }}
+          path: .release-out/evidence/**
+          if-no-files-found: warn
+          retention-days: 14
+  publish:
+    env:
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+    needs: [prepare, build, intel]
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.intel.result == 'success' || needs.intel.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.20.0'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: release-*-*-${{ github.run_id }}
+          path: .release-out/downloaded
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: needs.intel.result == 'success'
+        with:
+          name: intel-verification-${{ github.run_id }}
+          path: .release-out/intel
+      - name: Verify hashes and assemble release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .release/toolkit/bin/release.mjs publish
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-manifest-${{ github.run_id }}
+          path: .release-out/release/*
+          if-no-files-found: error
+          retention-days: 30

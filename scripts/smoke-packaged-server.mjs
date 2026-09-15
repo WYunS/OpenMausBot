@@ -12,7 +12,7 @@
 // how the bug escaped. The copy is the whole point; do not "simplify" it away.
 import { execFile, spawn } from "node:child_process";
 import assert from "node:assert/strict";
-import { cpSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,8 +39,9 @@ if (browserBundle !== undefined) {
     assert(statSync(paths[component]).isFile(), `Missing bundled ${component}`);
   }
 }
-const staging = mkdtempSync(join(tmpdir(), "omb-smoke-"));
-const home = mkdtempSync(join(tmpdir(), "omb-smoke-home-"));
+// Resolve macOS /var aliases so argv and import.meta.url identify the same entry.
+const staging = realpathSync(mkdtempSync(join(tmpdir(), "omb-smoke-")));
+const home = realpathSync(mkdtempSync(join(tmpdir(), "omb-smoke-home-")));
 const port = 21000 + Math.floor(Math.random() * 9000);
 
 // OMB_SMOKE_DIST lets the release workflow aim this at a packaged app's

@@ -14,7 +14,7 @@ export const REQUIRED_RELEASE_CHECKS = ['desktop-preview-acceptance', 'source-re
 export function releaseSourceFingerprint(directory = root) {
   const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
     { cwd: directory, encoding: 'utf8', windowsHide: true }).split('\0').filter((file) =>
-      /^(?:electron\/|server\/|shared\/|src\/|scripts\/|connectors\/|third_party\/|companion\/|enterprise\/|public\/|build\/|skills\/|patches\/|发布交付指南\/|\.github\/workflows\/|package\.json$|pnpm-(?:lock|workspace)\.yaml$|tsconfig[^/]*\.json$|vite\.config\.[^/]+$|index\.html$|\.npmrc$|LICENSE$|NOTICE$|electron-builder)/.test(file));
+      /^(?:electron\/|server\/|shared\/|src\/|scripts\/|connectors\/|third_party\/|companion\/|enterprise\/|public\/|build\/|skills\/|patches\/|发布交付指南\/|\.release\/|\.github\/workflows\/|package\.json$|pnpm-(?:lock|workspace)\.yaml$|tsconfig[^/]*\.json$|vite\.config\.[^/]+$|index\.html$|\.npmrc$|LICENSE$|NOTICE$|electron-builder)/.test(file));
   const hash = createHash('sha256');
   for (const file of [...new Set(files)].sort()) {
     const absolute = path.resolve(directory, file);
