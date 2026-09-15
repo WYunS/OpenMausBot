@@ -129,9 +129,13 @@ export function killCliTree(child: ChildProcess, timeoutMs = 5_000): Promise<boo
 
   return new Promise((resolve) => {
     let timer: NodeJS.Timeout;
+    let finished = false;
     const done = (stopped: boolean) => {
+      if (finished) return;
+      finished = true;
       clearTimeout(timer);
       child.off("close", closed);
+      child.off("exit", closed);
       resolve(stopped);
     };
     const closed = () => done(true);
@@ -141,7 +145,14 @@ export function killCliTree(child: ChildProcess, timeoutMs = 5_000): Promise<boo
 
     if (process.platform === "win32") {
       execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, (err) => {
-        if (!err) return;
+        if (finished) return;
+        if (!err) {
+          // taskkill may finish before Node observes process exit. Do not
+          // report success until the exit event has arrived.
+          if (exited()) done(true);
+          else child.once("exit", closed);
+          return;
+        }
         try {
           // taskkill is unavailable or the tree lookup failed. At least stop
           // the process we own instead of leaving the entire turn running.
