@@ -333,7 +333,7 @@
   "botSettings.permissions.askPeersOn": "This bot will stop and ask before it reaches out to another bot.",
   "botSettings.permissions.askPeersOff": "Let this bot talk to teammates on its own, without a confirmation step.",
   "botSettings.permissions.approval": "Approval level",
-  "botSettings.permissions.approvalHelp": "Choose how much this bot can do before it stops to ask you.",
+  "botSettings.permissions.approvalHelp": "Default for new threads, routines and delegated work. Existing threads keep their own level; change it from that thread’s composer.",
   "botSettings.permissions.autoReview": "Review routine approvals",
   "botSettings.permissions.autoReviewCustom": "Custom follows your Codex config.toml and its approval prompts. Routine auto-review stays off in this mode.",
   "botSettings.permissions.autoReviewHelp": "The same engine reviews ordinary approval cards. Existing safety rules, unattended turns, local-computer access, and questions still wait for you.",

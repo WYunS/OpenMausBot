@@ -25,6 +25,7 @@ import { BotAvatar } from "./Avatar";
 import { MentionTextarea } from "./MentionTextarea";
 import { ComposerAttachments, pathForFile } from "./ComposerAttachments";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
+import { FullAccessWarning } from "./FullAccessWarning";
 import { ApprovalModeSelector } from "./ApprovalModeSelector";
 import { approvalModeFor, type ApprovalMode } from "../../shared/approval-mode";
 import {
@@ -364,16 +365,20 @@ export function Composer({
   }, [busy, pendingCount, steering]);
   const fileInput = useRef<HTMLInputElement>(null);
   const [approvalWarning, setApprovalWarning] = useState<{
-    mode: "auto";
+    mode: "auto" | "full";
     botId: string;
     threadId: string;
   } | null>(null);
+  const [applyingThreadAccess, setApplyingThreadAccess] = useState(false);
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
   // Approval mode belongs to one bot; a room has several, each with its own.
   const modeBot = group ? undefined : bot;
   const approvalEngine = modeBot
     ? state.instances.find((instance) => instance.instanceId === modeBot.modelSelection.instanceId)
     : undefined;
+  const canApplyBotFullAccess = Boolean(modeBot && profile && !remoteClient && window.ogb?.approvals && capabilities.host.packaged &&
+    approvalModeFor(profile) === "full" && approvalModeFor(modeBot) !== "full" &&
+    approvalEngine?.driverKind === state.instances.find((instance) => instance.instanceId === profile.modelSelection.instanceId)?.driverKind);
   const uploadImage = useCallback(async (file: File): Promise<Attachment | null> => {
     const optimistic = optimisticImageAttachment(file);
     if (!optimistic) return null;
@@ -786,7 +791,21 @@ export function Composer({
             data-composer-backdrop
             className="pointer-events-none absolute -left-5 -right-5 -bottom-3 top-1/2 bg-app"
           />
-        <div className="relative z-[1] flex items-end gap-1 rounded-3xl bg-composer px-2 py-1.5 ring-1 ring-composer-ring">
+        <div className="relative z-[1] rounded-3xl bg-composer px-2 py-1.5 ring-1 ring-composer-ring">
+        {canApplyBotFullAccess && modeBot && !locked && (
+          <button
+            type="button"
+            disabled={Boolean(profile?.busy || modeBot.busy || applyingThreadAccess)}
+            onClick={() => setApprovalWarning({ mode: "full", botId: modeBot.id, threadId: modeBot.threadId })}
+            className="block max-w-full px-3 pb-2 pt-1 text-left text-[12px] text-ink-secondary hover:text-ink disabled:opacity-50"
+            title={profile?.busy || modeBot.busy
+              ? "Stop this bot’s current work before changing this thread’s access"
+              : "Other existing threads keep their current approval levels"}
+          >
+            Use bot’s Full access for this thread
+          </button>
+        )}
+        <div className="flex items-end gap-1">
           <input
             ref={fileInput}
             type="file"
@@ -1012,7 +1031,24 @@ export function Composer({
         </div>
         </div>
       </div>
+      </div>
       <div className="pointer-events-auto">
+      <FullAccessWarning
+        open={approvalWarning?.mode === "full"}
+        scope="thread"
+        onCancel={() => setApprovalWarning(null)}
+        onConfirm={() => {
+          const target = approvalWarning;
+          setApprovalWarning(null);
+          if (target?.mode !== "full" || !window.ogb?.approvals || applyingThreadAccess) return;
+          setApplyingThreadAccess(true);
+          // The private reply predates commit. SSE supplies the final task;
+          // applying that early reply here could overwrite its new mode.
+          void window.ogb.approvals.setMode(target.botId, "full", { threadId: target.threadId })
+            .catch((error) => dispatch({ type: "error", message: error instanceof Error ? error.message : String(error) }))
+            .finally(() => setApplyingThreadAccess(false));
+        }}
+      />
       <LocalComputerAutoWarning
         open={approvalWarning?.mode === "auto"}
         onCancel={() => setApprovalWarning(null)}

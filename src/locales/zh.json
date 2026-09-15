@@ -255,7 +255,7 @@
   "botSettings.permissions.askPeersOn": "此机器人联系其他机器人前会暂停并询问你。",
   "botSettings.permissions.askPeersOff": "允许此机器人无需确认即可与队友通信。",
   "botSettings.permissions.approval": "审批级别",
-  "botSettings.permissions.approvalHelp": "选择机器人执行操作前需要向你询问到什么程度。",
+  "botSettings.permissions.approvalHelp": "这是新线程、例程和委派工作的默认级别。现有线程保留自己的级别，可在对应线程的输入框中更改。",
   "botSettings.permissions.autoReview": "自动审核任务审批",
   "botSettings.permissions.autoReviewCustom": "自定义模式遵循 Codex config.toml 及其审批提示，此模式下自动审核保持关闭。",
   "botSettings.permissions.autoReviewHelp": "由同一引擎审核普通审批卡。现有安全规则、无人值守任务、本机访问和提问仍会等待你处理。",
