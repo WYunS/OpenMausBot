@@ -5986,11 +5986,13 @@ const agentRoutine = (
               ? {}
               : { endsAt: new Date(routine.schedule.endsAt).toISOString() }),
           }
-        : {
-            type: "weekly" as const,
-            time: routine.schedule.time,
-            weekdays: routine.schedule.weekdays.map((day) => ROUTINE_WEEKDAY_NAMES[day]),
-          },
+        : routine.schedule.type === "cron"
+          ? { ...routine.schedule }
+          : {
+              type: "weekly" as const,
+              time: routine.schedule.time,
+              weekdays: routine.schedule.weekdays.map((day) => ROUTINE_WEEKDAY_NAMES[day]),
+            },
     nextRunAt: routine.nextRunAt === null ? null : new Date(routine.nextRunAt).toISOString(),
     latestRun: latestRun
       ? {
