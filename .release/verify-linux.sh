@@ -17,4 +17,5 @@ sudo chmod 4755 release/linux-unpacked/chrome-sandbox
 node scripts/check-enterprise-package.mjs /opt/OpenMausBot/resources
 node scripts/smoke-browser-bundle.mjs --resources /opt/OpenMausBot/resources
 OMB_SMOKE_DIST=/opt/OpenMausBot/resources/server node scripts/smoke-packaged-server.mjs --browser-default-enabled --browser-bundle /opt/OpenMausBot/resources/browser-engine
-OMB_KEEP_SMOKE_DIR=1 OMB_SMOKE_INSTALLED_DEB=1 corepack pnpm smoke:linux-package
+mkdir -p .release-out/evidence
+OMB_KEEP_SMOKE_DIR=1 OMB_SMOKE_INSTALLED_DEB=1 corepack pnpm smoke:linux-package 2>&1 | tee .release-out/evidence/linux-package-smoke.log
