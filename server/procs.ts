@@ -139,6 +139,7 @@ export function killCliTree(child: ChildProcess, timeoutMs = 5_000): Promise<boo
       resolve(stopped);
     };
     const closed = () => done(true);
+    const exited = () => child.exitCode !== null || child.signalCode !== null;
     child.once("close", closed);
     timer = setTimeout(() => done(false), timeoutMs);
     timer.unref?.();
