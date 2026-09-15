@@ -52,8 +52,9 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $launcher -PathType Lea
 }
 
 $startMenuShortcut = Join-Path ([Environment]::GetFolderPath('StartMenu')) "Programs\$appName.lnk"
+$startupShortcut = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)) "$appName.lnk"
 
-foreach ($destination in @($ShortcutPath, $startMenuShortcut)) {
+foreach ($destination in @($ShortcutPath, $startMenuShortcut, $startupShortcut)) {
   $shortcutDirectory = Split-Path -Parent $destination
   New-Item -ItemType Directory -Path $shortcutDirectory -Force | Out-Null
   $shell = New-Object -ComObject WScript.Shell

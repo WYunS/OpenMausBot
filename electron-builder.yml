@@ -154,6 +154,10 @@ win:
       to: tuantuan-feishu-runtime
     - from: dist-native/cua-win32-x64/cua-driver.exe
       to: cua-driver.exe
+    - from: dist-native/cua-win32-x64/cua-cursor-theme.exe
+      to: cua-cursor-theme.exe
+    - from: dist-native/cua-win32-x64/cua-driver-uia.exe
+      to: cua-driver-uia.exe
     - from: dist-native/cloudflared/win32-x64/cloudflared.exe
       to: cloudflared/cloudflared.exe
     - from: dist-native/browser/win32-x64

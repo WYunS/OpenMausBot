@@ -86,7 +86,7 @@
   "dependencies": {
     "@clack/prompts": "1.7.0",
     "@hpke/core": "1.9.0",
-    "@trycua/cua-driver": "0.22.1",
+    "@trycua/cua-driver": "0.28.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.539.0",
     "mdast-util-from-markdown": "^2.0.3",

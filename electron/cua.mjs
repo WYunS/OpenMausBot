@@ -29,6 +29,10 @@ const { localOnly } = localOriginModule;
 const require = createRequire(import.meta.url);
 const { createCuaConnectionStore, shouldInvalidateCuaConnectionOnStop } = require("./cua-connection.cjs");
 const {
+  ensureMacOSPermissions,
+  shouldAttachStandaloneAfterEmbeddedFailure,
+} = require("./cua-macos-permissions.cjs");
+const {
   createLinuxCuaPreferenceStore,
   createLinuxCuaRuntime,
   createUnavailableLinuxRuntime,
@@ -151,11 +155,12 @@ function socketAlive(sockPath) {
 
 async function loadEmbeddedSdk() {
   if (!app.isPackaged) {
-    const [embedded, permissions] = await Promise.all([
+    const [embedded, permissions, sdk] = await Promise.all([
       import("@trycua/cua-driver/embedded"),
       import("@trycua/cua-driver/electron"),
+      import("@trycua/cua-driver"),
     ]);
-    return { ...embedded, ...permissions };
+    return { ...embedded, ...permissions, currentMacOsPermissionStatus: sdk.currentMacOsPermissionStatus };
   }
   process.env.OPENMAUSBOT_CUA_SDK_LIBRARY = path.join(
     process.resourcesPath,
@@ -196,7 +201,7 @@ async function startEmbedded(binary) {
   // CUA's embedding contract requires grants before the child daemon starts;
   // these SDK calls execute in Electron main so macOS attributes them to
   // OpenMausBot rather than to a terminal or helper process.
-  const permissionStatus = sdk.requestMacOSPermissions();
+  const permissionStatus = ensureMacOSPermissions(sdk);
   if (!sdk.hasRequiredMacOSPermissions(permissionStatus)) {
     const missing = [
       !permissionStatus.accessibility && "Accessibility",
@@ -258,7 +263,9 @@ export async function startCua() {
     try {
       nextConnection = await startEmbedded(binary);
     } catch (err) {
-      nextConnection = await attachStandalone();
+      nextConnection = shouldAttachStandaloneAfterEmbeddedFailure({ isPackaged: app.isPackaged })
+        ? await attachStandalone()
+        : null;
       if (!nextConnection) {
         nextConnection = {
           mode: "unavailable",

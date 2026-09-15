@@ -8,6 +8,36 @@ import {
 const frame = (value: unknown) => JSON.stringify(value);
 
 describe("local computer MCP proxy", () => {
+  it("passes modern MCP discovery and embedded skill resources through unchanged", () => {
+    const toDriver: string[] = [];
+    const toClient: string[] = [];
+    const proxy = createLocalComputerProxyInterceptor({
+      toDriver: (line) => toDriver.push(line),
+      toClient: (line) => toClient.push(line),
+      publishFrame: async () => undefined,
+      schedule: () => undefined,
+    });
+    const discover = frame({
+      jsonrpc: "2.0", id: 1, method: "server/discover",
+      params: { _meta: { protocolVersion: "2026-07-28" } },
+    });
+    const readSkill = frame({
+      jsonrpc: "2.0", id: 2, method: "resources/read",
+      params: { uri: "skill://cua-driver/SKILL.md" },
+    });
+    const skill = frame({
+      jsonrpc: "2.0", id: 2,
+      result: { contents: [{ uri: "skill://cua-driver/SKILL.md", mimeType: "text/markdown", text: "# Cua Driver" }] },
+    });
+
+    proxy.fromClient(discover);
+    proxy.fromClient(readSkill);
+    proxy.fromDriver(skill);
+
+    expect(toDriver).toEqual([discover, readSkill]);
+    expect(toClient).toEqual([skill]);
+  });
+
   it("downgrades CUA tool schemas to the subset accepted by Harness", () => {
     expect(harnessCompatibleJsonSchema({
       type: "object",

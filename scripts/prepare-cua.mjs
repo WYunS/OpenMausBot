@@ -24,9 +24,9 @@ const dependencyRoot = join(sdkRoot, "..", "..");
 const sdkPackage = JSON.parse(await readFile(join(sdkRoot, "package.json"), "utf8"));
 const expectedVersion = String(sdkPackage.version);
 const release = {
-  version: "0.22.1",
-  file: "cua-driver-rs-0.22.1-darwin-universal-binary.tar.gz",
-  sha256: "2abf82826fede4bb2ec748e1a10d6e4d92ef36fc39bbd86e3b47bd8cbbd447d6",
+  version: "0.28.1",
+  file: "cua-driver-rs-0.28.1-darwin-universal-binary.tar.gz",
+  sha256: "6a0dde9732a68c139760ccc573899668757995a6e9190d80ccaad6db26bd6fe8",
 };
 if (expectedVersion !== release.version) {
   throw new Error(
@@ -155,6 +155,7 @@ await build({
     contents: [
       'export { EmbeddedCuaDriverHost } from "@trycua/cua-driver/embedded";',
       'export { requestMacOSPermissions, hasRequiredMacOSPermissions } from "@trycua/cua-driver/electron";',
+      'export { currentMacOsPermissionStatus } from "@trycua/cua-driver";',
     ].join("\n"),
     resolveDir: root,
     sourcefile: "openmausbot-cua-entry.mjs",

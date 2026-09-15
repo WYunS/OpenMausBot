@@ -22,6 +22,8 @@ $env:OMB_DESKTOP_SERVER = '1'
 $env:OMB_DESKTOP_PREVIEW = '1'
 $env:OMB_BROWSER_CONNECTION = $null
 
+. (Join-Path $PSScriptRoot 'windows-node-proxy.ps1')
+
 # Match packaged Bot behavior: discover the installed Harness.  Development
 # Harness is launched explicitly from its own shortcut when it is the product
 # under test; silently overriding the provider here makes a healthy installed
@@ -75,6 +77,8 @@ function Set-NodeSystemProxy {
 }
 
 Set-NodeSystemProxy
+Add-NodeProxyBypassFromSandboxPreset `
+  -PresetPath (Join-Path $repoRoot 'dist-native\ruijie-sandbox\bootstrap.json')
 
 function Test-LocalPort([int]$Port) {
   $client = [Net.Sockets.TcpClient]::new()
