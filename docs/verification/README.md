@@ -40,6 +40,7 @@ Use only mapped, tested commands:
 - [Chat turns](chat-turns.md)
 - [Chat UI, driven headlessly](chat-ui.md)
 - [Channels](channels.md)
+- [In-chat team coordination](room-coordination.md)
 - [Engines and Doctor](engines.md)
 - [Claude coordination and turn-scoped tools](claude-tool-lifecycle.md)
 - [Codex bot instructions](codex-instructions.md)
