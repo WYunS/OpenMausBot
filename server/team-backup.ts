@@ -152,17 +152,17 @@ export function importTeamBackup(store: Store, routines: RoutineManager, input: 
   try {
     // Allocate all bot IDs before remapping any conversation participants.
     for (const source of backup.bots) {
-      const bot = store.createBot({
+      const created = store.createBot({
         name: takeImportName(source.name, takenNames), title: source.title, description: source.description, soul: source.soul,
         color: source.color, mascotExpression: source.mascotExpression,
         mascotBody: botMascotBody(source.mascotBody),
         modelSelection: selection, section: sectionFor(source.section),
       }, { seedMessages: false });
+      botIds.set(source.key, created.id);
+      const bot = store.patchBot(created.id, { composio: false, computer: "off", browser: false, approvalMode: "ask", autoApprove: false,
+        hidden: source.hidden, chiefOfStaff: source.chiefOfStaff, playbooks: source.playbooks })!;
       bots.push(bot);
-      botIds.set(source.key, bot.id);
-      store.patchBot(bot.id, { composio: false, computer: "off", browser: false, approvalMode: "ask", autoApprove: false,
-        hidden: source.hidden, chiefOfStaff: source.chiefOfStaff, playbooks: source.playbooks });
-      if (source.memory) restoreMemory(bot.id, source.memory);
+      if (source.memory) restoreMemory(created.id, source.memory);
     }
     for (const source of backup.bots) {
       const bot = store.bot(botIds.get(source.key)!)!;

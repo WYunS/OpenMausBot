@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 import { beforeRuijiePack } from './scripts/check-ruijie-release-readiness.mjs';
 import { releaseBrokerUrl } from './electron/connected-apps-release.mjs';
-import { stagedSandboxDigest } from './scripts/prepare-ruijie-sandbox-bootstrap.mjs';
 
 // electron-builder's `extends` concatenates publish arrays: the upstream feed
 // would remain first. Load the common config and REPLACE that array instead.
@@ -10,9 +9,7 @@ const upstream = parse(readFileSync(new URL("./electron-builder.yml", import.met
 export default {
   ...upstream,
   beforePack: beforeRuijiePack,
-  extraResources: [...upstream.extraResources, { from: 'dist-native/ruijie-sandbox', to: 'ruijie-sandbox', filter: ['bootstrap.json'] }],
   extraMetadata: { ...upstream.extraMetadata,
-    ruijieSandboxBootstrapSha256: stagedSandboxDigest(),
     ruijieConnectedAppsBrokerUrl: releaseBrokerUrl(process.env.RUIJIE_COMPOSIO_BROKER_URL),
   },
   mac: { ...upstream.mac, artifactName: 'RuijieBot-${version}-mac-${arch}.${ext}' },

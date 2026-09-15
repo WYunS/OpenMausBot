@@ -137,6 +137,178 @@ function Start-DesktopApp {
     -PassThru
 }
 
+function ConvertTo-NativeArgumentString {
+  # Start-Process -ArgumentList and ProcessStartInfo.Arguments join an array
+  # with plain spaces and quote nothing, so a repository path containing a
+  # space would silently split into two arguments. Apply the
+  # CommandLineToArgvW quoting rules ourselves.
+  param([string[]]$Arguments = @())
+
+  return (
+    $Arguments | ForEach-Object {
+      $value = [string]$_
+      if ($value -match '[\s"]') {
+        # Backslashes are literal except immediately before a quote, so double
+        # any run that precedes an embedded quote or the closing quote we add.
+        $escaped = ($value -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1'
+        '"' + $escaped + '"'
+      } elseif ($value.Length -eq 0) {
+        # An empty argument still has to occupy a slot.
+        '""'
+      } else {
+        # Unquoted arguments need no escaping at all -- doubling trailing
+        # backslashes here would corrupt a plain directory path.
+        $value
+      }
+    }
+  ) -join ' '
+}
+
+function Invoke-BrandingTool {
+  # rcedit and ie4uinit report success through their exit code, and PowerShell
+  # 5.1 would turn anything they write to stderr into a NativeCommandError that
+  # $ErrorActionPreference = 'Stop' escalates into a thrown exception before
+  # that code can be read. Driving the process through System.Diagnostics
+  # sidesteps the error-record path entirely and buys a wall-clock bound.
+  #
+  # The timeout matters more than it looks: this runs synchronously ahead of
+  # the Electron launch from a console-less process, so a tool that blocks
+  # forever (ie4uinit is known to wedge while Explorer is busy) would leave the
+  # user clicking a shortcut that does nothing at all. Treat a timeout as a
+  # failed branding attempt, not as a reason to stop launching.
+  param(
+    [Parameter(Mandatory = $true)][string]$FilePath,
+    [string[]]$Arguments = @(),
+    [int]$TimeoutMilliseconds = 60000
+  )
+
+  $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+  $startInfo.FileName = $FilePath
+  $startInfo.Arguments = ConvertTo-NativeArgumentString -Arguments $Arguments
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+
+  $process = [System.Diagnostics.Process]::Start($startInfo)
+  try {
+    if (-not $process.WaitForExit($TimeoutMilliseconds)) {
+      try { $process.Kill() } catch {}
+      return 1
+    }
+    return $process.ExitCode
+  } finally {
+    $process.Dispose()
+  }
+}
+
+function Get-DevelopmentResourceEditor {
+  # rcedit ships inside the pnpm virtual store and its directory carries the
+  # version, so discover it the same way the shortcut installer does.
+  return Get-ChildItem -LiteralPath (Join-Path $repoRoot 'node_modules\.pnpm') `
+      -Directory -Filter 'rcedit@*' -ErrorAction SilentlyContinue |
+    ForEach-Object { Join-Path $_.FullName 'node_modules\rcedit\bin\rcedit.exe' } |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+    Select-Object -First 1
+}
+
+function Repair-DevelopmentRuntimeBranding {
+  # A source launch takes its Windows taskbar identity and icon from
+  # electron.exe itself, and that file lives in node_modules. Every
+  # `pnpm install` restores the pristine runtime from the store, silently
+  # undoing the branding applied once at shortcut-install time and leaving the
+  # stock Electron atom behind. Re-assert it on each cold launch so the icon
+  # repairs itself instead of waiting for someone to notice and rerun
+  # scripts\install-local-windows-shortcut.ps1 by hand.
+  #
+  # The whole body is guarded: branding is cosmetic and must never be able to
+  # keep the development app from starting.
+  try {
+    $staging = Join-Path (Split-Path -Parent $electron) 'electron.branding.tmp'
+    $shelved = Join-Path (Split-Path -Parent $electron) 'electron.previous.tmp'
+
+    # Recover first. If a previous launch was killed between the two renames of
+    # the swap below, the only runtime left on disk is the shelved one; put it
+    # back before anything else goes looking for electron.exe.
+    if (
+      (Test-Path -LiteralPath $shelved -PathType Leaf) -and
+      -not (Test-Path -LiteralPath $electron -PathType Leaf)
+    ) {
+      Move-Item -LiteralPath $shelved -Destination $electron -Force
+    }
+
+    $icon = Join-Path $repoRoot 'build\icon-ruijie-orb-depth.ico'
+    if (-not (Test-Path -LiteralPath $icon -PathType Leaf)) { return }
+    # The common case is an already-branded runtime: one cheap version read.
+    if ((Get-Item -LiteralPath $electron).VersionInfo.ProductName -eq $ruijieAppName) { return }
+
+    $resourceEditor = Get-DevelopmentResourceEditor
+    if (-not $resourceEditor) { return }
+
+    # pnpm hard-links node_modules into its global content-addressable store, so
+    # editing electron.exe in place would rewrite the copy every other checkout
+    # on this machine shares. Brand a private copy and swap it in: replacing the
+    # directory entry breaks the link and leaves the store pristine. A failed
+    # swap leaves the original untouched rather than half-branded.
+    $rebranded = $false
+    try {
+      Copy-Item -LiteralPath $electron -Destination $staging -Force
+      $brandingExit = Invoke-BrandingTool -FilePath $resourceEditor -Arguments @(
+        $staging,
+        '--set-icon', $icon,
+        '--set-version-string', 'ProductName', $ruijieAppName,
+        '--set-version-string', 'FileDescription', $ruijieAppName,
+        '--set-version-string', 'InternalName', $ruijieAppName,
+        '--set-version-string', 'OriginalFilename', 'electron.exe'
+      )
+      if ($brandingExit -eq 0) {
+        # Move-Item -Force onto a live path deletes the destination first, so a
+        # transient sharing violation on the second half would leave no
+        # electron.exe at all and break every future launch until someone
+        # reinstalls. Shelve the original under a sibling name instead: the swap
+        # becomes two renames, and a failure can be rolled back.
+        Remove-Item -LiteralPath $shelved -Force -ErrorAction SilentlyContinue
+        Move-Item -LiteralPath $electron -Destination $shelved -Force
+        try {
+          Move-Item -LiteralPath $staging -Destination $electron -Force
+          $rebranded = $true
+        } catch {
+          Move-Item -LiteralPath $shelved -Destination $electron -Force
+          throw
+        }
+      }
+    } finally {
+      if (Test-Path -LiteralPath $staging -PathType Leaf) {
+        Remove-Item -LiteralPath $staging -Force -ErrorAction SilentlyContinue
+      }
+      # Only discard the shelved original once a runtime is definitely back in
+      # place. If both the swap and its rollback failed, this copy is the only
+      # electron.exe left on disk and deleting it would turn a recoverable
+      # hiccup into a checkout that nothing short of `pnpm install` can fix.
+      if (
+        (Test-Path -LiteralPath $shelved -PathType Leaf) -and
+        (Test-Path -LiteralPath $electron -PathType Leaf)
+      ) {
+        Remove-Item -LiteralPath $shelved -Force -ErrorAction SilentlyContinue
+      }
+    }
+
+    if ($rebranded) {
+      # Drop Explorer's cached atom so the taskbar and shortcut agree immediately
+      # rather than after the next shell restart.
+      $iconRefresh = Join-Path $env:WINDIR 'System32\ie4uinit.exe'
+      if (Test-Path -LiteralPath $iconRefresh -PathType Leaf) {
+        Invoke-BrandingTool -FilePath $iconRefresh -Arguments @('-show') | Out-Null
+      }
+    }
+  } catch {
+    # This launcher runs without a console, so a silent failure here would be
+    # undiagnosable. Leave a breadcrumb and let the app start regardless.
+    try {
+      Add-Content -LiteralPath (Join-Path $logRoot 'branding-error.log') `
+        -Value "$(Get-Date -Format o) $($_.Exception.Message)"
+    } catch {}
+  }
+}
+
 function Show-LaunchFailure([string]$Message) {
   $appName = ([string][char]0x9510) + ([char]0x6377) + 'Bot'
   $errorLog = Join-Path $logRoot 'launcher-error.log'
@@ -198,6 +370,20 @@ function Invoke-Launcher {
   # Preview the same compiled UI/server and native pins as the installer.
   # The receipt rejects stale source/output; no Vite-only dependency fallback.
   $nodeCommand = Get-Command node.exe -ErrorAction Stop
+  # An interrupted `pnpm install` leaves the virtual store populated but the
+  # node_modules entry points missing, and the only symptom is a MODULE_NOT_FOUND
+  # stack trace buried in prepare-error.log -- which nobody sees, because a valid
+  # build receipt keeps taking the fast path until someone happens to edit a
+  # source file. Name the actual problem instead.
+  foreach ($entryPoint in @(
+    'node_modules\typescript\bin\tsc',
+    'node_modules\vite\bin\vite.js',
+    'node_modules\electron\dist\electron.exe'
+  )) {
+    if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $entryPoint) -PathType Leaf)) {
+      throw "Dependencies are incomplete ($entryPoint is missing). Run 'pnpm install' in $repoRoot."
+    }
+  }
   $prepare = Start-Process -FilePath $nodeCommand.Source `
     -ArgumentList @((Join-Path $repoRoot 'scripts\prepare-local-preview.mjs')) `
     -WorkingDirectory $repoRoot -WindowStyle Hidden `
@@ -207,6 +393,9 @@ function Invoke-Launcher {
   if ($prepare.ExitCode -ne 0) { throw "Preview preparation failed. See $logRoot\prepare-error.log" }
 
   $env:CUA_DRIVER_PATH = Join-Path $repoRoot 'dist-native\cua-win32-x64\cua-driver.exe'
+  # Only a cold launch owns the runtime file; a warm launch would find it
+  # locked by the window it is about to focus.
+  Repair-DevelopmentRuntimeBranding
   $desktopProcess = Start-DesktopApp
 
   # Electron starts the credential-aware source server before creating its

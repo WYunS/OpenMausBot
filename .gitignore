@@ -28,6 +28,16 @@ cloudflare/control-plane/worker-configuration.d.ts
 .vercel/
 .pi/
 
+# Compiled shell for the local development shortcut. It is a build artifact of
+# scripts/OpenMausBot.DevLauncher.cs, but it lives inside scripts/ and so was
+# being swept into the desktop preview's source fingerprint via
+# `git ls-files --others`. The .NET Framework csc.exe that builds it predates
+# Roslyn and has no /deterministic switch, so every rebuild emitted different
+# bytes, invalidated the build receipt, and forced a full tsc+vite rebuild on
+# the next launch -- which is why repairing the taskbar icon used to make the
+# app start slowly.
+scripts/OpenMausBot.DevLauncher.exe
+
 # Release signing material. The signing keys for the mobile stores belong to the
 # maintainer and never enter this repository; these patterns are the second line
 # of defence behind that rule, repo-wide rather than per-platform, because a key

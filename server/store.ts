@@ -24,7 +24,6 @@ import type { RoutineRequestCardData } from "../shared/routine-request.ts";
 import type { RoutineRunCardData } from "../shared/routine-run.ts";
 import type { SkillRequestCardData } from "../shared/skill-request.ts";
 import type { GroupGoalRunCardData } from "../shared/group-goal-run.ts";
-import { DEFAULT_CLOUD_BACKEND } from "./product-features.ts";
 
 export type MausColor =
   | "green"
@@ -1579,8 +1578,9 @@ export class Store {
       ...(profile.mascotBody ? { mascotBody: profile.mascotBody } : {}),
       unread: false,
       modelSelection: profile.modelSelection ?? this.defaultSelection(),
-      computer: "cloud",
-      cloudBackend: DEFAULT_CLOUD_BACKEND,
+      // A fresh bot controls the computer running Ruijie Bot by default.
+      // Cloud backends remain opt-in and are assigned when the user selects one.
+      computer: "local",
       resumeCursors: {},
       createdAt: Date.now(),
     };

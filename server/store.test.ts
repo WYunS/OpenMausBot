@@ -33,8 +33,8 @@ describe("Store", () => {
       text: `Hi, I'm ${bot.name}. What would you like me to do?`,
     });
     expect(bot.modelSelection).toEqual(selection());
-    expect(bot.computer).toBe("cloud");
-    expect(bot.cloudBackend).toBe("ruijie-sandbox");
+    expect(bot.computer).toBe("local");
+    expect(bot.cloudBackend).toBeUndefined();
   });
 
   it("messagesTail reads a bounded page via SQL on a fresh Store, and older messages still load in full", () => {

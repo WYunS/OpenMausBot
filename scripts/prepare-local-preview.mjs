@@ -7,14 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { archiveBrowserRuntimeLog, verifyBrowserBundle, stageBrowserTarget } from './prepare-browser.mjs';
 import { verifyFeishuRuntimeBundle, prepareFeishuRuntime } from './prepare-feishu-runtime.mjs';
 import { verifyDesktopBuildReceipt, writeDesktopBuildReceipt } from './desktop-build-receipt.mjs';
-import { prepareSandboxBootstrap } from './prepare-ruijie-sandbox-bootstrap.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const target = `${process.platform}-${process.arch}`;
 mkdirSync(path.join(root, 'dist-native'), { recursive: true });
-// The branded local shortcut needs the same private preset as an installer.
-// Stage before the receipt check so an otherwise fresh preview cannot omit it.
-prepareSandboxBootstrap(root);
 function run(args) {
   const result = spawnSync(process.execPath, args, { cwd: root, stdio: 'inherit', windowsHide: true });
   if (result.error || result.status !== 0) throw new Error(`Preview preparation failed: ${args[0]} (${result.status})`);

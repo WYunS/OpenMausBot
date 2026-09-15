@@ -2016,6 +2016,8 @@ describe("harness HTTP API", () => {
     const created = await api("POST", "/api/bots");
     expect(created.status).toBe(201);
     const bot = created.body.bot;
+    expect(bot).toMatchObject({ computer: "local" });
+    expect(bot).not.toHaveProperty("cloudBackend");
 
     const patched = await api("PATCH", `/api/bots/${bot.id}`, { name: "Renamed", pinned: true });
     expect(patched.status).toBe(200);
@@ -2161,7 +2163,7 @@ describe("harness HTTP API", () => {
       expect((await api("PUT", "/api/config", { box: { token: "box_route" } })).status).toBe(200);
       const bot = (await api("POST", "/api/bots")).body.bot;
       botId = bot.id;
-      expect((await api("PATCH", `/api/bots/${bot.id}`, { computer: "cloud" })).body.bot.computer).toBe("cloud");
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { computer: "cloud", cloudBackend: "box" })).body.bot.computer).toBe("cloud");
 
       const auto = await api("PATCH", `/api/bots/${bot.id}`, { computer: null });
       expect(auto.status).toBe(200);
@@ -3315,6 +3317,7 @@ describe("harness HTTP API", () => {
       description: "Coordinates the crew",
       color: "purple",
       mascotExpression: "focused",
+      computer: "off",
       autoApprove: true,
       alwaysAllow: ["Bash:git"],
     });
@@ -3696,7 +3699,7 @@ describe("harness HTTP API", () => {
     expect(impostor.chiefOfStaff).toBeUndefined();
     expect(impostor.approvePeerComms).toBeUndefined();
     expect(impostor.composio).toBe(false);
-    expect(impostor.computer).toBe("off");
+    expect(impostor.computer).toBe("local");
     expect(impostor.cloudBackend).toBeUndefined();
     expect(impostor.cwd).toBeUndefined();
 
@@ -4678,25 +4681,20 @@ describe("harness HTTP API", () => {
   it("grants Auto on this computer only through the warning acknowledgement", async () => {
     const created = await api("POST", "/api/bots");
     const bot = created.body.bot;
-    expect((await api("PATCH", `/api/bots/${bot.id}`, { autoApprove: true })).body.bot.autoApprove).toBe(
-      true,
-    );
+    expect(bot.computer).toBe("local");
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { autoApprove: true })).status).toBe(400);
+
+    const acknowledged = await api("PATCH", `/api/bots/${bot.id}`, {
+      autoApprove: true,
+      acknowledgeLocalAuto: true,
+    });
+    expect(acknowledged.status).toBe(200);
+    expect(acknowledged.body.bot.autoApprove).toBe(true);
 
     // The important half: a blind PATCH — exactly what a bot curling the
     // loopback API from a tool call would send — must be refused. The
     // renderer's warning dialog is not a boundary; this 400 is.
-    const blind = await api("PATCH", `/api/bots/${bot.id}`, { computer: "local" });
-    expect(blind.status).toBe(400);
-    const oneShot = await api("PATCH", `/api/bots/${bot.id}`, { computer: "local", autoApprove: true });
-    expect(oneShot.status).toBe(400);
-    const after = (await api("GET", "/api/bots")).body.bots.find((b: { id: string }) => b.id === bot.id);
-    expect(after.computer).not.toBe("local");
-
-    // The dialog's acknowledgement grants it, and the flag is not persisted.
-    const local = await api("PATCH", `/api/bots/${bot.id}`, { computer: "local", acknowledgeLocalAuto: true });
-    expect(local.status).toBe(200);
-    expect(local.body.bot).toMatchObject({ computer: "local", autoApprove: true });
-    expect(local.body.bot.acknowledgeLocalAuto).toBeUndefined();
+    expect(acknowledged.body.bot.acknowledgeLocalAuto).toBeUndefined();
 
     // Once granted, re-asserting auto and unrelated PATCHes need no re-ack.
     const enabled = await api("PATCH", `/api/bots/${bot.id}`, { autoApprove: true });
@@ -4722,6 +4720,7 @@ describe("harness HTTP API", () => {
       modelSelection: { instanceId: "codex", model: "fixture-codex-model" },
     })).body.bot;
     try {
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { computer: "off" })).status).toBe(200);
       for (const approvalMode of ["automatic", "unsafe", true, null]) {
         const invalid = await api("PATCH", `/api/bots/${bot.id}`, { approvalMode });
         expect(invalid.status, String(approvalMode)).toBe(400);
@@ -4781,6 +4780,7 @@ describe("harness HTTP API", () => {
 
   it("maps legacy autoApprove PATCHes to safe Auto or Ask", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { computer: "off" })).status).toBe(200);
     const auto = await api("PATCH", `/api/bots/${bot.id}`, { autoApprove: true });
     expect(auto.status).toBe(200);
     expect(auto.body.bot).toMatchObject({ approvalMode: "auto", autoApprove: true });
@@ -4912,7 +4912,6 @@ describe("harness HTTP API", () => {
   it("rejects an empty message and explains an unavailable provider", async () => {
     const { body } = await api("GET", "/api/bots");
     const bot = body.bots[0];
-
     const empty = await api("POST", `/api/bots/${bot.id}/messages`, { text: "   " });
     expect(empty.status).toBe(400);
 
@@ -7255,6 +7254,7 @@ describe("harness HTTP API", () => {
 
   it("rejects oversized Box console commands instead of executing a truncated prefix", async () => {
     const bot = (await api("GET", "/api/bots?messages=0")).body.bots[0];
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { computer: "cloud", cloudBackend: "box" })).status).toBe(200);
     const response = await api("POST", `/api/bots/${bot.id}/computer/exec`, {
       command: "x".repeat(4001),
     });
@@ -8720,6 +8720,8 @@ describe("computer control API (who is driving)", () => {
     botId = created.body.bot.id;
     const sibling = await api("POST", "/api/bots", {});
     siblingBotId = sibling.body.bot.id;
+    expect((await api("PATCH", `/api/bots/${botId}`, { computer: "cloud", cloudBackend: "ruijie-sandbox" })).status).toBe(200);
+    expect((await api("PATCH", `/api/bots/${siblingBotId}`, { computer: "cloud", cloudBackend: "ruijie-sandbox" })).status).toBe(200);
   });
 
   it("starts disengaged", async () => {

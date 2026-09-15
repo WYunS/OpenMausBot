@@ -667,7 +667,7 @@ for (const delay of [3000, Infinity]) {
       syncCompanionKeepAwake() {}, desktopCompanionRelay: null, nativeActions: {},
       stopRecorder() {}, browserSurface: null, browserHost: null,
       stopCua: () => new Promise(() => {}), stopDesktopCompanion: async () => {},
-      stopUtilityServer: async () => true, CUA_STOP_TIMEOUT_MS: 2500,
+      serverSupervisor: { shutdown: async () => true }, slog() {}, CUA_STOP_TIMEOUT_MS: 2500,
       desktopFeishu: h.registration, awaitFeishuShutdown, setTimeout,
     });
     beforeQuit({ preventDefault: () => calls.push("prevented") });

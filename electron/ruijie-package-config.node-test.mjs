@@ -33,7 +33,8 @@ test("Ruijie packaging resolves WYunS without losing upstream resources or app i
   assert(config.extraResources.some((entry) => entry.to === "server"));
   assert(config.extraResources.some((entry) => entry.to === "ui"));
   assert(config.extraResources.some((entry) => entry.to === "companion"));
-  assert(config.extraResources.some((entry) => entry.to === 'ruijie-sandbox' && entry.filter.includes('bootstrap.json')));
+  assert(!config.extraResources.some((entry) => entry.to === 'ruijie-sandbox'),
+    'this local-computer release must not embed a private sandbox preset');
 });
 
 test("the standard Windows package command cannot bypass the Ruijie config or bundled runtimes", async () => {
@@ -42,7 +43,7 @@ test("the standard Windows package command cannot bypass the Ruijie config or bu
   assert.match(pkg.scripts["package:win"], /--config electron-builder\.ruijie\.mjs/);
   assert.match(pkg.scripts['package:mac'], /--config electron-builder\.ruijie\.mjs/);
   assert.match(pkg.scripts['package:mac'], /build:feishu:mac/);
-  for (const platform of ['win', 'mac']) assert.match(pkg.scripts[`package:${platform}`], /^pnpm build:sandbox &&/);
+  for (const platform of ['win', 'mac']) assert.doesNotMatch(pkg.scripts[`package:${platform}`], /build:sandbox/);
 });
 
 test("internal Mac candidate flags retain the downstream feed and explicitly request ad-hoc signing", async () => {
