@@ -78,10 +78,10 @@ it("survives a real server crash: queued sends keep receipts, cancellation and u
     ].join("\n"), { mode: 0o700 });
     await api("PATCH", "/api/instances/verification", { cli: wrapper });
     await api("PATCH", "/api/config", { threads: { maxConcurrentPerBot: 1 } });
-    const bot = (await api("POST", "/api/bots", { name: "Durable follow-ups" }, 201)).bot;
-    const uncertain = (await api("POST", "/api/bots", { name: "Uncertain follow-up" }, 201)).bot;
+    const bot = (await api("POST", "/api/bots", { name: "Durable follow-ups", computer: "off" }, 201)).bot;
+    const uncertain = (await api("POST", "/api/bots", { name: "Uncertain follow-up", computer: "off" }, 201)).bot;
     const later = (await api("POST", `/api/bots/${uncertain.id}/tasks`, { title: "In-flight receipt" }, 201)).task;
-    const worker = (await api("POST", "/api/bots", { name: "Channel worker" }, 201)).bot;
+    const worker = (await api("POST", "/api/bots", { name: "Channel worker", computer: "off" }, 201)).bot;
     const channel = (await api("POST", "/api/groups", {
       name: "Durable channel", memberIds: [worker.id],
       setup: { bulletin: "", defaultResponder: { kind: "member", botId: worker.id } },
@@ -111,7 +111,7 @@ it("survives a real server crash: queued sends keep receipts, cancellation and u
 
     // Stop revokes provider credentials before the provider reports completion;
     // it must still retire the already-dispatched queue receipt exactly once.
-    const stopped = (await api("POST", "/api/bots", { name: "Stopped follow-up" }, 201)).bot;
+    const stopped = (await api("POST", "/api/bots", { name: "Stopped follow-up", computer: "off" }, 201)).bot;
     const stoppedTask = (await api("POST", `/api/bots/${stopped.id}/tasks`, { title: "Stop this follow-up" }, 201)).task;
     await api("POST", `/api/bots/${stopped.id}/messages`, { threadId: stopped.threadId, text: "Hold capacity before Stop" }, 202);
     const stoppedBody = { threadId: stoppedTask.threadId, text: "Stop this dispatched follow-up", sendId: "stopped_bot_send_123456" };
