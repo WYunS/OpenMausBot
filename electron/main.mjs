@@ -22,6 +22,7 @@ import { migrateWorkspaceCredentials, workspaceCredentialEnv, workspaceCredentia
 import { desktopSandboxPresetPath, installSandboxPreset, SANDBOX_PRESET_MARKER } from './ruijie-sandbox-bootstrap.mjs';
 import { activateExistingWindow, releaseSingleInstanceLock } from "./single-instance.mjs";
 import { pollServerIdentity } from "./server-boot-probe.mjs";
+import { createServerSupervisor } from "./server-supervisor.mjs";
 import { packageUrlFromCommandLine, packageUrlFromDeepLink } from "./package-link.mjs";
 import {
   desktopWindowWebPreferences,
@@ -167,6 +168,7 @@ const browserConnectionStore = createDescriptorStore({
 });
 let pendingPackageInstallUrl = packageUrlFromCommandLine(process.argv);
 let mainWindow = null;
+const serverUnavailableWindows = new WeakSet();
 let unreadCount = 0;
 let unreadOverlayIcon = null;
 
@@ -312,7 +314,7 @@ app.on("second-instance", (_event, commandLine) => {
 // our API shape, not just a 200).
 let serverProc = null;
 let desktopFeishu = null;
-let serverReady = true;
+let serverReady = !app.isPackaged;
 let secureCredentials = {};
 let secureCredentialState = null;
 let desktopDataDirLease = null;
@@ -321,6 +323,42 @@ const UTILITY_SERVER_STOP_TIMEOUT_MS = 6_500;
 const trustedApprovalMode = createTrustedApprovalModeCoordinator({ randomId: randomUUID });
 const desktopMutationToken = randomBytes(32).toString("base64url");
 const companionMutationToken = randomBytes(32).toString("base64url");
+const serverSupervisor = createServerSupervisor({
+  restart: () => startServerOn(SERVER_PORT),
+  stop: stopUtilityServer,
+  onReady(proc) {
+    serverProc = proc;
+    serverReady = true;
+    serverStartConflictOnly = false;
+    slog(`server ready pid=${proc.pid} port=${SERVER_PORT}`);
+    // Re-read the latest account credentials; registration may have completed
+    // while the replacement child's health probe was pending.
+    syncManagedComposioCredentials();
+    // Existing chat windows reconnect in place, preserving unsent drafts.
+    // A window opened during the outage is still on our error page instead.
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!serverUnavailableWindows.has(win) || activeEnvironment(environmentsState)) continue;
+      void win.loadURL(`http://127.0.0.1:${SERVER_PORT}`).then(() => {
+        serverUnavailableWindows.delete(win);
+      }).catch((error) => {
+        slog(`recovered server window failed to load: ${error?.message ?? error}`);
+      });
+    }
+  },
+  onUnavailable() {
+    serverReady = false;
+    serverProc = null;
+  },
+  onExhausted() {
+    slog("server recovery paused after repeated failures; quit and reopen to retry");
+    dialog.showErrorBox(
+      "The bot server stopped",
+      "Automatic recovery could not restart the background server. Quit and reopen OpenMausBot to try again. Interrupted chat turns were not resent.\n\n" +
+        `Server log: ${path.join(LOG_DIR, "server.log")}`,
+    );
+  },
+  log: slog,
+});
 
 function desktopDataDir() {
   // Match the historical desktop fallback for an unset or empty override,
@@ -1084,7 +1122,7 @@ function syncDesktopMutationToken(proc) {
 
 function installDesktopMutationHeader() {
   session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
-    const ownsTarget = isDesktopMutationTarget(details.url, {
+    const ownsTarget = serverReady && isDesktopMutationTarget(details.url, {
       serverPort: SERVER_PORT,
       developmentUrl: desktopLayout.built ? undefined : DEV_URL,
     });
@@ -1119,6 +1157,7 @@ function receivePhoneSecretSave(proc, rawMessage) {
 }
 
 async function startServerOn(port) {
+  if (desktopShutdownStarted) return { proc: null, abort: true };
   const entry = desktopLayout.server;
   const resourcesPath = app.isPackaged ? process.resourcesPath : app.getAppPath();
   const childEnv = managedComposioChildEnvironment(composioBrokerUrl(), secureCredentials, {
@@ -1176,6 +1215,7 @@ async function startServerOn(port) {
   proc.stdout?.on("data", (d) => slog(`[out] ${String(d).trimEnd()}`));
   proc.stderr?.on("data", (d) => slog(`[err] ${String(d).trimEnd()}`));
   proc.on("message", (message) => {
+    if (!serverSupervisor.isCurrent(proc)) return;
     try {
       if (trustedApprovalMode.receive(proc, message)) return;
       if (receivePhoneSecretSave(proc, message)) return;
@@ -1185,6 +1225,7 @@ async function startServerOn(port) {
   });
   proc.once("spawn", () => {
     slog(`spawned pid=${proc.pid}`);
+    if (!serverSupervisor.isCurrent(proc)) return;
     syncDesktopMutationToken(proc);
     syncPhoneSecretKey(proc);
   });
@@ -1200,6 +1241,7 @@ async function startServerOn(port) {
     if (proc === serverProc) void desktopFeishu?.close().catch(() => {});
     slog(`exited code=${code}`);
   });
+  serverSupervisor.watch(proc);
   // wait for the port to answer (fresh machine: first boot writes data dirs).
   // Identity check is by PID: a dev harness server has the same API shape,
   // so only the child we actually forked (matching pid + static serving)
@@ -1219,9 +1261,9 @@ async function startServerOn(port) {
     pid: () => proc.pid,
     bootTimeoutMs: SERVER_BOOT_TIMEOUT_MS,
     requireStatic: desktopLayout.built,
-    isExited: () => exited,
+    isExited: () => exited || desktopShutdownStarted,
   });
-  if (identity.outcome === "ready") return { proc };
+  if (identity.outcome === "ready" && serverSupervisor.isCurrent(proc)) return { proc };
   if (identity.outcome === "exited") {
     slog(`child on port ${port} exited before answering /api/health`);
   } else {
@@ -1244,10 +1286,11 @@ async function startServerPackaged() {
   let everyPortForeignOwned = true;
   for (let attempt = 0; attempt < 2; attempt++) {
     for (const port of app.isPackaged ? [8799, 18799, 28799] : [SERVER_PORT]) {
+      if (desktopShutdownStarted) return false;
       const started = await startServerOn(port);
       if (started.proc) {
-        serverProc = started.proc;
         SERVER_PORT = port;
+        if (!serverSupervisor.ready(started.proc)) return false;
         // Close the narrow race where safeStorage recovers after this child
         // was forked but before startServerOn publishes it globally.
         syncWorkspaceCredentials(serverProc);
@@ -2217,6 +2260,9 @@ function createWindow() {
   }
 
   const remote = activeEnvironment(environmentsState);
+  if (!serverReady && (desktopRemoteAccess || (desktopLayout.built && !remote))) {
+    serverUnavailableWindows.add(win);
+  }
   let targetUrl;
   if (desktopRemoteAccess) {
     targetUrl = serverReady ? `http://127.0.0.1:${SERVER_PORT}` : buildErrorPage({ allPortsOccupied: serverStartConflictOnly });
@@ -2634,6 +2680,7 @@ async function saveWorkspaceCredential(name, value) {
   }
   const secret = value.trim();
   const applyToHarness = async () => {
+    if (OWNS_LOCAL_SERVER && !serverReady) throw new Error("The embedded bot server is unavailable");
     // Only bare Vite development has a separate server. A compiled source
     // preview owns its server and uses the same encrypted store as packaging.
     const secretStorage = OWNS_LOCAL_SERVER ? "?secretStorage=external" : "";
@@ -2870,8 +2917,9 @@ app.whenReady().then(async () => {
       slog(`desktop companion relay failed: ${error?.message ?? error}`);
     }
   } else if (OWNS_LOCAL_SERVER) {
-    serverReady = await startServerPackaged();
+    await startServerPackaged();
   }
+  if (desktopShutdownStarted) return;
   // The companion the user left on comes back without anyone finding the
   // toggle again — one attempt, after the harness port is settled, with the
   // exact options the IPC handler uses. A failure surfaces in companionState
@@ -2989,8 +3037,9 @@ app.on("before-quit", (e) => {
   }
   if (cuaCleanedUp) return;
   e.preventDefault();
-  const stoppingServer = serverProc;
-  serverProc = null;
+  // Cancel scheduled recovery and stop the exact owned child, including one
+  // which is still inside its boot probe.
+  const stoppingServer = serverSupervisor.shutdown();
   // Release the sleep blocker synchronously; child shutdown is awaited below.
   syncCompanionKeepAwake(false, false);
   try {
@@ -3013,7 +3062,7 @@ app.on("before-quit", (e) => {
   const cleanup = Promise.all([
     awaitFeishuShutdown(() => desktopFeishu?.close()),
     ownedHelperCleanup,
-    stopUtilityServer(stoppingServer).then((stopped) => {
+    stoppingServer.then((stopped) => {
       if (!stopped) slog("server child did not stop before desktop exit; retaining the data-directory lease");
     }),
   ]);
