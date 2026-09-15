@@ -76,7 +76,7 @@ it("survives a real server crash: queued sends keep receipts, cancellation and u
       'process.stdin.on("end", () => process.exit(0));',
       `await import(${JSON.stringify(pathToFileURL(fileURLToPath(new URL("./testing/fake-claude-cli.ts", import.meta.url))).href)});`,
     ].join("\n"), { mode: 0o700 });
-    await api("PATCH", "/api/instances/claude", { cli: wrapper });
+    await api("PATCH", "/api/instances/verification", { cli: wrapper });
     await api("PATCH", "/api/config", { threads: { maxConcurrentPerBot: 1 } });
     const bot = (await api("POST", "/api/bots", { name: "Durable follow-ups" }, 201)).bot;
     const uncertain = (await api("POST", "/api/bots", { name: "Uncertain follow-up" }, 201)).bot;
