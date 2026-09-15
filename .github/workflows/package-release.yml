@@ -137,7 +137,9 @@ jobs:
   intel:
     name: Verify same Universal DMG on native Intel
     needs: [prepare, build]
-    if: contains(needs.prepare.outputs.matrix, 'macos-universal')
+    # Validate an available Mac artifact even if another platform failed,
+    # so independent platform failures do not hide Intel diagnostics.
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && contains(needs.prepare.outputs.matrix, 'macos-universal') }}
     runs-on: macos-15-intel
     timeout-minutes: 60
     env:
