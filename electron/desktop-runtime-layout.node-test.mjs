@@ -27,7 +27,9 @@ test('development preview and package use compiled code and target-specific nati
   assert.equal(preview.server, path.join(options.appRoot, 'dist-server/index.js'));
   assert.equal(preview.ui, path.join(options.appRoot, 'dist'));
   assert.equal(preview.feishu, path.join(options.appRoot, 'dist-native/feishu-runtime/win32-x64'));
+  assert.equal(preview.harness, path.join(options.appRoot, 'dist-native/ruijie-harness/win32-x64'));
   assert.equal(installed.feishu, path.join(options.resourcesPath, 'tuantuan-feishu-runtime'));
+  assert.equal(installed.harness, path.join(options.resourcesPath, 'ruijie-harness'));
   assert.equal(installed.server, path.join(options.resourcesPath, 'server/index.js'));
   assert.equal('dataDir' in preview, false, 'Content mode must not replace development data identity');
   const hmr = desktopRuntimeLayout({ ...options, packaged: false, preview: false });
@@ -45,6 +47,7 @@ test('a development shortcut through a junction resolves trusted native resource
       appRoot: alias, resourcesPath: path.join(temp, 'electron'), platform: process.platform, arch: process.arch });
     assert.equal(layout.feishu, path.join(physical, 'dist-native/feishu-runtime', `${process.platform}-${process.arch}`));
     assert.equal(layout.browser, path.join(physical, 'dist-native/browser', `${process.platform}-${process.arch}`));
+    assert.equal(layout.harness, path.join(physical, 'dist-native/ruijie-harness', `${process.platform}-${process.arch}`));
     assert.equal(layout.server, path.join(alias, 'dist-server/index.js'));
     assert.equal('dataDir' in layout, false);
   } finally { rmSync(temp, { recursive: true, force: true }); }

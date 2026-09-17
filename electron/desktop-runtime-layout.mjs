@@ -17,6 +17,8 @@ export function desktopRuntimeLayout({ packaged, preview, appRoot, resourcesPath
     ui: packaged ? path.join(resourcesPath, 'ui') : path.join(appRoot, 'dist'),
     browser: packaged ? path.join(resourcesPath, 'browser-engine')
       : preview ? path.join(nativeRoot, 'dist-native/browser', `${platform}-${arch}`) : undefined,
+    harness: packaged ? path.join(resourcesPath, 'ruijie-harness')
+      : preview ? path.join(nativeRoot, 'dist-native/ruijie-harness', `${platform}-${arch}`) : undefined,
     feishu: packaged ? universalFeishu ? path.join(feishuRoot, `${platform}-${arch}`) : feishuRoot
       : preview ? path.join(nativeRoot, 'dist-native/feishu-runtime', `${platform}-${arch}`) : undefined,
   };

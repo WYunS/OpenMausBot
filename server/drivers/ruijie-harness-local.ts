@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { access, readFile, readlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
@@ -9,6 +10,19 @@ const PRODUCT_NAME = "锐捷 Harness";
 const WINDOWS_EXECUTABLE_NAME = "Ruijie-Harness.exe";
 const STARTUP_TIMEOUT_MS = 30_000;
 const POLL_INTERVAL_MS = 250;
+export const BUNDLED_HARNESS_VERSION = "2.1.9";
+const BUNDLED_MANIFEST = "manifest.json";
+const BUNDLED_BRIDGE_CAPABILITY = "openmaus-server-v1";
+
+export interface RuijieHarnessBundleManifest {
+  schemaVersion: 1;
+  version: string;
+  target: string;
+  executable: string;
+  bridge: { schemaVersion: 1; capability: string };
+  executableSha256: string;
+  buildCommit?: string;
+}
 
 /** Installed and startable, but intentionally not launched by a passive probe. */
 export class RuijieHarnessDormantError extends Error {
@@ -26,6 +40,7 @@ export interface RuijieHarnessEndpointOptions {
   endpoint?: string;
   bridgePath: string;
   executablePath?: string;
+  bundledRoot?: string;
   startupTimeoutMs?: number;
   autoLaunch?: boolean;
   executableArgs?: readonly string[];
@@ -39,9 +54,12 @@ interface ExecutableInspection {
 
 export interface RuijieHarnessLocatorDependencies {
   platform: NodeJS.Platform;
+  arch: string;
   environment: NodeJS.ProcessEnv;
   home: string;
   pathExists(path: string): Promise<boolean>;
+  readText(path: string): Promise<string>;
+  sha256(path: string): Promise<string>;
   registeredExecutable(): Promise<string | undefined>;
   readBridge(path: string): Promise<RuijieHarnessBridgeRecord | undefined>;
   executableForPid(pid: number): Promise<string | undefined>;
@@ -51,6 +69,36 @@ export interface RuijieHarnessLocatorDependencies {
   stopLaunchedExecutable(): Promise<void>;
   now(): number;
   sleep(milliseconds: number): Promise<void>;
+}
+
+export async function bundledRuijieHarnessExecutable(
+  root: string,
+  dependencies: Pick<RuijieHarnessLocatorDependencies, "platform" | "arch" | "pathExists" | "readText" | "sha256">,
+): Promise<string | undefined> {
+  const pathApi = dependencies.platform === "win32" ? win32 : posix;
+  try {
+    const manifest = JSON.parse(await dependencies.readText(pathApi.join(root, BUNDLED_MANIFEST))) as Partial<RuijieHarnessBundleManifest>;
+    const target = `${dependencies.platform}-${dependencies.arch}`;
+    if (
+      manifest.schemaVersion !== 1
+      || manifest.version !== BUNDLED_HARNESS_VERSION
+      || manifest.target !== target
+      || manifest.bridge?.schemaVersion !== 1
+      || manifest.bridge?.capability !== BUNDLED_BRIDGE_CAPABILITY
+      || typeof manifest.executable !== "string"
+      || !manifest.executable
+      || !/^[a-f0-9]{64}$/u.test(manifest.executableSha256 ?? "")
+      || pathApi.isAbsolute(manifest.executable)
+    ) return undefined;
+    const executable = pathApi.resolve(root, manifest.executable);
+    const resolvedRoot = pathApi.resolve(root);
+    const prefix = resolvedRoot.endsWith(pathApi.sep) ? resolvedRoot : resolvedRoot + pathApi.sep;
+    if (!executable.startsWith(prefix) || !await dependencies.pathExists(executable)) return undefined;
+    if (await dependencies.sha256(executable) !== manifest.executableSha256) return undefined;
+    return executable;
+  } catch {
+    return undefined;
+  }
 }
 
 export function defaultRuijieBridgePath(
@@ -133,6 +181,13 @@ async function findInstalledExecutable(
     || dependencies.environment.RUIJIE_HARNESS_EXECUTABLE?.trim();
   if (configured) return await dependencies.pathExists(configured) ? configured : undefined;
 
+  const bundledRoot = options.bundledRoot?.trim()
+    || dependencies.environment.OMB_RUIJIE_HARNESS_BUNDLE?.trim();
+  if (bundledRoot) {
+    const bundled = await bundledRuijieHarnessExecutable(bundledRoot, dependencies);
+    if (bundled) return bundled;
+  }
+
   for (const candidate of installedRuijieHarnessCandidates(
     dependencies.platform,
     dependencies.environment,
@@ -168,6 +223,30 @@ async function usableEndpointForExecutable(
   return { running: inspection.running };
 }
 
+async function liveInstalledEndpoint(
+  selectedExecutable: string,
+  bridgePath: string,
+  dependencies: RuijieHarnessLocatorDependencies,
+): Promise<string | undefined> {
+  const bridge = await dependencies.readBridge(bridgePath);
+  if (!bridge || !await dependencies.probeEndpoint(bridge.endpoint)) return undefined;
+  const owner = await dependencies.executableForPid(bridge.pid);
+  if (!owner || sameExecutable(owner, selectedExecutable, dependencies.platform)) return undefined;
+  const candidates = installedRuijieHarnessCandidates(
+    dependencies.platform,
+    dependencies.environment,
+    dependencies.home,
+  );
+  const registered = await dependencies.registeredExecutable();
+  if (registered) candidates.push(registered);
+  for (const candidate of candidates) {
+    if (sameExecutable(owner, candidate, dependencies.platform) && await dependencies.pathExists(candidate)) {
+      return bridge.endpoint;
+    }
+  }
+  return undefined;
+}
+
 export function createRuijieHarnessLocator(
   dependencies: RuijieHarnessLocatorDependencies = realDependencies(),
 ): {
@@ -184,7 +263,7 @@ export function createRuijieHarnessLocator(
 
     const executable = await findInstalledExecutable(options, dependencies);
     if (!executable) {
-      throw new Error("未检测到已安装的锐捷 Harness，请先安装正式版锐捷 Harness");
+      throw new Error("未检测到内置或已安装的锐捷 Harness");
     }
 
     let state = await usableEndpointForExecutable(executable, options.bridgePath, dependencies);
@@ -193,6 +272,11 @@ export function createRuijieHarnessLocator(
       throw new RuijieHarnessDormantError();
     }
     if (!state.running) {
+      // A separately installed compatible Harness may already own the shared
+      // bridge. Reuse it instead of starting a second profile owner. A stale
+      // bridge or an unrelated executable never passes these checks.
+      const existing = await liveInstalledEndpoint(executable, options.bridgePath, dependencies);
+      if (existing) return existing;
       try {
         await dependencies.launchExecutable(
           executable,
@@ -356,9 +440,12 @@ function realDependencies(): RuijieHarnessLocatorDependencies {
   let launchedChild: ReturnType<typeof spawn> | undefined;
   return {
     platform: process.platform,
+    arch: process.arch,
     environment: process.env,
     home: homedir(),
     pathExists: async (path) => access(path).then(() => true, () => false),
+    readText: async (path) => readFile(path, "utf8"),
+    sha256: async (path) => createHash("sha256").update(await readFile(path)).digest("hex"),
     registeredExecutable: process.platform === "win32" ? windowsRegisteredExecutable : async () => undefined,
     readBridge: async (path) => {
       try {

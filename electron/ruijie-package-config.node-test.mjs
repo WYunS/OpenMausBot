@@ -28,6 +28,7 @@ test("Ruijie packaging resolves WYunS without losing upstream resources or app i
     assert(config[platform].extraResources.some((entry) => entry.to === "tuantuan-feishu"));
     assert(config[platform].extraResources.some((entry) => entry.to === "tuantuan-feishu-runtime" && entry.from.includes('feishu-runtime/')));
     assert(config[platform].extraResources.some((entry) => entry.to === "browser-engine"));
+    assert(config[platform].extraResources.some((entry) => entry.to === "ruijie-harness"));
     assert(config[platform].extraResources.some((entry) => entry.to === "cloudflared/cloudflared" || entry.to === "cloudflared/cloudflared.exe"));
   }
   assert(config.extraResources.some((entry) => entry.to === "server"));
@@ -43,6 +44,8 @@ test("the standard Windows package command cannot bypass the Ruijie config or bu
   assert.match(pkg.scripts["package:win"], /--config electron-builder\.ruijie\.mjs/);
   assert.match(pkg.scripts['package:mac'], /--config electron-builder\.ruijie\.mjs/);
   assert.match(pkg.scripts['package:mac'], /build:feishu:mac/);
+  assert.match(pkg.scripts['package:mac'], /build:harness:mac/);
+  assert.match(pkg.scripts['package:win'], /build:harness:windows/);
   for (const platform of ['win', 'mac']) assert.doesNotMatch(pkg.scripts[`package:${platform}`], /build:sandbox/);
 });
 

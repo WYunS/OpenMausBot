@@ -1172,6 +1172,7 @@ async function startServerOn(port) {
     // process sends the private in-memory connection after spawn.
     OMB_DESKTOP_PARENT: "1",
     ...(desktopLayout.built ? { OMB_STATIC_DIR: desktopLayout.ui, OMB_BROWSER_BUNDLE_DIR: desktopLayout.browser } : {}),
+    ...(desktopLayout.harness ? { OMB_RUIJIE_HARNESS_BUNDLE: desktopLayout.harness } : {}),
     OMB_RESOURCES_PATH: resourcesPath,
     // The Windows installer ships the complete pinned browser engine. A fresh
     // isolated profile should expose it immediately; an explicit user false

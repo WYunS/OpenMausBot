@@ -192,6 +192,7 @@ async function resolveEndpoint(config: RuijieHarnessConfig, autoLaunch = true): 
     endpoint: config.endpoint ?? process.env.RUIJIE_HARNESS_ENDPOINT,
     bridgePath,
     executablePath: config.executablePath ?? process.env.RUIJIE_HARNESS_EXECUTABLE,
+    bundledRoot: process.env.OMB_RUIJIE_HARNESS_BUNDLE,
     executableArgs: parseLaunchArguments(process.env.RUIJIE_HARNESS_ARGUMENTS),
     launchEnvironment: {
       ...(process.env.RUIJIE_HARNESS_HOME ? { DSH_HOME: process.env.RUIJIE_HARNESS_HOME } : {}),

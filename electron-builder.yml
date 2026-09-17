@@ -117,6 +117,8 @@ mac:
         - "!fixture-smoke.mjs"
     - from: dist-native/feishu-runtime/darwin-${arch}
       to: tuantuan-feishu-runtime
+    - from: dist-native/ruijie-harness/darwin-${arch}
+      to: ruijie-harness
   extendInfo:
     NSMicrophoneUsageDescription: OpenMausBot uses the microphone for voice dictation into the composer.
     NSSpeechRecognitionUsageDescription: OpenMausBot transcribes your voice on-device to type messages for you.
@@ -162,6 +164,8 @@ win:
       to: cloudflared/cloudflared.exe
     - from: dist-native/browser/win32-x64
       to: browser-engine
+    - from: dist-native/ruijie-harness/win32-x64
+      to: ruijie-harness
   # No signing config yet (would go under win.signtoolOptions or
   # win.azureSignOptions — eb 26 nests it, there is no top-level
   # win.certificateFile). The installer is unsigned, so SmartScreen shows

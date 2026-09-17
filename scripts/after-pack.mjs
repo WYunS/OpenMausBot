@@ -7,6 +7,7 @@ import {
 } from "./prepare-cloudflared.mjs";
 import { verifyBrowserBundle } from "./prepare-browser.mjs";
 import { verifyFeishuRuntimeBundle } from "./prepare-feishu-runtime.mjs";
+import { verifyRuijieHarnessBundle } from "./prepare-ruijie-harness.mjs";
 import { readSandboxPreset, sandboxPresetDigest } from '../electron/ruijie-sandbox-bootstrap.mjs';
 
 async function requireRealDirectory(directory, mode = 0o755) {
@@ -104,6 +105,7 @@ export default async function afterPack(context) {
   if (["win32", "darwin"].includes(context.electronPlatformName) && context.packager) {
     const arch = { 1: "x64", 3: "arm64" }[context.arch];
     await verifyFeishuRuntimeBundle(path.join(resources, "tuantuan-feishu-runtime"), `${context.electronPlatformName}-${arch}`);
+    await verifyRuijieHarnessBundle(path.join(resources, "ruijie-harness"), `${context.electronPlatformName}-${arch}`);
   }
 
   if (context.electronPlatformName !== "linux") return;
