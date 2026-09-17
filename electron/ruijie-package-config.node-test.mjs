@@ -66,3 +66,12 @@ test("syncing downstream main cannot create desktop releases or publish a Docker
     "startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')",
     "branch pushes may build/smoke but must never publish an image");
 });
+
+test("release workflows pin and stage the credential-migration Harness runtime", async () => {
+  for (const name of ["release.yml", "package-win.yml"]) {
+    const source = await readFile(new URL(`../.github/workflows/${name}`, import.meta.url), "utf8");
+    assert.match(source, /AI-Applications-Team\/ruijie-harness/);
+    assert.match(source, /38fc3f4a79a5bab30a6a07d852c4ed3ef832d3b3/);
+    assert.match(source, /RUIJIE_HARNESS_BUNDLE_SOURCE_/);
+  }
+});
