@@ -28,6 +28,8 @@ permissions:
 
 jobs:
   build-and-smoke:
+    # Enterprise source tags are bookmarks; packaging is explicitly dispatched.
+    if: github.event_name != 'push' || github.repository == 'milind-soni/OpenMausBot'
     name: build image + boot smoke
     runs-on: ubuntu-latest
     timeout-minutes: 25

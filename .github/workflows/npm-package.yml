@@ -24,6 +24,8 @@ permissions:
 
 jobs:
   pack-and-prove:
+    # Enterprise source tags are bookmarks; packaging is explicitly dispatched.
+    if: github.event_name != 'push' || github.repository == 'milind-soni/OpenMausBot'
     name: assemble, pack, run standalone
     runs-on: ubuntu-latest
     timeout-minutes: 20

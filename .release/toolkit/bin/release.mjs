@@ -4,7 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { validateConfig, version, regular, stageFiles, collectRelease, digest, preparedFiles } from '../lib/core.mjs';
-import { api, absent } from '../lib/github.mjs';
+import { api, absent, matchingSourceTag } from '../lib/github.mjs';
 
 const root = process.cwd();
 const phase = process.argv[2];
@@ -44,7 +44,7 @@ try {
     await report(`## ${config.name} v${requested}\n\nSource: \`${sourceSha}\`\n\n${(preflight.notes || []).map(s => `- ${s}`).join('\n')}\n\n${(preflight.blockers || []).map(s => `- BLOCKED: ${s}`).join('\n')}`);
     assert(!preflight.blockers?.length, 'Preflight blocked; see the summary for required inputs.');
     if (mode === 'prerelease') assert(config.allowPrerelease === true, 'Project requires final acceptance before public prerelease. Build artifacts/draft first.');
-    await absent(`${base}/git/ref/tags/v${requested}`);
+    const tagged = await matchingSourceTag(base, `v${requested}`, sourceSha);
     await absent(`${base}/releases/tags/v${requested}`);
     if (mode === 'check') { await output('build', 'false'); process.exit(0); }
     const treeEntries = [];
@@ -52,13 +52,17 @@ try {
       const original = await readFile(await regular(root, file), 'utf8');
       const json = JSON.parse(original);
       assert(typeof json.version === 'string', `No version field in ${file}`);
+      if (tagged) {
+        assert.equal(json.version, requested, `Tagged source version differs in ${file}; tags are immutable`);
+        continue;
+      }
       json.version = requested;
       const content = JSON.stringify(json, null, 2) + '\n';
       if (content === original) continue;
       const blob = await api(`${base}/git/blobs`, { method: 'POST', body: { content, encoding: 'utf-8' } });
       treeEntries.push({ path: file, mode: '100644', type: 'blob', sha: blob.sha });
     }
-    if (adapter.prepareFiles) {
+    if (!tagged && adapter.prepareFiles) {
       for (const { path: file, content } of preparedFiles(root, await adapter.prepareFiles(context), config.versionFiles)) {
         const blob = await api(`${base}/git/blobs`, { method: 'POST', body: { content, encoding: 'utf-8' } });
         treeEntries.push({ path: file, mode: '100644', type: 'blob', sha: blob.sha });
@@ -74,6 +78,7 @@ try {
     }
     const runners = { 'windows-x64': 'windows-2025', 'linux-x64': 'ubuntu-24.04', 'macos-universal': 'macos-15' };
     await output('sha', sha); await output('version', requested); await output('node', config.node);
+    await output('source_tagged', String(tagged));
     await output('matrix', { include: config.targets.map(target => ({ target, os: runners[target] })) });
     await output('build', 'true');
     await report(`All platforms will build commit \`${sha}\`. Signing: Windows unsigned; macOS ad-hoc, not notarized. Human acceptance is recorded separately.`);
@@ -81,6 +86,14 @@ try {
     assert(config.targets.includes(target), 'Target not configured');
     const method = phase === 'verify-intel' ? 'verifyIntel' : phase;
     assert(typeof adapter[method] === 'function', `Adapter is missing ${method}`);
+    if (phase === 'build' && process.env.RELEASE_SOURCE_TAGGED === 'true' && adapter.prepareFiles) {
+      // Generate run metadata in the disposable runner, keeping the source tag
+      // and every platform's sourceSha unchanged.
+      for (const { path: file, content } of preparedFiles(root, await adapter.prepareFiles(context), config.versionFiles)) {
+        await mkdir(path.dirname(path.join(root, file)), { recursive: true });
+        await writeFile(path.join(root, file), content);
+      }
+    }
     await adapter[method](context);
     if (phase === 'build') {
       // Preserve original candidate bytes before post-install acceptance runs.
@@ -107,7 +120,7 @@ try {
     if (mode === 'artifacts') { await report('All configured platforms verified. Artifacts are ready; no GitHub Release requested.'); process.exit(0); }
     assert(mode === 'draft' || config.allowPrerelease === true, 'Public prerelease is disabled for this project');
     await absent(`${base}/releases/tags/v${requested}`);
-    await absent(`${base}/git/ref/tags/v${requested}`);
+    await matchingSourceTag(base, `v${requested}`, sourceSha);
     const body = `Testing candidate v${requested}\n\nSource: ${sourceSha}\nToolchain: repository-local release toolkit @${toolkitSha}\nRun: https://github.com/${repository}/actions/runs/${process.env.GITHUB_RUN_ID}\n\nWindows: unsigned. macOS: ad-hoc signed, not notarized.\nAutomated checks: passed on the configured platforms, including native Intel verification of the same macOS Universal package.\nHuman login, TCC, and upgrade acceptance: not performed by release-kit. See the project delivery guides before promoting this candidate.\n\n${(config.releaseNotes || []).join('\n')}`;
     // Assemble invisibly, verify every upload, then expose only when explicitly allowed.
     const release = await api(`${base}/releases`, { method: 'POST', body: { tag_name: `v${requested}`, target_commitish: sourceSha, name: `${config.name} v${requested} (testing candidate)`, body, draft: true, prerelease: true } });
