@@ -30,22 +30,22 @@ describe("resolveSurface", () => {
     expect(plan.note).toMatch(/no browser and no computer/);
   });
 
-  it("a computer destination keeps the browser alongside it", () => {
+  it("a computer destination has one surface and Off mounts neither", () => {
     for (const destination of ["cloud", "vm", "local"] as const) {
-      expect(resolveSurface({ destination, browserOn: true })).toMatchObject({ computer: destination, browser: true, pinned: null });
+      expect(resolveSurface({ destination, browserOn: true })).toMatchObject({ computer: destination, browser: false, pinned: null });
       expect(resolveSurface({ destination, browserOn: false })).toMatchObject({ computer: destination, browser: false });
     }
-    expect(resolveSurface({ destination: "off", browserOn: true })).toMatchObject({ computer: "off", browser: true });
+    expect(resolveSurface({ destination: "off", browserOn: true })).toMatchObject({ computer: "off", browser: false });
   });
 
   it("an explicit destination ignores the task's pin", () => {
     expect(resolveSurface({ destination: "cloud", pinnedSurface: "browser", browserOn: true, available: { browser: true } }))
-      .toMatchObject({ computer: "cloud", browser: true, pinned: null, clearPin: false });
+      .toMatchObject({ computer: "cloud", browser: false, pinned: null, clearPin: false });
   });
 
-  it("Auto without a pin resolves the way it always did", () => {
+  it("Auto without a pin prefers the available browser without a second screen", () => {
     expect(resolveSurface({ destination: undefined, browserOn: true })).toEqual({
-      computer: undefined,
+      computer: "off",
       browser: true,
       pinned: null,
       clearPin: false,
@@ -67,10 +67,20 @@ describe("resolveSurface", () => {
 
   it("Auto with a pin that is no longer reachable falls back and asks to clear it", () => {
     expect(resolveSurface({ destination: undefined, pinnedSurface: "cloud", browserOn: true, available: { cloud: false } }))
-      .toEqual({ computer: undefined, browser: true, pinned: null, clearPin: true, note: "" });
+      .toEqual({ computer: "off", browser: true, pinned: null, clearPin: true, note: "" });
     // absent availability is "not reachable", never "assume yes"
     expect(resolveSurface({ destination: undefined, pinnedSurface: "vm", browserOn: false })).toMatchObject({ clearPin: true, computer: undefined });
     expect(resolveSurface({ destination: undefined, pinnedSurface: "browser", browserOn: false })).toMatchObject({ clearPin: true, browser: false });
+  });
+
+  it.each(["off", "cloud", "vm", "browser"] as const)("host wording cannot override explicit %s", destination => {
+    const plan = resolveSurface({ destination, browserOn: true, hostIntent: "require" });
+    expect(plan.computer).not.toBe("local");
+  });
+
+  it("Auto can honor a host request, while a host prohibition also blocks explicit Local", () => {
+    expect(resolveSurface({ destination: undefined, browserOn: true, hostIntent: "require" })).toMatchObject({ computer: "local", browser: false });
+    expect(resolveSurface({ destination: "local", browserOn: true, hostIntent: "forbid" })).toMatchObject({ computer: "off", browser: false });
   });
 });
 

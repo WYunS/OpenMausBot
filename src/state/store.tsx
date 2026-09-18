@@ -1,3 +1,4 @@
+import type { QuestionAnswer, QuestionRequestCardData } from "../../shared/ask-question";
 // Server-backed store. The React app holds no transports of its own:
 // it dispatches typed commands over HTTP and folds the one SSE event
 // stream from the harness server into local state. The reducer stays
@@ -59,6 +60,9 @@ export type { MausColor } from "@/lib/mascot";
 export type { RoutineRunCardData } from "../../shared/routine-run";
 
 export interface OptionCardData {
+  questionRequest?: QuestionRequestCardData;
+  answeredText?: string;
+  answeredQuestions?: QuestionAnswer[];
   title: string;
   subtitle: string;
   options: string[];
@@ -815,6 +819,8 @@ export type Action =
       requestId: string;
       behavior: "allow" | "deny" | "answer";
       message?: string;
+      answers?: QuestionAnswer[];
+      cancelQuestion?: boolean;
       /** Exact proposal hash displayed by a current learned-skill client. */
       reviewedSha256?: string;
       /** remember this exact grant (the server's allowKey) for the bot */
@@ -2341,6 +2347,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 requestId: action.requestId,
                 behavior: action.behavior,
                 message: action.message,
+                answers: action.answers,
+                cancelQuestion: action.cancelQuestion,
                 reviewedSha256: action.reviewedSha256,
                 always: action.always,
               }),
@@ -2384,7 +2392,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               if (card?.requestId) {
                 const behavior = card.skillRequest
                   ? skillRequestBehavior(action.answer)
-                  : action.answer === "Allow" ? "allow" : action.answer === "Deny" ? "deny" : "answer";
+                  : card.tool && !card.questionRequest
+                    ? action.answer === "Allow" ? "allow" : "deny"
+                    : "answer";
                 return api(`/api/threads/${action.threadId}/respond`, {
                   method: "POST",
                   body: JSON.stringify({

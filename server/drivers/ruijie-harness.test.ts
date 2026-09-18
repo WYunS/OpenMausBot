@@ -48,10 +48,18 @@ class FakeSocket extends EventTarget {
 describe("Ruijie Harness driver", () => {
   const calls: Array<{ method: string; payload: any }> = [];
   let sessionCreateFailuresRemaining = 0;
+  let stopImmediately = true;
+  let sessionRunning = false;
+  let failQuestionDelivery = false;
+  let historyEvents: unknown[] = [];
 
   beforeEach(() => {
     FakeSocket.instances = [];
     sessionCreateFailuresRemaining = 0;
+    stopImmediately = true;
+    sessionRunning = false;
+    failQuestionDelivery = false;
+    historyEvents = [];
     vi.stubGlobal("WebSocket", FakeSocket);
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL, init?: RequestInit) => {
       const url = new URL(String(input));
@@ -64,6 +72,11 @@ describe("Ruijie Harness driver", () => {
         });
       }
       const body = JSON.parse(String(init?.body)) as { rpcId: string; method: string; payload: any };
+      if (url.pathname.endsWith("/api/respond")) {
+        if (failQuestionDelivery) throw new Error("temporary fixture connection loss");
+        calls.push({ method: "respond", payload: body });
+        return Response.json({ accepted: true });
+      }
       calls.push({ method: body.method, payload: body.payload });
       if (url.pathname.endsWith("session.create") && sessionCreateFailuresRemaining > 0) {
         sessionCreateFailuresRemaining -= 1;
@@ -128,7 +141,7 @@ describe("Ruijie Harness driver", () => {
       if (url.pathname.endsWith("session.create")) value = { sessionId: "session-fixture" };
       if (url.pathname.endsWith("session.selectModel")) value = { selected: body.payload };
       if (url.pathname.endsWith("session.history")) value = {
-        events: [],
+        events: historyEvents,
         hasMore: false,
         projections: {
           asOfSeq: 42,
@@ -147,6 +160,13 @@ describe("Ruijie Harness driver", () => {
         data: "cG5nLWZyYW1l",
       };
       if (url.pathname.endsWith("session.prompt") || url.pathname.endsWith("session.cancel")) value = { accepted: true };
+      if (url.pathname.endsWith("session.prompt")) sessionRunning = true;
+      if (url.pathname.endsWith("session.list")) value = { items: [{ sessionId: "session-fixture", running: sessionRunning }] };
+      if (url.pathname.endsWith("session.cancel") && stopImmediately) {
+        sessionRunning = false;
+        FakeSocket.instances.at(-1)?.frame({ type: "session/event", sessionId: "session-fixture", event: { type: "turn/start", data: { turn: 1 } } });
+        FakeSocket.instances.at(-1)?.frame({ type: "session/event", sessionId: "session-fixture", event: { type: "turn/end", data: { turn: 1, reason: { kind: "aborted", reason: { kind: "user" } } } } });
+      }
       return Response.json({ type: "server-response", rpcId: body.rpcId, result: { ok: true, value } });
     }));
   });
@@ -1017,6 +1037,51 @@ describe("Ruijie Harness driver", () => {
     expect(events.some((event) => event.type === "runtime.error")).toBe(false);
   });
 
+  it("does not complete on cancel acceptance or turn/end while the session is still running", async () => {
+    stopImmediately = false;
+    const instance = await RuijieHarnessDriver.create({
+      instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
+      config: { endpoint: "http://127.0.0.1:49724", expectedAccountEmail: "wangyunshang@ruijie.com.cn" },
+    });
+    const events: RuntimeEvent[] = [];
+    instance.adapter.onEvent(event => events.push(event));
+    const started = await instance.adapter.sendTurn({ threadId: "thread-delayed-stop", text: "等待" });
+    const socket = FakeSocket.instances.at(-1)!;
+    socket.frame({ type: "session/event", sessionId: "session-fixture", event: { type: "turn/start", data: { turn: 7 } } });
+    const stopping = instance.adapter.interruptTurn("thread-delayed-stop", started.turnId);
+    await vi.waitFor(() => expect(calls.some(call => call.method === "session.cancel")).toBe(true));
+    expect(events.filter(event => event.type === "turn.completed")).toHaveLength(0);
+    await expect(instance.adapter.sendTurn({ threadId: "thread-delayed-stop", text: "下一步" })).rejects.toThrow(/正在/);
+    socket.frame({ type: "session/event", sessionId: "session-fixture", event: { type: "turn/end", data: { turn: 7, reason: { kind: "aborted", reason: { kind: "user" } } } } });
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(events.filter(event => event.type === "turn.completed")).toHaveLength(0);
+    sessionRunning = false;
+    await stopping;
+    expect(events.filter(event => event.type === "turn.completed")).toHaveLength(1);
+  });
+
+  it("recovers a lost terminal notification from native wrapped history entries", async () => {
+    stopImmediately = false;
+    const instance = await RuijieHarnessDriver.create({ instanceId: "ruijieHarness", displayName: "Harness", enabled: true,
+      environment: {}, config: { endpoint: "http://127.0.0.1:49724", expectedAccountEmail: "wangyunshang@ruijie.com.cn" } });
+    const started = await instance.adapter.sendTurn({ threadId: "lost-end", text: "wait" });
+    const socket = FakeSocket.instances.at(-1)!;
+    socket.frame({ type: "session/event", sessionId: "session-fixture", event: { type: "turn/start", data: { turn: 7 } } });
+    const terminal = { type: "turn/end", data: { turn: 7, reason: { kind: "aborted", reason: { kind: "user" } } } };
+    historyEvents = [{ event: { ...terminal, data: { ...terminal.data, turn: 6 } } }];
+    const stopping = instance.adapter.interruptTurn("lost-end", started.turnId);
+    await vi.waitFor(() => expect(calls.some(call => call.method === "session.cancel")).toBe(true));
+    sessionRunning = false;
+    expect(instance.adapter.hasActiveTurn?.("lost-end")).toBe(true);
+    historyEvents = [{ event: terminal }];
+    try {
+      await vi.waitFor(() => expect(instance.adapter.hasActiveTurn?.("lost-end")).toBe(false), { timeout: 1_000 });
+    } finally {
+      socket.frame({ type: "session/event", sessionId: "session-fixture", event: terminal });
+      await stopping;
+    }
+  });
+
   it("disables Harness when its SSO identity does not match OpenMaus", async () => {
     const instance = await RuijieHarnessDriver.create({
       instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
@@ -1027,6 +1092,126 @@ describe("Ruijie Harness driver", () => {
       authenticated: false,
       reason: expect.stringContaining("账号与 OpenMaus 不一致"),
     });
+  });
+
+  it("cancels startup before prompt admission and ignores an obsolete stop ID", async () => {
+    const instance = await RuijieHarnessDriver.create({ instanceId: "ruijieHarness", displayName: "Harness", enabled: true,
+      environment: {}, config: { endpoint: "http://127.0.0.1:49724", expectedAccountEmail: "wangyunshang@ruijie.com.cn" } });
+    const fetcher = globalThis.fetch;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+      if (String(input).endsWith("session.selectModel")) await gate;
+      return fetcher(input, init);
+    });
+    const sending = instance.adapter.sendTurn({ threadId: "startup", text: "wait" });
+    const result = sending.catch(error => error);
+    await vi.waitFor(() => expect(calls.some(call => call.method === "session.create")).toBe(true));
+    await instance.adapter.interruptTurn("startup", "obsolete");
+    expect(instance.adapter.hasActiveTurn?.("startup")).toBe(true);
+    await instance.adapter.stopAll();
+    release();
+    expect(await result).toBeInstanceOf(Error);
+    expect(calls.filter(call => call.method === "session.prompt")).toHaveLength(0);
+    expect(instance.adapter.hasActiveTurn?.("startup")).toBe(false);
+  });
+
+  it("waits for computer-retry admission and ignores the previous terminal before releasing Stop", async () => {
+    const dshHome = await mkdtemp(join(tmpdir(), "omb-retry-stop-"));
+    stopImmediately = false;
+    try {
+      const instance = await RuijieHarnessDriver.create({ instanceId: "ruijieHarness", displayName: "Harness", enabled: true,
+        environment: {}, config: { endpoint: "http://127.0.0.1:49724", expectedAccountEmail: "wangyunshang@ruijie.com.cn", dshHome } });
+      const started = await instance.adapter.sendTurn({ threadId: "retry-stop", text: "打开浏览器", integrations: { localComputer: {
+        command: "fixture", args: [], env: {}, scope: "local-computer",
+      } } });
+      const fetcher = globalThis.fetch;
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+        if (String(input).endsWith("session.prompt")) await gate;
+        return fetcher(input, init);
+      });
+      const socket = FakeSocket.instances.at(-1)!;
+      const frame = (type: string, turn: number) => socket.frame({ type: "session/event", sessionId: "session-fixture", event: { type, data: { turn, reason: { kind: "completed" } } } });
+      frame("turn/start", 1); frame("turn/end", 1);
+      const stopping = instance.adapter.interruptTurn("retry-stop", started.turnId);
+      const duplicate = instance.adapter.interruptTurn("retry-stop", started.turnId);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(calls.some(call => call.method === "session.cancel")).toBe(false);
+      release();
+      await vi.waitFor(() => expect(calls.some(call => call.method === "session.cancel")).toBe(true));
+      frame("turn/start", 2); frame("turn/end", 1);
+      await vi.waitFor(() => expect(calls.filter(call => call.method === "session.cancel")).toHaveLength(2));
+      expect(instance.adapter.hasActiveTurn?.("retry-stop")).toBe(true);
+      sessionRunning = false; frame("turn/end", 2);
+      await Promise.all([stopping, duplicate]);
+      expect(instance.adapter.hasActiveTurn?.("retry-stop")).toBe(false);
+    } finally { await rm(dshHome, { recursive: true, force: true }); }
+  });
+
+  it("recovers a missing turn/start using only history newer than the resumed session baseline", async () => {
+    stopImmediately = false;
+    const old = { type: "turn/end", data: { turn: 5, reason: { kind: "completed" } } };
+    historyEvents = [{ event: old }];
+    const instance = await RuijieHarnessDriver.create({ instanceId: "ruijieHarness", displayName: "Harness", enabled: true,
+      environment: {}, config: { endpoint: "http://127.0.0.1:49724", expectedAccountEmail: "wangyunshang@ruijie.com.cn" } });
+    await instance.adapter.sendTurn({ threadId: "missing-start", resumeCursor: "session-fixture", text: "wait" });
+    const stopping = instance.adapter.interruptTurn("missing-start");
+    await vi.waitFor(() => expect(calls.some(call => call.method === "session.cancel")).toBe(true));
+    sessionRunning = false;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(instance.adapter.hasActiveTurn?.("missing-start")).toBe(true);
+    historyEvents.push({ event: { ...old, data: { ...old.data, turn: 6 } } });
+    await stopping;
+    expect(instance.adapter.hasActiveTurn?.("missing-start")).toBe(false);
+  });
+
+  it("round-trips every question ID and option without interpreting Allow as permission", async () => {
+    const instance = await RuijieHarnessDriver.create({ instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
+      config: { endpoint: "http://127.0.0.1:49724", expectedAccountEmail: "wangyunshang@ruijie.com.cn" } });
+    const events: RuntimeEvent[] = [];
+    instance.adapter.onEvent(event => events.push(event));
+    await instance.adapter.sendTurn({ threadId: "questions", text: "提问" });
+    const questions = [
+      { id: "q1", question: "请选择", detail: "完整计划", options: [{ label: "Allow", description: "业务选项" }] },
+      { id: "q2", question: "请选择", multiSelect: true, options: [{ label: "甲,乙" }, { label: "丙" }] },
+    ];
+    FakeSocket.instances.at(-1)!.frame({ type: "question/requested", sessionId: "session-fixture", questions });
+    const event = events.find(event => event.type === "request.opened")!;
+    expect(event).toMatchObject({ requestType: "question", questions });
+    const answers = [{ id: "q1", selected: ["Allow"] }, { id: "q2", selected: ["甲,乙"], custom: "补充" }];
+    failQuestionDelivery = true;
+    await expect(instance.adapter.respondToRequest("questions", event.requestId!, { behavior: "answer", answers })).rejects.toThrow("connection loss");
+    failQuestionDelivery = false;
+    expect(await instance.adapter.respondToRequest("questions", event.requestId!, { behavior: "answer", answers })).toBe("answered");
+    expect(calls.find(call => call.method === "respond")?.payload.result.value.answer.answers).toEqual(answers);
+    expect(await instance.adapter.respondToRequest("questions", event.requestId!, { behavior: "answer", answers })).toBe("unavailable");
+    await instance.adapter.interruptTurn("questions");
+  });
+
+  it("cancels native questions without sending a permission denial", async () => {
+    const instance = await RuijieHarnessDriver.create({ instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
+      config: { endpoint: "http://127.0.0.1:49724", expectedAccountEmail: "wangyunshang@ruijie.com.cn" } });
+    const events: RuntimeEvent[] = [];
+    instance.adapter.onEvent(event => events.push(event));
+    await instance.adapter.sendTurn({ threadId: "questions-cancel", text: "提问" });
+    FakeSocket.instances.at(-1)!.frame({ type: "question/requested", sessionId: "session-fixture", questions: [{ id: "q1", question: "继续？", options: [] }] });
+    const event = events.find(event => event.type === "request.opened")!;
+    await instance.adapter.respondToRequest("questions-cancel", event.requestId!, { behavior: "answer", cancelQuestion: true });
+    expect(calls.find(call => call.method === "respond")?.payload.result).toMatchObject({ ok: false, error: { code: "cancelled" } });
+    await instance.adapter.interruptTurn("questions-cancel");
+  });
+
+  it.each(["AUTH", "QUOTA"])("preserves structured %s denial and never retries the failed work", async code => {
+    const instance = await RuijieHarnessDriver.create({ instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
+      config: { endpoint: "http://127.0.0.1:49724", expectedAccountEmail: "wangyunshang@ruijie.com.cn" } });
+    const events: RuntimeEvent[] = [];
+    instance.adapter.onEvent(event => events.push(event));
+    await instance.adapter.sendTurn({ threadId: "denied", text: "查询" });
+    FakeSocket.instances.at(-1)!.frame({ type: "session/event", sessionId: "session-fixture", event: { type: "turn/end", data: { turn: 1, reason: { kind: "error", error: { code, message: "opaque provider error" } } } } });
+    expect(events).toContainEqual(expect.objectContaining({ type: "runtime.error", failure: { kind: code === "AUTH" ? "authorization" : "quota", code, retryable: false } }));
+    expect(calls.filter(call => call.method === "session.prompt")).toHaveLength(1);
   });
 });
 

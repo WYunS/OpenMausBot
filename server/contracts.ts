@@ -1,3 +1,5 @@
+import type { QuestionAnswer, QuestionRequestCardData } from "../shared/ask-question.ts";
+import type { HarnessDenial } from "../shared/harness-failure.ts";
 // Canonical harness contracts — ported from upstream
 // (apps/server/src/provider/ProviderDriver.ts, Services/ProviderAdapter.ts,
 // packages/contracts/src/{provider,providerInstance,providerRuntime}.ts),
@@ -142,6 +144,7 @@ export type RuntimeEvent = RuntimeEventBase &
         tool: string;
         summary: string;
         choices?: string[];
+        questions?: QuestionRequestCardData["questions"];
         approvalScope?: "local-computer";
         /** Provider asks to widen its configured sandbox. Only explicit Full
          * access may answer this automatically; Auto/remembered grants may not. */
@@ -161,7 +164,7 @@ export type RuntimeEvent = RuntimeEventBase &
     | { type: "thread.token-usage.updated"; input: number; output: number; cachedInput?: number }
     // `setup: true` marks a failure the user fixes by installing or
     // configuring something, not by retrying — the UI offers setup instead.
-    | { type: "runtime.error"; message: string; setup?: boolean }
+    | { type: "runtime.error"; message: string; setup?: boolean; failure?: HarnessDenial }
   );
 
 export type RuntimeEventListener = (event: RuntimeEvent) => void;
@@ -313,6 +316,9 @@ export interface ProviderAdapter {
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;
+  /** If supplied, ownership must not be released by timer while this is true.
+   * Includes a cancelled turn whose engine has not yet confirmed termination. */
+  hasActiveTurn?(threadId: ThreadId): boolean;
   /** Answer a pending ask. Resolves with what actually happened — never
    * throws for an ask that is no longer there: `unavailable` means nobody
    * could take the answer (the turn ended, the broker died, the driver
@@ -324,6 +330,8 @@ export interface ProviderAdapter {
     decision: {
       behavior: "allow" | "deny" | "answer";
       message?: string;
+      answers?: QuestionAnswer[];
+      cancelQuestion?: boolean;
       /** "Always allow this session": hand the provider its own remembered
        * approval (Claude's suggested permission rules, ACP `allow_always`)
        * so it stops asking about this operation for the rest of the

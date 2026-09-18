@@ -1,3 +1,4 @@
+import type { QuestionAnswer, QuestionRequestCardData } from "../shared/ask-question.ts";
 // Bot + thread persistence. bots.json holds bot records (including the
 // thread→instance binding and per-instance resume cursors — upstream's
 // ProviderSessionDirectory, recipe step 6: persist the binding from day
@@ -45,6 +46,9 @@ export type MausColor =
 export type MausExpression = string;
 
 export interface OptionCardData {
+  questionRequest?: QuestionRequestCardData;
+  answeredText?: string;
+  answeredQuestions?: QuestionAnswer[];
   title: string;
   subtitle: string;
   options: string[];

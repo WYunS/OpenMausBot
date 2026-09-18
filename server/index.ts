@@ -383,7 +383,8 @@ import { installedPlaybookInstructions } from "./installed-playbooks.ts";
 import { createBotPackageExport, type ExportablePackageSkill } from "./package-export.ts";
 import { createTeamBackup, importTeamBackup } from "./team-backup.ts";
 import { MAX_TEAM_BACKUP_BYTES } from "../shared/team-backup.ts";
-import { hostComputerIntent, shouldFallbackCloudToHost, shouldMountLocalComputer } from "./local-routing.ts";
+import { hostComputerIntent, shouldMountLocalComputer } from "./local-routing.ts";
+import { validateQuestionAnswers, legacyQuestionAnswer, formatQuestionAnswers } from "../shared/ask-question.ts";
 import { resolveSurface } from "./surface.ts";
 import {
   PendingTurnCancellations,
@@ -2989,6 +2990,8 @@ async function answerRequest(
   decidedFor?: { id: string; name: string },
   /** "Always allow this session": the provider keeps the allow, not the app */
   always?: boolean,
+  answers?: unknown,
+  cancelQuestion = false,
 ): Promise<RequestOutcome> {
   // Snapshot the card BEFORE delivering the answer: a delivered answer
   // resolves the request synchronously through the fold, which consumes
@@ -3002,14 +3005,31 @@ async function answerRequest(
     ? thread.find((m) => m.id === cardMessageId)
     : thread.find((m) => m.card?.requestId === requestId);
   const card = cardMessage?.card;
+  const questions = card?.questionRequest?.questions;
+  const validatedAnswers = questions && !cancelQuestion
+    ? answers === undefined ? legacyQuestionAnswer(questions, message) : validateQuestionAnswers(questions, answers)
+    : undefined;
+  if (questions && (behavior !== "answer" || (!cancelQuestion && !validatedAnswers))) {
+    throw Object.assign(new Error("请在问题卡中按题目回答；多道题不能共用一条文本答案。"), { status: 400 });
+  }
+  if (questions && validatedAnswers) message = formatQuestionAnswers(questions, validatedAnswers.map(answer => [...answer.selected, ...(answer.custom ? [answer.custom] : [])]));
   const instance = registry.get(instanceId);
   let outcome: RequestOutcome = "unavailable";
   if (instance) {
     try {
-      outcome = await instance.adapter.respondToRequest(threadId, requestId, { behavior, message, always: always && behavior === "allow" });
-    } catch {
+      outcome = await instance.adapter.respondToRequest(threadId, requestId, { behavior, message, always: always && behavior === "allow",
+        ...(validatedAnswers ? { answers: validatedAnswers } : {}), ...(questions ? { cancelQuestion } : {}) });
+    } catch (error) {
+      if (questions) throw Object.assign(new Error(error instanceof Error ? error.message : "答案暂未送达，请重试"), { status: 502 });
       outcome = "unavailable";
     }
+  }
+  if (questions && outcome === "answered" && cardMessage) {
+    const currentCard = store.messagesFor(threadId).find(entry => entry.id === cardMessage.id)?.card;
+    if (currentCard) store.patchMessage(threadId, cardMessage.id, { card: { ...currentCard,
+      answered: cancelQuestion ? "cancelled" : "answered", answeredText: cancelQuestion ? "已取消提问" : message,
+      ...(validatedAnswers ? { answeredQuestions: validatedAnswers } : {}),
+    } });
   }
   // The human's verdict, recorded only when it actually reached the engine:
   // `unavailable` means the action never ran, and a "user-approved" row
@@ -3155,6 +3175,11 @@ const watchdog = new TurnWatchdog({
     const releaseOwnership = () => {
       if (stalledGeneration && directTurnGenerationByThread.get(turn.threadId) !== stalledGeneration) return;
       if (stalledResourceOwner && turnResourceOwners.get(turn.threadId)?.generation !== stalledResourceOwner.generation) return;
+      if (instance?.adapter.hasActiveTurn?.(turn.threadId)) {
+        const retry = setTimeout(releaseOwnership, 1_000);
+        retry.unref?.();
+        return;
+      }
       // A goal coordinator can stall before sendTurn reveals its provider
       // turn id. Reusing the room during that ambiguous pre-id window would
       // make old and replacement events indistinguishable. Keep ownership
@@ -3754,7 +3779,7 @@ bus.subscribe((event: RuntimeEvent) => {
       }
       break;
     case "request.opened": {
-      const permission = event.requestType === "permission";
+      const permission = event.requestType === "permission" && !event.questions?.length;
       // A permission request here is one the provider left for a person: its
       // own mode already ran. Only Full access answers automatically because
       // that is the explicit standing grant. Questions always reach a human.
@@ -3845,6 +3870,7 @@ bus.subscribe((event: RuntimeEvent) => {
                 : "Your bot has a question",
           subtitle: event.summary,
           options: event.choices?.length ? event.choices : permission ? ["Allow", "Deny"] : [],
+          ...(event.questions?.length ? { questionRequest: { version: 1 as const, questions: event.questions } } : {}),
           requestId: event.requestId,
           tool: permission ? event.tool : undefined,
           // The provider owns session-wide permission memory. The app keeps
@@ -5149,15 +5175,16 @@ async function startTurn(
         builtInBrowserEnabled(cfg) &&
         bot.browser !== false &&
         instance.adapter.capabilities.browserMcp === true;
+      const hostIntent = opts?.runOn === "cloud" ? "unspecified" : hostComputerIntent(text);
       const plan = resolveSurface({
         destination: opts?.runOn === "cloud" ? "cloud" : bot.computer, // cloud routine overrides the MAUS default
         browserOn,
+        hostIntent,
       });
       if (bot.computer === "browser" && plan.computer === "off" && instance.driverKind === "boxAgent") {
         throw new Error("the Computer engine works on the cloud computer — set Works on to Cloud, or choose another engine");
       }
-      const hostIntent = opts?.runOn === "cloud" ? "unspecified" : hostComputerIntent(text);
-      const wants = hostIntent === "require" ? "local" : plan.computer;
+      const wants = plan.computer;
       let previewCapture: (() => Promise<{ png: string; format: string }>) | null = null;
       let computerKind: "box" | "vps" | "ruijie" | "vm" | "local" | null = null;
       let computerSetupProblem: string | null = null;
@@ -5192,23 +5219,6 @@ async function startTurn(
         integrations.localComputer = observedLocalComputer(currentCua, bot.id, threadId, dispatchClaimId);
         computerKind = "local";
         return null;
-      };
-      const mountHostFallback = async (): Promise<void> => {
-        if (
-          wants !== "cloud" ||
-          !computerSetupProblem ||
-          !shouldFallbackCloudToHost({ cloudBackend, hostIntent }) ||
-          integrations.computer ||
-          integrations.localComputer
-        ) return;
-        const boundProblem = computerSetupProblem;
-        const hostProblem = await mountHostComputer();
-        if (!hostProblem) {
-          hostComputerRoute = "fallback";
-          computerSetupProblem = null;
-        } else {
-          computerSetupProblem = `${boundProblem}；${hostProblem}`;
-        }
       };
 
       // Explicit destinations are strict. In particular, Local VM must never
@@ -5397,10 +5407,7 @@ async function startTurn(
         computerSetupProblem = "绑定的电脑尚未配置或暂时无法连接";
       }
 
-      // The bound computer remains the default. A host mount is an explicit
-      // user choice, or a fallback only after that default actually failed.
-      // An explicit prohibition always wins.
-      await mountHostFallback();
+      // An unavailable selected cloud never authorizes a host fallback.
 
       // Auto-only host fallback. Electron owns cua-driver/TCC attribution;
       // the harness only reads its already-running connection descriptor.
@@ -5548,7 +5555,7 @@ async function startTurn(
         else {
           computerKind = null;
           computerSetupProblem = "绑定的云电脑控制通道暂时不可用";
-          await mountHostFallback();
+          // Stay on the selected cloud boundary; do not mount the host.
         }
       }
       // A cancelled adapter can be between accepting sendTurn and revealing
@@ -5884,10 +5891,11 @@ async function interruptRoutineGroupGoal(
   const bot = speaker ? store.bot(speaker.botId) : undefined;
   cancelGroupTurnOperations(groupId, threadId, outcome);
   revokeInternalCapabilitiesForThread(threadId);
-  await (bot ? registry.get(bot.modelSelection.instanceId) : undefined)
-    ?.adapter.interruptTurn(threadId)
-    .catch(() => {});
-  closeOpenApprovals(threadId);
+  try {
+    await (bot ? registry.get(bot.modelSelection.instanceId) : undefined)?.adapter.interruptTurn(threadId);
+  } finally {
+    closeOpenApprovals(threadId);
+  }
 }
 
 /** Stop work that may have captured Full/Custom before a fail-closed Ask
@@ -6691,6 +6699,7 @@ async function runGroupMemberTurn(
   // as a ghost session by an already-preparing room turn.
   if (
     builtInBrowserEnabled(cfg) &&
+    (readyBot.computer === undefined || readyBot.computer === "browser") &&
     readyBot.browser !== false &&
     instance.adapter.capabilities.browserMcp === true
   ) {
@@ -6969,7 +6978,7 @@ async function runGroupMemberTurn(
   // work so a retained proxy from this member cannot act during the next
   // member's generation.
   revokeInternalCapabilityGeneration(threadId, internalGeneration);
-  retainRoomVmLease = outcome === "timed_out" || outcome === "stalled";
+  retainRoomVmLease = outcome === "timed_out" || outcome === "stalled" || instance.adapter.hasActiveTurn?.(threadId) === true;
   if (!retainRoomVmLease) releaseRoomVmLease();
   roomHandoffSourceSucceeded = outcome === "settled";
   if (orchestration) {
@@ -6979,7 +6988,7 @@ async function runGroupMemberTurn(
   // A timed-out provider still owns the room thread until its interrupt
   // produces turn.completed (or the stall watchdog's grace fallback runs).
   // Do not clear busy or start the next member on that same thread early.
-  if (outcome === "cancelled") {
+  if (outcome === "cancelled" && !instance.adapter.hasActiveTurn?.(threadId)) {
     // The guarded dispatch already waited for the adapter to become
     // addressable and issued the second interrupt. Retire its later events and
     // settle this exact room owner explicitly so those events cannot touch a
@@ -7000,13 +7009,18 @@ async function runGroupMemberTurn(
     drainSecretResumes();
     return false;
   }
-  if (outcome === "timed_out") {
+  if (outcome === "timed_out" || outcome === "cancelled") {
     // turn.completed is intentionally retired above, so it cannot release
     // room ownership for us. Give interrupt a short grace period, then do the
     // same bounded cleanup as the stall watchdog. An unbound goal handshake
     // keeps the room closed until attribution becomes safe.
     const releaseOwnership = () => {
       if (turnResourceOwners.get(threadId)?.generation !== resourceOwner.generation) return;
+      if (instance.adapter.hasActiveTurn?.(threadId)) {
+        const retry = setTimeout(releaseOwnership, 1_000);
+        retry.unref?.();
+        return;
+      }
       if (hasUnboundDiscardedGroupGoalTurn(threadId)) {
         const retry = setTimeout(releaseOwnership, 1_000);
         retry.unref?.();
@@ -8788,6 +8802,17 @@ async function reloadProviders() {
   // one synchronous step before the first teardown await, including room/task
   // threads that are not a bot's default DM.
   revokeAllInternalCapabilities();
+  // Remote/sidecar cancellation is not process death. Keep its registry entry
+  // and desktop ownership if shutdown cannot be confirmed; disposeAll normally
+  // swallows disposal errors and must not lose that still-running owner.
+  try {
+    await Promise.all(registry.instances()
+      .filter(instance => instance.adapter.hasActiveTurn)
+      .map(instance => instance.adapter.stopAll()));
+  } catch (error) {
+    providerFleetReloading = false;
+    throw error;
+  }
   releaseAllComputerTurnClaims();
   const direct = store.bots.flatMap((bot) => store.tasks(bot.id)
     .filter((task) => threadBusy(bot.id, task.threadId))
@@ -11963,8 +11988,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       for (const { threadId } of interruptTargets) cancelGroupTurnOperations(group.id, threadId);
       for (const { threadId, instance } of interruptTargets) {
         revokeInternalCapabilitiesForThread(threadId);
-        await instance?.adapter.interruptTurn(threadId).catch(() => {});
-        closeOpenApprovals(threadId);
+        try { await instance?.adapter.interruptTurn(threadId); }
+        finally { closeOpenApprovals(threadId); }
       }
       return json(res, 200, { ok: true });
     }
@@ -13364,7 +13389,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         resolvePeerComms(approvalBus, String(body.requestId), behavior)) {
         return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
       }
-      const outcome = await answerRequest(bot.threadId, bot.modelSelection.instanceId, String(body.requestId), behavior, body.message, { id: bot.id, name: bot.name }, body.always === true);
+      const outcome = await answerRequest(bot.threadId, bot.modelSelection.instanceId, String(body.requestId), behavior, body.message, { id: bot.id, name: bot.name }, body.always === true, body.answers, body.cancelQuestion === true);
       return json(res, 200, { ok: true, outcome });
     }
     // Answer by THREAD, so a request raised inside a room can be answered
@@ -13447,7 +13472,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         : store.botByThread(threadId);
       if (!owner && !pending) return json(res, 404, { error: "nothing is waiting on an answer in this conversation" });
       const requestOwner = owner ? botForThread(owner.id, threadId) : null;
-      const outcome = await answerRequest(threadId, requestOwner?.modelSelection.instanceId ?? "", requestId, behavior, body.message, owner ? { id: owner.id, name: owner.name } : undefined, body.always === true);
+      const outcome = await answerRequest(threadId, requestOwner?.modelSelection.instanceId ?? "", requestId, behavior, body.message, owner ? { id: owner.id, name: owner.name } : undefined, body.always === true, body.answers, body.cancelQuestion === true);
       return json(res, 200, { ok: true, outcome });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/interrupt$/);
@@ -13495,8 +13520,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         }
         cancelGroupTurnOperations(busyGroup.group.id, busyGroup.threadId);
         revokeInternalCapabilitiesForThread(busyGroup.threadId);
-        await instance?.adapter.interruptTurn(busyGroup.threadId).catch(() => {});
-        closeOpenApprovals(busyGroup.threadId);
+        try { await instance?.adapter.interruptTurn(busyGroup.threadId); }
+        finally { closeOpenApprovals(busyGroup.threadId); }
         return json(res, 200, { ok: true });
       }
       if (

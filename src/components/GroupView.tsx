@@ -38,6 +38,7 @@ import { AttachedFileChips, AttachedImageGallery } from "./AttachmentPreview";
 import { GroupCallButton, GroupCallOverlay } from "./GroupCallView";
 
 import { ApprovalCard } from "./ApprovalCard";
+import { QuestionCard } from "./QuestionCard";
 import { ManageMembersPanel } from "./ManageMembersPanel";
 import { groupActivityRuns } from "@/lib/activity-runs";
 import { ActivityRun } from "./ActivityRun";
@@ -239,6 +240,8 @@ const Transcript = memo(function Transcript({
             <SecretRequestCard botId={m.from.botId} threadId={group.threadId} message={m} />
           ) : m.kind === "connector" && m.connector && m.from?.botId ? (
             <ConnectorCard botId={m.from.botId} threadId={group.threadId} message={m} />
+          ) : m.kind === "options" && m.card?.questionRequest ? (
+            <QuestionCard threadId={group.threadId} bot={memberOf(m.from?.botId)} message={m} />
           ) : m.kind === "options" && m.card?.requestId && m.card.tool ? (
             <div className="flex justify-start">
               <ApprovalCard bot={memberOf(m.from?.botId)} message={m} />

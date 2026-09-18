@@ -14,6 +14,7 @@
 import { closeSync, fstatSync, openSync, readSync, type Stats } from "node:fs";
 import { join } from "node:path";
 import type { RuntimeEvent } from "./contracts.ts";
+import { parseHarnessQuestions } from "../shared/ask-question.ts";
 
 /** One line of native/<threadId>.ndjson (server/drivers/native.ts). */
 export interface NativeRecord {
@@ -212,7 +213,8 @@ function isRuntimeEvent(value: unknown): value is RuntimeEvent {
         (value.requestType === "permission" || value.requestType === "question") &&
         typeof value.tool === "string" &&
         typeof value.summary === "string" &&
-        stringsOrMissing(value.choices)
+        stringsOrMissing(value.choices) &&
+        (value.questions === undefined || parseHarnessQuestions(value.questions) !== null)
       );
     case "request.resolved":
       return (

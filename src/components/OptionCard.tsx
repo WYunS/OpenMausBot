@@ -2,6 +2,7 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import { useStore, visibleMessages, type Message } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { parseChoices } from "../../shared/ask-question";
 
 const LETTERS = ["A", "B", "C", "D", "E", "F"];
 
@@ -63,7 +64,7 @@ export function OptionCard({
       </div>
 
       <div className="mt-3 overflow-hidden rounded-lg border border-hairline/40">
-        {card.options.map((opt, i) => (
+        {(parseChoices(card.options, 64) ?? []).map((opt, i) => (
           <button
             key={opt}
             disabled={!!card.answered}

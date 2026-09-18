@@ -59,6 +59,7 @@ import { SecretRequestCard } from "./SecretRequestCard";
 import { hasRoutineExecutionTask, RoutineRunCard } from "./RoutineRunCard";
 import { AttachedFileChips, AttachedImageGallery } from "./AttachmentPreview";
 import { ScreenFrame } from "./ScreenFrame";
+import { QuestionCard } from "./QuestionCard";
 import { RenameTitle } from "./RenameTitle";
 import { BotActivityPicker, TaskPicker } from "./TaskPicker";
 import { ModelPicker } from "./ModelPicker";
@@ -714,6 +715,7 @@ const MessagesList = memo(function MessagesList({
             case "connector":
               return m.connector ? <ConnectorCard botId={bot.id} threadId={bot.threadId} message={m} /> : null;
             case "options":
+              if (m.card?.questionRequest) return <QuestionCard threadId={bot.threadId} bot={bot} message={m} />;
               // a live permission ask gets the approval box; questions keep
               // the list card. The first-run quiz drops out once they talk.
               if (m.card?.requestId && m.card.tool) {

@@ -1,8 +1,9 @@
 /**
- * Adapter for the locally installed Ruijie Harness desktop Host.
+ * Adapter for the private, Bot-owned Ruijie Harness Host (or an explicit
+ * development endpoint). Installing/opening the standalone app is not needed.
  *
  * The desktop owns OAuth, quota, plugins, tools, and machine routing. This
- * driver discovers or starts the packaged app and only speaks its loopback
+ * driver starts the pinned sidecar and only speaks its loopback
  * API, so credentials never cross into OpenMausBot and both products use the
  * same authenticated account.
  */
@@ -28,6 +29,8 @@ import { computerProxyEnv } from "../container-computer.ts";
 import { mutatingComputerTool } from "../computer-tools.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { withoutHarnessWebSearch } from "./ruijie-harness-preset.ts";
+import { parseHarnessQuestions, validateQuestionAnswers, legacyQuestionAnswer, questionChoices, type AskQuestion } from "../../shared/ask-question.ts";
+import { harnessDenial, harnessDenialMessage, type HarnessDenial } from "../../shared/harness-failure.ts";
 import {
   defaultRuijieBridgePath,
   ruijieHarnessLocator,
@@ -75,8 +78,16 @@ export interface RuijieHarnessConfig {
 interface PendingTurn {
   turnId: TurnId;
   sessionId: string;
+  endpoint: string;
+  dispatchDone: Promise<void>;
+  dispatched: boolean;
+  terminalSeen?: boolean;
+  cancelAccepted?: boolean;
+  cancelledProviderTurn?: number;
+  stopping?: Promise<void>;
   abort: AbortController;
   providerTurn?: number;
+  providerTurnFloor: number;
   interrupted: boolean;
   settled: boolean;
   requiresComputerAction: boolean;
@@ -127,11 +138,12 @@ const COMPUTER_RETRY_PROMPT =
 
 interface PendingRequest {
   kind: "approval" | "question";
+  responding?: boolean;
   endpoint: string;
   rpcId: string;
   sessionId: string;
   approvalId?: string;
-  questions?: Array<{ id?: unknown }>;
+  questions?: AskQuestion[];
 }
 
 interface HarnessSession {
@@ -345,11 +357,13 @@ async function rpc<T>(endpoint: string, method: string, payload: unknown, signal
   return envelope.result.value as T;
 }
 
-async function respond(endpoint: string, rpcId: string, value: unknown): Promise<boolean> {
+async function respond(endpoint: string, rpcId: string, value: unknown, cancelled = false): Promise<boolean> {
   const response = await fetch(`${endpoint}/api/respond`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ type: "client-response", rpcId, result: { ok: true, value } }),
+    body: JSON.stringify({ type: "client-response", rpcId, result: cancelled
+      ? { ok: false, error: { code: "cancelled", message: "User cancelled the question", details: {} } }
+      : { ok: true, value } }),
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) return false;
@@ -404,11 +418,13 @@ function textOfAssistantMessage(data: unknown): string {
   }).join("");
 }
 
-function reasonOfTurnEnd(data: unknown): { ok: boolean; stopReason: string; message?: string } {
+function reasonOfTurnEnd(data: unknown): { ok: boolean; stopReason: string; message?: string; failure?: HarnessDenial } {
   const reason = (data as { reason?: { kind?: unknown; error?: { message?: unknown } } } | undefined)?.reason;
   const kind = typeof reason?.kind === "string" ? reason.kind : "completed";
   if (kind === "completed" || kind === "max-tokens") return { ok: true, stopReason: kind };
   if (kind === "interrupted" || kind === "aborted") return { ok: false, stopReason: "interrupted" };
+  const failure = kind === "error" ? harnessDenial(reason?.error) : undefined;
+  if (failure) return { ok: false, stopReason: `harness_${failure.kind}_denied`, message: harnessDenialMessage(failure), failure };
   const message = typeof reason?.error?.message === "string" ? reason.error.message : `锐捷 Harness 任务结束：${kind}`;
   return { ok: false, stopReason: kind, message };
 }
@@ -596,6 +612,7 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
     const listeners = new Set<RuntimeEventListener>();
     const sessions = new Map<string, HarnessSession>();
     const active = new Map<string, PendingTurn>();
+    const starting = new Map<string, AbortController>();
     const requests = new Map<string, PendingRequest>();
     const emit = (event: DriverEvent) => {
       const full = {
@@ -626,20 +643,32 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
       await updateModelCatalog(endpoint);
     };
 
-    const settle = (threadId: string, pending: PendingTurn, ok: boolean, stopReason: string, message?: string) => {
+    const settle = (threadId: string, pending: PendingTurn, ok: boolean, stopReason: string, message?: string, failure?: HarnessDenial) => {
       if (pending.settled) return;
       pending.settled = true;
       pending.abort.abort();
-      active.delete(threadId);
+      if (active.get(threadId) === pending) active.delete(threadId);
       for (const [id, request] of requests) if (request.sessionId === pending.sessionId) requests.delete(id);
-      if (message && !pending.interrupted) emit({ type: "runtime.error", threadId, turnId: pending.turnId, message });
+      if (message && !pending.interrupted) emit({ type: "runtime.error", threadId, turnId: pending.turnId, message, ...(failure ? { failure } : {}) });
       const usage = totalUsage(pending);
       emit({ type: "turn.completed", threadId, turnId: pending.turnId, ok, stopReason, ...(usage ? { usage } : {}) });
     };
 
     const handleFrame = (threadId: string, pending: PendingTurn, endpoint: string, envelope: { rpcId?: unknown; payload?: unknown }) => {
+      if (pending.settled || active.get(threadId) !== pending) return;
       const frame = envelope.payload as Record<string, unknown> | undefined;
       if (!frame || frame.sessionId !== pending.sessionId) return;
+      if (frame.type === "question/resolved" || frame.type === "approval/resolved") {
+        const request = frame.type === "question/resolved"
+          ? requests.get(String(frame.questionRpcId))
+          : [...requests.values()].find(item => item.sessionId === pending.sessionId && item.approvalId === frame.approvalId);
+        if (request) {
+          requests.delete(request.rpcId);
+          emit({ type: "request.resolved", threadId, turnId: pending.turnId, requestId: request.rpcId,
+            behavior: request.kind === "question" ? "answer" : frame.outcome === "rejected" ? "deny" : "allow", source: "system" });
+        }
+        return;
+      }
       if (frame.type === "approval/requested" && typeof envelope.rpcId === "string") {
         const requestId = envelope.rpcId;
         requests.set(requestId, {
@@ -655,16 +684,20 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
       }
       if (frame.type === "question/requested" && typeof envelope.rpcId === "string") {
         const requestId = envelope.rpcId;
-        const questions = Array.isArray(frame.questions) ? frame.questions as Array<Record<string, unknown>> : [];
+        const questions = parseHarnessQuestions(frame.questions);
+        if (!questions) {
+          emit({ type: "runtime.error", threadId, turnId: pending.turnId, message: "Harness 的问题格式无效或超出支持范围，已取消这次提问，请让它拆分后重试。" });
+          void respond(endpoint, requestId, undefined, true).catch(() => {});
+          return;
+        }
         requests.set(requestId, { kind: "question", endpoint, rpcId: requestId, sessionId: pending.sessionId, questions });
         const first = questions[0];
         emit({
           type: "request.opened", threadId, turnId: pending.turnId, requestId,
           requestType: "question", tool: "question",
           summary: typeof first?.question === "string" ? first.question : "锐捷 Harness 需要你的回答",
-          choices: Array.isArray(first?.options)
-            ? first.options.flatMap((choice) => typeof choice === "string" ? [choice] : [])
-            : undefined,
+          choices: questionChoices(questions),
+          questions,
         });
         return;
       }
@@ -673,7 +706,8 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
       if (!event || typeof event.type !== "string") return;
       const data = event.data as Record<string, unknown> | undefined;
       const providerTurn = typeof data?.turn === "number" ? data.turn : undefined;
-      if (event.type === "turn/start" && pending.providerTurn === undefined) pending.providerTurn = providerTurn;
+      if (providerTurn !== undefined && providerTurn <= pending.providerTurnFloor) return;
+      if (pending.dispatched && pending.providerTurn === undefined && providerTurn !== undefined) pending.providerTurn = providerTurn;
       if (pending.providerTurn !== undefined && providerTurn !== undefined && providerTurn !== pending.providerTurn) return;
       if (event.type === "assistant/chunk") {
         const chunk = data?.chunk as Record<string, unknown> | undefined;
@@ -726,6 +760,7 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
             sessionId: pending.sessionId,
             attachmentId: image.attachmentId,
           }).then((loaded) => {
+            if (pending.settled || active.get(threadId) !== pending) return;
             if (typeof loaded.data !== "string" || !loaded.data) return;
             const mime = loaded.attachment?.mediaType;
             emit({
@@ -738,6 +773,11 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
           }).catch(() => undefined);
         }
       } else if (event.type === "turn/end") {
+        if (pending.interrupted) {
+          if (pending.providerTurn !== undefined && providerTurn === pending.providerTurn) pending.terminalSeen = true;
+          if (pending.terminalSeen && !pending.stopping) void adapter.interruptTurn(threadId, pending.turnId).catch(() => {});
+          return;
+        }
         const result = reasonOfTurnEnd(data);
         if (
           result.ok &&
@@ -747,18 +787,23 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
         ) {
           if (pending.computerRetryCount === 0) {
             pending.computerRetryCount += 1;
+            pending.providerTurnFloor = pending.providerTurn ?? pending.providerTurnFloor;
             pending.providerTurn = undefined;
+            pending.terminalSeen = false;
             pending.toolNames.clear();
-            void rpc(endpoint, "session.prompt", {
+            const retry = rpc(endpoint, "session.prompt", {
               sessionId: pending.sessionId,
               mode: "queue",
               content: [{ type: "text", text: COMPUTER_RETRY_PROMPT }],
               clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
             }, pending.abort.signal).catch((cause: unknown) => {
-              if (!pending.interrupted) {
-                settle(threadId, pending, false, "request_error", cause instanceof Error ? cause.message : String(cause));
-              }
+              if (pending.settled) return;
+              if (!pending.interrupted) emit({ type: "runtime.error", threadId, turnId: pending.turnId, message: cause instanceof Error ? cause.message : String(cause) });
+              // Receipt loss is ambiguous here too; never release the computer
+              // while a queued retry might still start.
+              void adapter.interruptTurn(threadId, pending.turnId).catch(() => {});
             });
+            pending.dispatchDone = Promise.all([pending.dispatchDone, retry]).then(() => {});
             return;
           }
           settle(
@@ -770,7 +815,7 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
           );
           return;
         }
-        settle(threadId, pending, pending.interrupted ? false : result.ok, pending.interrupted ? "interrupted" : result.stopReason, result.message);
+        settle(threadId, pending, pending.interrupted ? false : result.ok, pending.interrupted ? "interrupted" : result.stopReason, result.message, result.failure);
       }
     };
 
@@ -789,9 +834,16 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
         browserMcp: true,
       },
       async sendTurn(turn: SendTurnInput) {
-        if (active.has(turn.threadId)) throw new Error("锐捷 Harness 正在处理这个会话");
+        if (active.has(turn.threadId) || starting.has(turn.threadId)) throw new Error("锐捷 Harness 正在处理或停止这个会话");
+        const startup = new AbortController();
+        starting.set(turn.threadId, startup);
+        let dispatchFinished!: () => void;
+        let pendingTurn: PendingTurn | undefined;
+        const dispatchDone = new Promise<void>(resolve => { dispatchFinished = resolve; });
+        try {
         const endpoint = await resolveEndpoint(input.config);
         await matchingSsoSummary(endpoint, input.config.expectedAccountEmail);
+        startup.signal.throwIfAborted();
         const computer = computerIntegration(turn);
         const integrations = stdioIntegrations(turn, computer);
         const integrationKey = stableIntegrationKey(integrations);
@@ -844,10 +896,21 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
           sessionId, provider: selected.provider, model: selected.model,
           ...(reasoningEffort ? { reasoningEffort } : {}),
         });
+        startup.signal.throwIfAborted();
+
+        // Only a newer turn can confirm this invocation. Private Bot sessions
+        // have one writer, but a resumed session still contains old terminals.
+        const baseline = freshSession ? undefined : await rpc<{ events?: Array<{ event?: { data?: { turn?: number } } }> }>(endpoint, "session.history", { sessionId, maxMessages: 1 });
+        const providerTurnFloor = Math.max(-1, ...(baseline?.events ?? []).map(entry => typeof entry.event?.data?.turn === "number" ? entry.event.data.turn : -1));
+        startup.signal.throwIfAborted();
 
         const pending: PendingTurn = {
           turnId: newId(),
           sessionId,
+          endpoint,
+          dispatchDone,
+          dispatched: false,
+          providerTurnFloor,
           abort: new AbortController(),
           interrupted: false,
           settled: false,
@@ -858,19 +921,22 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
           toolNames: new Map(),
           usageByStep: new Map(),
         };
+        pendingTurn = pending;
         active.set(turn.threadId, pending);
         let opened!: () => void;
         const ready = new Promise<void>((resolve) => { opened = resolve; });
         void pumpEvents(endpoint, pending.abort.signal, (envelope) => handleFrame(turn.threadId, pending, endpoint, envelope), opened)
           .catch((cause: unknown) => {
             if (!pending.interrupted && !pending.abort.signal.aborted) {
-              settle(turn.threadId, pending, false, "connection_error", cause instanceof Error ? cause.message : String(cause));
+              emit({ type: "runtime.error", threadId: turn.threadId, turnId: pending.turnId, message: cause instanceof Error ? cause.message : String(cause) });
+              void adapter.interruptTurn(turn.threadId, pending.turnId).catch(() => {});
             }
           });
         await Promise.race([
           ready,
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error("连接锐捷 Harness 事件流超时")), 10_000)),
         ]);
+        if (pending.interrupted) return { turnId: pending.turnId };
         emit({ type: "session.started", threadId: turn.threadId, turnId: pending.turnId, sessionId, model: turn.model ?? catalog.default });
         emit({ type: "turn.started", threadId: turn.threadId, turnId: pending.turnId });
         // Browser capability rotation requires a new scoped preset/session.
@@ -887,45 +953,106 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
             data: (await readFile(image.path)).toString("base64"),
           }))),
         ];
+        if (pending.interrupted) return { turnId: pending.turnId };
+        pending.dispatched = true;
         await rpc(endpoint, "session.prompt", {
           sessionId, mode: "queue", content,
           clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        }, pending.abort.signal).catch((cause: unknown) => {
-          if (!pending.interrupted) settle(turn.threadId, pending, false, "request_error", cause instanceof Error ? cause.message : String(cause));
-        });
+        }, pending.abort.signal);
         return { turnId: pending.turnId };
+        } catch (cause) {
+          if (pendingTurn?.dispatched) {
+            // A lost admission receipt does not prove the prompt wasn't run.
+            // Keep the turn attributed and cancel/confirm, never replay it.
+            emit({ type: "runtime.error", threadId: turn.threadId, turnId: pendingTurn.turnId, message: cause instanceof Error ? cause.message : String(cause) });
+            void adapter.interruptTurn(turn.threadId, pendingTurn.turnId).catch(() => {});
+            return { turnId: pendingTurn.turnId };
+          }
+          if (pendingTurn) settle(turn.threadId, pendingTurn, false, "request_error", cause instanceof Error ? cause.message : String(cause));
+          throw cause;
+        } finally {
+          dispatchFinished();
+          if (starting.get(turn.threadId) === startup) starting.delete(turn.threadId);
+        }
       },
       async interruptTurn(threadId, turnId) {
         const pending = active.get(threadId);
+        if (turnId && pending?.turnId !== turnId) return;
+        starting.get(threadId)?.abort();
         if (!pending || (turnId && pending.turnId !== turnId)) return;
         pending.interrupted = true;
-        const endpoint = await resolveEndpoint(input.config, false).catch(() => undefined);
-        if (endpoint) void rpc(endpoint, "session.cancel", { sessionId: pending.sessionId }).catch(() => undefined);
-        settle(threadId, pending, false, "interrupted");
+        if (pending.stopping) return pending.stopping;
+        const stopping = (async () => {
+          // Do not race cancel ahead of an in-flight prompt admission. Once
+          // interrupted, sendTurn's guards prevent any later prompt submission.
+          await pending.dispatchDone;
+          if (pending.settled) return;
+          if (!pending.dispatched) { settle(threadId, pending, false, "interrupted"); return; }
+          const deadline = AbortSignal.timeout(30_000);
+          while (!deadline.aborted && !pending.settled) {
+            try {
+              if (!pending.cancelAccepted || pending.cancelledProviderTurn !== pending.providerTurn) {
+                const cancelTurn = pending.providerTurn;
+                const receipt = await rpc<{ accepted?: boolean }>(pending.endpoint, "session.cancel", { sessionId: pending.sessionId }, deadline);
+                pending.cancelAccepted = receipt.accepted === true;
+                pending.cancelledProviderTurn = cancelTurn;
+              }
+              if (!pending.terminalSeen) {
+                const history = await rpc<{ events?: Array<{ event?: { type?: string; data?: { turn?: number } } }> }>(pending.endpoint, "session.history", { sessionId: pending.sessionId, maxMessages: 20 }, deadline);
+                const nextTurn = history.events?.map(entry => entry.event?.data?.turn).find(turn => typeof turn === "number" && turn > pending.providerTurnFloor);
+                if (pending.providerTurn === undefined && nextTurn !== undefined) pending.providerTurn = nextTurn;
+                pending.terminalSeen = pending.providerTurn !== undefined && history.events?.some(({ event }) => event?.type === "turn/end" && event.data?.turn === pending.providerTurn) === true;
+              }
+              if (pending.terminalSeen) {
+                const state = await rpc<{ items?: Array<{ sessionId: string; running: boolean }> }>(pending.endpoint, "session.list", {}, deadline);
+                if (state.items?.some(item => item.sessionId === pending.sessionId && item.running === false)) {
+                  settle(threadId, pending, false, "interrupted");
+                  return;
+                }
+              }
+            } catch { /* A missing snapshot is not proof of idle. Keep ownership. */ }
+            await new Promise(resolve => setTimeout(resolve, 250));
+          }
+          if (!pending.settled) throw new Error("锐捷 Harness 停止尚未确认，电脑仍被占用。请稍后再次点击停止，勿重复执行任务。");
+        })();
+        pending.stopping = stopping;
+        try { await stopping; }
+        finally { if (pending.stopping === stopping) pending.stopping = undefined; }
       },
+      hasActiveTurn: threadId => active.has(threadId) || starting.has(threadId),
       async respondToRequest(threadId, requestId, decision): Promise<RequestOutcome> {
         const request = requests.get(requestId);
         if (!request || sessions.get(threadId)?.id !== request.sessionId) return "unavailable";
+        if (request.responding) throw new Error("这份答案正在发送，请稍候");
         let value: unknown;
         if (request.kind === "approval") {
           if (!request.approvalId) return "unavailable";
           value = { sessionId: request.sessionId, approvalId: request.approvalId, outcome: decision.behavior === "allow" ? "allowed-once" : "rejected" };
         } else {
-          const answer = decision.message ?? "";
+          if (decision.behavior !== "answer" && !decision.cancelQuestion) throw new Error("请回答问题，不要将业务选项作为权限授权");
+          const answers = decision.cancelQuestion ? [] : decision.answers === undefined
+            ? legacyQuestionAnswer(request.questions ?? [], decision.message)
+            : validateQuestionAnswers(request.questions ?? [], decision.answers);
+          if (!answers) throw new Error("问题答案不完整或与题目不匹配，请在问题卡中重新回答");
           value = {
             sessionId: request.sessionId,
-            answer: { answers: (request.questions ?? []).map((question) => ({ id: String(question.id ?? ""), selected: [], custom: answer })) },
+            answer: { answers },
           };
         }
-        const accepted = await respond(request.endpoint, request.rpcId, value).catch(() => false);
+        request.responding = true;
+        let accepted: boolean;
+        try { accepted = await respond(request.endpoint, request.rpcId, value, request.kind === "question" && decision.cancelQuestion === true); }
+        finally { request.responding = false; }
+        if (!accepted && request.kind === "question" && requests.has(requestId)) throw new Error("答案暂未送达，请重试");
         if (!accepted) return "unavailable";
+        const stillPending = requests.has(requestId);
         requests.delete(requestId);
-        emit({ type: "request.resolved", threadId, turnId: active.get(threadId)?.turnId, requestId, behavior: decision.behavior, source: "user" });
+        if (stillPending) emit({ type: "request.resolved", threadId, turnId: active.get(threadId)?.turnId, requestId, behavior: decision.behavior, source: "user" });
         return request.kind === "question" ? "answered" : decision.behavior === "allow" ? "allowed-once" : "rejected";
       },
       hasSession: (threadId) => sessions.has(threadId),
       async stopAll() {
-        await Promise.all([...active.keys()].map((threadId) => adapter.interruptTurn(threadId)));
+        await Promise.all([...new Set([...starting.keys(), ...active.keys()])].map((threadId) => adapter.interruptTurn(threadId)));
       },
       onEvent(listener) {
         listeners.add(listener);

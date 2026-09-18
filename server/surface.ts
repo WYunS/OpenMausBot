@@ -52,36 +52,40 @@ export function surfaceOfComputerKind(kind: "box" | "vps" | "vm" | "local" | nul
 const NO_BROWSER_NOTE =
   " This bot is set to work in the built-in browser, but the built-in browser is switched off in App Settings, so you have no browser and no computer this turn — say so instead of guessing.";
 
-/** Decide what a turn mounts from the bot's destination, the task's pin
- * and what is actually reachable. Explicit choices are strict: a computer
- * destination keeps whatever browser the bot has (the prompt tells the
- * model which to use), a browser destination mounts only the browser. Auto
- * follows the task's pin while the pinned place still exists, and otherwise
- * re-resolves the way it always has. */
+/** One selected screen per turn. Explicit settings outrank inferred wording;
+ * a host prohibition can only remove authority, never select another host. */
 export function resolveSurface(input: {
   destination: Destination;
   pinnedSurface?: Surface | null;
   /** The built-in browser may mount: workspace flag, bot switch and engine. */
   browserOn: boolean;
+  hostIntent?: "require" | "forbid" | "unspecified";
   /** Which pinned surfaces could be mounted right now (Auto only). */
   available?: Partial<Record<Surface, boolean>>;
 }): SurfacePlan {
   const { destination, browserOn } = input;
+  if (destination === "local" && input.hostIntent === "forbid") {
+    return { computer: "off", browser: false, pinned: null, clearPin: false,
+      note: " The user prohibited using this computer. No screen tools are mounted; ask them to select a different computer if needed." };
+  }
   if (destination === "browser") {
     return browserOn
       ? { computer: "off", browser: true, pinned: null, clearPin: false, note: "" }
       : { computer: "off", browser: false, pinned: null, clearPin: false, note: NO_BROWSER_NOTE };
   }
   if (destination !== undefined) {
-    return { computer: destination, browser: browserOn, pinned: null, clearPin: false, note: "" };
+    return { computer: destination, browser: false, pinned: null, clearPin: false, note: "" };
   }
+  if (input.hostIntent === "require") return { computer: "local", browser: false, pinned: null, clearPin: false, note: "" };
+  const autoComputer = browserOn || input.hostIntent === "forbid" ? "off" : undefined;
   const pin = input.pinnedSurface ?? null;
   if (pin === null) {
-    return { computer: undefined, browser: browserOn, pinned: null, clearPin: false, note: "" };
+    return { computer: autoComputer, browser: browserOn, pinned: null, clearPin: false, note: "" };
   }
-  const reachable = pin === "browser" ? browserOn : input.available?.[pin] === true;
+  const reachable = pin === "local" && input.hostIntent === "forbid" ? false
+    : pin === "browser" ? browserOn : input.available?.[pin] === true;
   if (!reachable) {
-    return { computer: undefined, browser: browserOn, pinned: null, clearPin: true, note: "" };
+    return { computer: autoComputer, browser: browserOn, pinned: null, clearPin: true, note: "" };
   }
   return pin === "browser"
     ? { computer: "off", browser: true, pinned: "browser", clearPin: false, note: "" }
