@@ -25,10 +25,13 @@ $env:OMB_BROWSER_CONNECTION = $null
 . (Join-Path $PSScriptRoot 'windows-node-proxy.ps1')
 
 # The source preview must exercise the same embedded-Harness ownership model as
-# the packaged Bot. Prefer an explicit checkout for unusual layouts, otherwise
-# use the sibling checkout maintained beside this repository. This launches the
-# compiled Harness entry with its own Electron binary; it never discovers or
-# reuses an installed/running Harness application.
+# the packaged Bot. Prefer the staged bundle; an explicit source checkout is a
+# development override. Only fall back to the sibling checkout when no bundle
+# has been staged. The server validates the bundle's commit and payload digests;
+# an invalid staged bundle must not silently fall back to old source.
+$stagedHarnessRoot = Join-Path $repoRoot 'dist-native\ruijie-harness\win32-x64'
+$useHarnessSource = $env:OMB_RUIJIE_HARNESS_SOURCE -or
+  -not (Test-Path -LiteralPath $stagedHarnessRoot -PathType Container)
 $harnessRepo = if ($env:OMB_RUIJIE_HARNESS_SOURCE) {
   [IO.Path]::GetFullPath($env:OMB_RUIJIE_HARNESS_SOURCE)
 } else {
@@ -37,7 +40,7 @@ $harnessRepo = if ($env:OMB_RUIJIE_HARNESS_SOURCE) {
 $harnessElectron = Join-Path $harnessRepo 'node_modules\electron\dist\electron.exe'
 $harnessEntry = Join-Path $harnessRepo 'dsh-plugin-desktop\lib\main.js'
 $harnessSidecarRoot = Join-Path $env:OMB_USER_DATA 'harness-sidecar'
-if ((Test-Path -LiteralPath $harnessElectron -PathType Leaf) -and
+if ($useHarnessSource -and (Test-Path -LiteralPath $harnessElectron -PathType Leaf) -and
     (Test-Path -LiteralPath $harnessEntry -PathType Leaf)) {
   $env:RUIJIE_HARNESS_EXECUTABLE = $harnessElectron
   $env:RUIJIE_HARNESS_ARGUMENTS = (@($harnessEntry, '--openmaus-server') | ConvertTo-Json -Compress)

@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 const launcher = new URL("../scripts/start-local-windows.ps1", import.meta.url);
@@ -9,6 +12,41 @@ const shortcutInstaller = new URL("../scripts/install-local-windows-shortcut.ps1
 const previewPreparation = new URL("../scripts/prepare-local-preview.mjs", import.meta.url);
 const mainProcess = new URL("./main.mjs", import.meta.url);
 const onboarding = new URL("../src/components/Onboarding.tsx", import.meta.url);
+
+test("Windows preview selects the staged Harness over old source, with an explicit source override", {
+  skip: process.platform !== 'win32',
+}, async () => {
+  const fixture = await mkdtemp(path.join(tmpdir(), 'omb-harness-launcher-'));
+  try {
+    const repo = path.join(fixture, 'bot');
+    const source = path.join(fixture, 'ruijie-harness-source');
+    for (const file of ['node_modules/electron/dist/electron.exe', 'dsh-plugin-desktop/lib/main.js']) {
+      await mkdir(path.dirname(path.join(source, file)), { recursive: true });
+      await writeFile(path.join(source, file), 'fixture');
+    }
+    await mkdir(repo);
+    const launcherSource = await readFile(launcher, 'utf8');
+    const block = launcherSource.slice(launcherSource.indexOf('$stagedHarnessRoot ='),
+      launcherSource.indexOf('# Use the same staged native pair'));
+    const script = path.join(fixture, 'select.ps1');
+    await writeFile(script, `$ErrorActionPreference = 'Stop'\n$repoRoot = $env:OMB_FIXTURE_REPO\n${block}\n@{ executable = $env:RUIJIE_HARNESS_EXECUTABLE; arguments = $env:RUIJIE_HARNESS_ARGUMENTS } | ConvertTo-Json -Compress`);
+    const select = (override = '') => JSON.parse(execFileSync('powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], {
+        encoding: 'utf8', windowsHide: true,
+        env: { ...process.env, OMB_FIXTURE_REPO: repo, OMB_USER_DATA: path.join(fixture, 'data'),
+          OMB_RUIJIE_HARNESS_SOURCE: override, RUIJIE_HARNESS_EXECUTABLE: 'stale-override',
+          RUIJIE_HARNESS_ARGUMENTS: 'stale-arguments' },
+      }));
+    assert.equal(select().executable, path.join(source, 'node_modules/electron/dist/electron.exe'));
+    // Even an incomplete stage must reach runtime validation, not the old source.
+    await mkdir(path.join(repo, 'dist-native/ruijie-harness/win32-x64'), { recursive: true });
+    assert.equal(select().executable, null);
+    assert.equal(select().arguments, null);
+    assert.equal(select(source).executable, path.join(source, 'node_modules/electron/dist/electron.exe'));
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
 
 test("source browser uses the complete staged Windows pair without overriding explicit paths", async () => {
   const source = await readFile(launcher, "utf8");

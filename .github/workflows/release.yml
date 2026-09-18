@@ -108,7 +108,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: AI-Applications-Team/ruijie-harness
-          ref: a7c71c4cadaad2db218d126146973e38649a6f43
+          ref: f48fe5cb09e37c1bcb4ed2c19f75ce5e1bf8aeae
           path: ruijie-harness
           persist-credentials: false
           submodules: recursive
@@ -144,7 +144,7 @@ jobs:
         env:
           RUIJIE_HARNESS_BUNDLE_SOURCE_DARWIN_ARM64: ${{ github.workspace }}/ruijie-harness/dsh-plugin-desktop/dist/mac-universal/锐捷 Harness.app
           RUIJIE_HARNESS_BUNDLE_SOURCE_DARWIN_X64: ${{ github.workspace }}/ruijie-harness/dsh-plugin-desktop/dist/mac-universal/锐捷 Harness.app
-          RUIJIE_HARNESS_BUILD_COMMIT: a7c71c4cadaad2db218d126146973e38649a6f43
+          RUIJIE_HARNESS_BUILD_COMMIT: f48fe5cb09e37c1bcb4ed2c19f75ce5e1bf8aeae
         run: pnpm package:mac
 
       - name: "Gate: both packaged apps use the canonical updater feed"
@@ -291,7 +291,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: AI-Applications-Team/ruijie-harness
-          ref: a7c71c4cadaad2db218d126146973e38649a6f43
+          ref: f48fe5cb09e37c1bcb4ed2c19f75ce5e1bf8aeae
           path: ruijie-harness
           persist-credentials: false
           submodules: recursive
@@ -309,7 +309,7 @@ jobs:
       - run: pnpm package:win
         env:
           RUIJIE_HARNESS_BUNDLE_SOURCE_WIN32_X64: ${{ github.workspace }}\ruijie-harness\dsh-plugin-desktop\dist\win-unpacked
-          RUIJIE_HARNESS_BUILD_COMMIT: a7c71c4cadaad2db218d126146973e38649a6f43
+          RUIJIE_HARNESS_BUILD_COMMIT: f48fe5cb09e37c1bcb4ed2c19f75ce5e1bf8aeae
       - name: "Gate: bundled browser works with an empty home"
         run: node scripts/smoke-browser-bundle.mjs --resources "${{ github.workspace }}/release/win-unpacked/resources"
       - name: "Gate: packaged Windows server discovers its browser"

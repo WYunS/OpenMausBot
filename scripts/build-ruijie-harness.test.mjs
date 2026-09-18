@@ -5,10 +5,15 @@ import { HARNESS_RELEASE } from '../shared/ruijie-harness-release.ts';
 import { harnessBuildArguments } from './build-ruijie-harness.mjs';
 
 it.each(['win32', 'darwin'])('builds a source-stamped directory, never an installer: %s', platform => {
-  const args = harnessBuildArguments(platform);
+  const args = harnessBuildArguments(platform, 'C:/fixture with spaces/electron/dist');
   expect(args).toContain('--dir');
   expect(args).toContain(`--config.extraMetadata.ruijieHarnessBuildCommit=${HARNESS_RELEASE.commit}`);
   expect(args).not.toContain('dmg');
+  if (platform === 'win32') {
+    expect(args).toContain('--config.npmRebuild=false');
+    expect(args).toContain('--config.win.signExecutable=false');
+    expect(args).toContain('--config.electronDist=C:/fixture with spaces/electron/dist');
+  }
   if (platform === 'darwin') {
     expect(args).toContain('--universal');
     expect(args).toContain('--config.afterPack=./scripts/sign-mac-internal.ts');

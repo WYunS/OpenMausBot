@@ -2,15 +2,20 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { HARNESS_RELEASE } from '../shared/ruijie-harness-release.ts';
 import { prepareRuijieHarness } from './prepare-ruijie-harness.mjs';
 
-export function harnessBuildArguments(platform) {
+export function harnessBuildArguments(platform, electronDist) {
   assert(['win32', 'darwin'].includes(platform), 'Bundled Harness supports Windows and macOS');
+  if (platform === 'win32') assert(electronDist, 'Use the source-installed Electron distribution');
   return ['yarn', 'exec', 'electron-builder', '--dir',
-    ...(platform === 'win32' ? ['--win', '--x64'] : ['--mac', '--universal',
+    // Match Harness's native Windows package entry: node-pty ships verified
+    // prebuilds, and the installed Electron distribution needs no download.
+    ...(platform === 'win32' ? ['--win', '--x64', '--config.npmRebuild=false',
+      '--config.win.signExecutable=false', `--config.electronDist=${electronDist}`] : ['--mac', '--universal',
       '--config.mac.notarize=false', '--config.npmRebuild=false',
       '--config.afterPack=./scripts/sign-mac-internal.ts']),
     '--publish', 'never', `--config.extraMetadata.ruijieHarnessBuildCommit=${HARNESS_RELEASE.commit}`];
@@ -28,7 +33,6 @@ export async function verifyHarnessSource(sourceRoot) {
 export async function buildRuijieHarness({ sourceRoot, directory = fileURLToPath(new URL('../', import.meta.url)), platform = process.platform } = {}) {
   assert(sourceRoot, 'Use --source PATH to the pinned Harness checkout');
   sourceRoot = path.resolve(sourceRoot);
-  const args = harnessBuildArguments(platform);
   assert.equal(platform, process.platform, 'Build the sidecar on its native platform');
   await verifyHarnessSource(sourceRoot);
   const desktop = path.join(sourceRoot, 'dsh-plugin-desktop');
@@ -42,13 +46,19 @@ export async function buildRuijieHarness({ sourceRoot, directory = fileURLToPath
   run('corepack', ['yarn', 'install', '--immutable'], sourceRoot);
   run('corepack', ['yarn', 'workspace', 'dsh-community-market', 'build'], sourceRoot);
   run('corepack', ['yarn', 'workspace', 'dsh-plugin-desktop', 'build:vendor-sidebar'], sourceRoot);
+  run('corepack', ['yarn', 'workspace', 'dsh-plugin-desktop', 'verify:vendor-sidebar'], sourceRoot);
   run('corepack', ['yarn', 'workspace', 'dsh-plugin-desktop', 'build'], sourceRoot);
+  await verifyHarnessSource(sourceRoot);
+  const sourceRequire = createRequire(path.join(desktop, 'package.json'));
+  const args = harnessBuildArguments(platform,
+    path.join(path.dirname(sourceRequire.resolve('electron/package.json')), 'dist'));
   if (platform === 'darwin') {
     const { prepareInstalledMacUniversalRuntime } = await import(pathToFileURL(path.join(desktop, 'scripts/mac-universal.ts')).href);
     prepareInstalledMacUniversalRuntime(desktop);
     run(process.execPath, ['scripts/generate-mac-app-icns.mjs'], desktop);
   }
-  run('corepack', args, desktop);
+  // No shell interpolation: checkout paths can contain spaces or metacharacters.
+  run(process.execPath, [sourceRequire.resolve('electron-builder/cli.js'), ...args.slice(3)], desktop);
   for (const target of platform === 'darwin' ? ['darwin-arm64', 'darwin-x64'] : ['win32-x64']) {
     const source = path.join(desktop, 'dist', platform === 'darwin' ? 'mac-universal/锐捷 Harness.app' : 'win-unpacked');
     const { output } = await prepareRuijieHarness({ target, source, directory });
