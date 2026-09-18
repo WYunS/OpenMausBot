@@ -58,6 +58,7 @@ import { ConnectorCard } from "./ConnectorCard";
 import { SecretRequestCard } from "./SecretRequestCard";
 import { hasRoutineExecutionTask, RoutineRunCard } from "./RoutineRunCard";
 import { AttachedFileChips, AttachedImageGallery } from "./AttachmentPreview";
+import { ScreenFrame } from "./ScreenFrame";
 import { RenameTitle } from "./RenameTitle";
 import { BotActivityPicker, TaskPicker } from "./TaskPicker";
 import { ModelPicker } from "./ModelPicker";
@@ -578,17 +579,7 @@ function ActivityChip({ message }: { message: Message }) {
   );
 }
 
-function ScreenFrame({ png, mime }: { png: string; mime?: string }) {
-  return (
-    <div className="flex justify-start">
-      <img
-        src={`data:${mime ?? "image/png"};base64,${png}`}
-        alt={t("chat.botScreen")}
-        className="w-fit max-w-[min(42rem,78%)] rounded-2xl border border-hairline/40"
-      />
-    </div>
-  );
-}
+// Screen frames share the existing attachment viewer.
 
 /** The settled transcript, memoized as one unit: during streaming every
  * frame re-renders ChatView, but all of these props keep their identity
