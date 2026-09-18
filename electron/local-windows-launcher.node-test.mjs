@@ -47,7 +47,13 @@ test("the shortcut owns the credential-aware server and prepares installer-equiv
   assert.doesNotMatch(source, /\$env:OMB_DESKTOP_PARENT\s*=\s*\$null/);
   assert.doesNotMatch(source, /\$env:OMB_USER_DATA\s*=.*'锐捷Bot'/);
   assert.doesNotMatch(source, /D:\\ChatGPT\\RuijieDSH/);
-  assert.match(source, /\$env:RUIJIE_HARNESS_EXECUTABLE\s*=\s*\$null/);
+  assert.match(source, /ruijie-harness-source/);
+  assert.match(source, /\$env:RUIJIE_HARNESS_EXECUTABLE\s*=\s*\$harnessElectron/);
+  assert.match(source, /\$env:RUIJIE_HARNESS_ARGUMENTS\s*=.*ConvertTo-Json -Compress/);
+  assert.match(source, /\$env:RUIJIE_HARNESS_HOME\s*=\s*Join-Path \$harnessSidecarRoot 'dsh'/);
+  assert.match(source, /\$env:RUIJIE_HARNESS_USER_DATA_DIR\s*=\s*Join-Path \$harnessSidecarRoot 'electron'/);
+  assert.match(source, /\$env:RUIJIE_HARNESS_BRIDGE_DIR\s*=\s*Join-Path \$harnessSidecarRoot 'bridge'/);
+  assert.match(source, /\$env:RUIJIE_HARNESS_BRIDGE\s*=\s*Join-Path \$env:RUIJIE_HARNESS_BRIDGE_DIR 'openmaus-bridge\.json'/);
 });
 
 test("a second desktop launch reaches Electron so it can restore the existing window", async () => {

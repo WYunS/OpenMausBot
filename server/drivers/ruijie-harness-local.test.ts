@@ -32,6 +32,7 @@ function dependencies(
     inspectExecutable: async () => ({ running: false, endpoints: [] }),
     probeEndpoint: async () => false,
     launchExecutable: async () => {},
+    updateLaunchedAuthentication: () => {},
     stopLaunchedExecutable: async () => {},
     now: () => clock,
     sleep: async (milliseconds) => { clock += milliseconds; },
@@ -48,7 +49,7 @@ describe("installed Ruijie Harness discovery", () => {
       environment: {},
       pathExists: async (path) => path === bundled || path === WINDOWS_EXECUTABLE,
       readText: async () => JSON.stringify({
-        schemaVersion: 1, version: "2.1.9", target: "win32-x64",
+        schemaVersion: 1, version: "2.1.10", target: "win32-x64",
         executable: "runtime/Ruijie-Harness.exe",
         executableSha256: "a".repeat(64),
         bridge: { schemaVersion: 1, capability: "openmaus-server-v1" },
@@ -60,9 +61,66 @@ describe("installed Ruijie Harness discovery", () => {
       probeEndpoint: async () => running,
       launchExecutable,
     }));
+    locator.updateAuthentication({ accessToken: "access", refreshToken: "refresh" });
     await expect(locator.ensureEndpoint({ bridgePath: "bridge", bundledRoot: "C:\\resources\\ruijie-harness" }))
       .resolves.toBe("http://127.0.0.1:54873");
-    expect(launchExecutable).toHaveBeenCalledWith(bundled, ["--openmaus-server"], {});
+    expect(launchExecutable).toHaveBeenCalledWith(
+      bundled, ["--openmaus-server"], {},
+      { accessToken: "access", refreshToken: "refresh" }, expect.any(Function),
+    );
+  });
+
+  it("requires Bot SSO before starting the bundled sidecar", async () => {
+    const bundled = "C:\\resources\\ruijie-harness\\runtime\\Ruijie-Harness.exe";
+    const launchExecutable = vi.fn();
+    const locator = createRuijieHarnessLocator(dependencies({
+      environment: {},
+      pathExists: async (path) => path === bundled,
+      readText: async () => JSON.stringify({
+        schemaVersion: 1, version: "2.1.10", target: "win32-x64",
+        executable: "runtime/Ruijie-Harness.exe", executableSha256: "a".repeat(64),
+        bridge: { schemaVersion: 1, capability: "openmaus-server-v1" },
+      }),
+      launchExecutable,
+    }));
+    await expect(locator.ensureEndpoint({ bridgePath: "bridge", bundledRoot: "C:\\resources\\ruijie-harness" }))
+      .rejects.toThrow("请先登录锐捷Bot企业账号");
+    expect(launchExecutable).not.toHaveBeenCalled();
+  });
+
+  it("fails closed instead of falling back to an installed app when the configured bundle is invalid", async () => {
+    const registeredExecutable = vi.fn(async () => WINDOWS_EXECUTABLE);
+    const locator = createRuijieHarnessLocator(dependencies({
+      readText: async () => JSON.stringify({ schemaVersion: 99 }),
+      registeredExecutable,
+    }));
+    await expect(locator.ensureEndpoint({ bridgePath: "bridge", bundledRoot: "C:\\resources\\ruijie-harness" }))
+      .rejects.toThrow("内置锐捷 Harness 缺失、损坏或版本不兼容");
+    expect(registeredExecutable).not.toHaveBeenCalled();
+  });
+
+  it("rotates the private child authentication channel without exposing tokens in launch environment", async () => {
+    let running = false;
+    let childUpdate: ((next: { accessToken: string; refreshToken: string } | undefined) => void) | undefined;
+    const persisted = vi.fn();
+    const updateLaunchedAuthentication = vi.fn();
+    const locator = createRuijieHarnessLocator(dependencies({
+      inspectExecutable: async () => ({ running, endpoints: running ? ["http://127.0.0.1:54873"] : [] }),
+      probeEndpoint: async () => running,
+      launchExecutable: async (_path, _args, environment, _authentication, onUpdate) => {
+        expect(environment).not.toHaveProperty("accessToken");
+        expect(environment).not.toHaveProperty("refreshToken");
+        childUpdate = onUpdate;
+        running = true;
+      },
+      updateLaunchedAuthentication,
+    }));
+    locator.updateAuthentication({ accessToken: "access-1", refreshToken: "refresh-1" }, persisted);
+    await locator.ensureEndpoint({ bridgePath: "bridge" });
+    childUpdate?.({ accessToken: "access-2", refreshToken: "refresh-2" });
+    expect(persisted).toHaveBeenCalledWith({ accessToken: "access-2", refreshToken: "refresh-2" });
+    locator.updateAuthentication({ accessToken: "access-3", refreshToken: "refresh-3" });
+    expect(updateLaunchedAuthentication).toHaveBeenCalledWith({ accessToken: "access-3", refreshToken: "refresh-3" });
   });
 
   it("lets an explicit executable override the bundled runtime", async () => {
@@ -71,7 +129,7 @@ describe("installed Ruijie Harness discovery", () => {
     const locator = createRuijieHarnessLocator(dependencies({
       environment: { OMB_RUIJIE_HARNESS_BUNDLE: "C:\\resources\\ruijie-harness" },
       readText: async () => JSON.stringify({
-        schemaVersion: 1, version: "2.1.9", target: "win32-x64",
+        schemaVersion: 1, version: "2.1.10", target: "win32-x64",
         executable: "runtime/Ruijie-Harness.exe",
         executableSha256: "a".repeat(64),
         bridge: { schemaVersion: 1, capability: "openmaus-server-v1" },
@@ -81,37 +139,49 @@ describe("installed Ruijie Harness discovery", () => {
       launchExecutable,
     }));
     await locator.ensureEndpoint({ bridgePath: "bridge", executablePath: WINDOWS_EXECUTABLE });
-    expect(launchExecutable).toHaveBeenCalledWith(WINDOWS_EXECUTABLE, ["--openmaus-server"], {});
+    expect(launchExecutable).toHaveBeenCalledWith(
+      WINDOWS_EXECUTABLE, ["--openmaus-server"], {}, undefined, expect.any(Function),
+    );
   });
 
   it("rejects an escaping or incompatible bundle manifest", async () => {
     const base = dependencies({ pathExists: async () => true, readText: async () => JSON.stringify({
-      schemaVersion: 1, version: "2.1.9", target: "win32-x64",
+      schemaVersion: 1, version: "2.1.10", target: "win32-x64",
       executable: "../Ruijie-Harness.exe", bridge: { schemaVersion: 1, capability: "openmaus-server-v1" },
       executableSha256: "a".repeat(64),
     }) });
     await expect(bundledRuijieHarnessExecutable("C:\\resources\\bundle", base)).resolves.toBeUndefined();
   });
 
-  it("reuses a live installed Harness instead of starting a concurrent bundled owner", async () => {
+  it("never attaches to a live separately installed Harness when a bundle is configured", async () => {
     const bundled = "C:\\resources\\ruijie-harness\\runtime\\Ruijie-Harness.exe";
     const launchExecutable = vi.fn();
     const locator = createRuijieHarnessLocator(dependencies({
       environment: { LOCALAPPDATA: "C:\\Users\\test\\AppData\\Local" },
       pathExists: async (path) => path === bundled || path === WINDOWS_EXECUTABLE,
       readText: async () => JSON.stringify({
-        schemaVersion: 1, version: "2.1.9", target: "win32-x64",
+        schemaVersion: 1, version: "2.1.10", target: "win32-x64",
         executable: "runtime/Ruijie-Harness.exe", executableSha256: "a".repeat(64),
         bridge: { schemaVersion: 1, capability: "openmaus-server-v1" },
       }),
       readBridge: async () => ({ schemaVersion: 1, endpoint: "http://127.0.0.1:54873", pid: 42, generationId: "installed" }),
       executableForPid: async () => WINDOWS_EXECUTABLE,
-      probeEndpoint: async () => true,
+      inspectExecutable: async (path) => ({
+        running: path === bundled && running,
+        endpoints: path === bundled && running ? ["http://127.0.0.1:54874"] : [],
+      }),
+      probeEndpoint: async (endpoint) => endpoint === "http://127.0.0.1:54873" || running,
       launchExecutable,
     }));
+    let running = false;
+    launchExecutable.mockImplementation(async (path) => { running = path === bundled; });
+    locator.updateAuthentication({ accessToken: "access", refreshToken: "refresh" });
     await expect(locator.ensureEndpoint({ bridgePath: "bridge", bundledRoot: "C:\\resources\\ruijie-harness" }))
-      .resolves.toBe("http://127.0.0.1:54873");
-    expect(launchExecutable).not.toHaveBeenCalled();
+      .resolves.toBe("http://127.0.0.1:54874");
+    expect(launchExecutable).toHaveBeenCalledWith(
+      bundled, ["--openmaus-server"], {},
+      { accessToken: "access", refreshToken: "refresh" }, expect.any(Function),
+    );
   });
 
   it("does not let a passive status probe suppress an explicit on-demand launch", async () => {
@@ -230,7 +300,9 @@ describe("installed Ruijie Harness discovery", () => {
       locator.ensureEndpoint(options),
     ])).resolves.toEqual(["http://127.0.0.1:54873", "http://127.0.0.1:54873"]);
     expect(launchExecutable).toHaveBeenCalledTimes(1);
-    expect(launchExecutable).toHaveBeenCalledWith(WINDOWS_EXECUTABLE, ["--openmaus-server"], {});
+    expect(launchExecutable).toHaveBeenCalledWith(
+      WINDOWS_EXECUTABLE, ["--openmaus-server"], {}, undefined, expect.any(Function),
+    );
   });
 
   it("stops the exact child it launched when the Bot disposes the driver", async () => {
@@ -274,6 +346,8 @@ describe("installed Ruijie Harness discovery", () => {
         DSH_HOME: "D:\\src\\.local-data\\dsh-home",
         RUIJIE_DSH_USER_DATA_DIR: "D:\\src\\.local-data\\electron-user-data",
       },
+      undefined,
+      expect.any(Function),
     );
   });
 
@@ -310,7 +384,7 @@ describe("installed Ruijie Harness discovery", () => {
       pathExists: async () => false,
     }));
     await expect(missing.ensureEndpoint({ bridgePath: "bridge", startupTimeoutMs: 500 }))
-      .rejects.toThrow("未检测到内置或已安装的锐捷 Harness");
+      .rejects.toThrow("未检测到锐捷 Harness");
 
     const waiting = createRuijieHarnessLocator(dependencies({
       inspectExecutable: async () => ({ running: true, endpoints: [] }),

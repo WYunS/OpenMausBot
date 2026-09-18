@@ -3,7 +3,18 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { mkdtempSync, mkdirSync, symlinkSync, rmSync, realpathSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { desktopRuntimeLayout } from './desktop-runtime-layout.mjs';
+import { desktopRuntimeLayout, ruijieHarnessSidecarEnvironment } from './desktop-runtime-layout.mjs';
+
+test('bundled Harness state is isolated below the Bot user-data directory', () => {
+  const userData = path.resolve('fixture-user-data');
+  const environment = ruijieHarnessSidecarEnvironment(userData);
+  assert.deepEqual(environment, {
+    RUIJIE_HARNESS_HOME: path.join(userData, 'harness-sidecar', 'dsh'),
+    RUIJIE_HARNESS_USER_DATA_DIR: path.join(userData, 'harness-sidecar', 'electron'),
+    RUIJIE_HARNESS_BRIDGE: path.join(userData, 'harness-sidecar', 'bridge', 'openmaus-bridge.json'),
+    RUIJIE_HARNESS_BRIDGE_DIR: path.join(userData, 'harness-sidecar', 'bridge'),
+  });
+});
 
 test('Universal Feishu selects the native slice and never substitutes the other CPU', () => {
   const resourcesPath = mkdtempSync(path.join(tmpdir(), 'ruijie-universal-feishu-'));

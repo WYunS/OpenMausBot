@@ -24,15 +24,35 @@ $env:OMB_BROWSER_CONNECTION = $null
 
 . (Join-Path $PSScriptRoot 'windows-node-proxy.ps1')
 
-# Match packaged Bot behavior: discover the installed Harness.  Development
-# Harness is launched explicitly from its own shortcut when it is the product
-# under test; silently overriding the provider here makes a healthy installed
-# release invisible and turns a missing development Host into a 30-second
-# probe on every Bot refresh.
-$env:RUIJIE_HARNESS_EXECUTABLE = $null
-$env:RUIJIE_HARNESS_ARGUMENTS = $null
-$env:RUIJIE_HARNESS_HOME = $null
-$env:RUIJIE_HARNESS_USER_DATA_DIR = $null
+# The source preview must exercise the same embedded-Harness ownership model as
+# the packaged Bot. Prefer an explicit checkout for unusual layouts, otherwise
+# use the sibling checkout maintained beside this repository. This launches the
+# compiled Harness entry with its own Electron binary; it never discovers or
+# reuses an installed/running Harness application.
+$harnessRepo = if ($env:OMB_RUIJIE_HARNESS_SOURCE) {
+  [IO.Path]::GetFullPath($env:OMB_RUIJIE_HARNESS_SOURCE)
+} else {
+  Join-Path (Split-Path -Parent $repoRoot) 'ruijie-harness-source'
+}
+$harnessElectron = Join-Path $harnessRepo 'node_modules\electron\dist\electron.exe'
+$harnessEntry = Join-Path $harnessRepo 'dsh-plugin-desktop\lib\main.js'
+$harnessSidecarRoot = Join-Path $env:OMB_USER_DATA 'harness-sidecar'
+if ((Test-Path -LiteralPath $harnessElectron -PathType Leaf) -and
+    (Test-Path -LiteralPath $harnessEntry -PathType Leaf)) {
+  $env:RUIJIE_HARNESS_EXECUTABLE = $harnessElectron
+  $env:RUIJIE_HARNESS_ARGUMENTS = (@($harnessEntry, '--openmaus-server') | ConvertTo-Json -Compress)
+  $env:RUIJIE_HARNESS_HOME = Join-Path $harnessSidecarRoot 'dsh'
+  $env:RUIJIE_HARNESS_USER_DATA_DIR = Join-Path $harnessSidecarRoot 'electron'
+  $env:RUIJIE_HARNESS_BRIDGE_DIR = Join-Path $harnessSidecarRoot 'bridge'
+  $env:RUIJIE_HARNESS_BRIDGE = Join-Path $env:RUIJIE_HARNESS_BRIDGE_DIR 'openmaus-bridge.json'
+} else {
+  $env:RUIJIE_HARNESS_EXECUTABLE = $null
+  $env:RUIJIE_HARNESS_ARGUMENTS = $null
+  $env:RUIJIE_HARNESS_HOME = $null
+  $env:RUIJIE_HARNESS_USER_DATA_DIR = $null
+  $env:RUIJIE_HARNESS_BRIDGE_DIR = $null
+  $env:RUIJIE_HARNESS_BRIDGE = $null
+}
 
 # Use the same staged native pair as the Windows installer when available.
 # Otherwise a source launch silently chooses system Chrome, whose daemon

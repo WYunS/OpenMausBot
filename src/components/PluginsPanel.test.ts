@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   connectedAppsMayDisconnect,
+  connectorActionDisabled,
   connectedInventoryCopy,
   connectorActionLabel,
   disconnectAccountConfirmation,
@@ -26,6 +27,24 @@ describe("connected-app remote permissions", () => {
 });
 
 describe("connected-app status races", () => {
+  it("keeps Connect enabled while managed registration is temporarily unavailable", () => {
+    expect(connectorActionDisabled(false, false, "ready", {
+      busy: false,
+      included: false,
+      unavailableReason: null,
+    })).toBe(false);
+    expect(connectorActionDisabled(true, false, "ready", {
+      busy: false,
+      included: false,
+      unavailableReason: null,
+    })).toBe(false);
+    expect(connectorActionDisabled(false, true, "ready", {
+      busy: false,
+      included: false,
+      unavailableReason: null,
+    })).toBe(true);
+  });
+
   it("keeps recovering stale inventory even after registration has succeeded", () => {
     expect(shouldRecoverConnectedApps(true, true, "ready")).toBe(true);
     expect(shouldRecoverConnectedApps(true, false, "error")).toBe(true);

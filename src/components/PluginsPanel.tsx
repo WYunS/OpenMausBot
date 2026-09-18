@@ -129,6 +129,19 @@ export function connectorActionLabel(
   return t("connectors.action.connect");
 }
 
+/** A missing managed-service credential is recoverable at click time. Keep
+ * the action available so the attempted connection can retry registration
+ * and report a concrete error instead of disabling the whole marketplace. */
+export function connectorActionDisabled(
+  configured: boolean,
+  remoteClient: boolean,
+  phase: ConnectorInventoryPhase,
+  state: { busy: boolean; included: boolean; unavailableReason: string | null },
+) {
+  return (!configured && remoteClient)
+    || phase !== "ready" || state.busy || state.included || Boolean(state.unavailableReason);
+}
+
 export function connectedInventoryCopy(phase: ConnectorInventoryPhase) {
   if (phase === "loading") return {
     title: t("connectors.empty.loadingTitle"),
@@ -489,6 +502,15 @@ export function PluginsPanel() {
     setBusySlug(slug);
     setError(null);
     try {
+      if (!configured && !remoteClient && mode !== "self-hosted") {
+        const recovery = await window.ogb?.retryConnectedAppsService?.();
+        if (!recovery?.ready) {
+          throw new Error(t(recovery?.registrationState === "service-error"
+            ? "connectors.serviceUnavailable"
+            : "connectors.networkUnavailable"));
+        }
+        await loadCatalog();
+      }
       const request: RequestInit = { method: "POST" };
       if (alias) request.body = JSON.stringify({ alias });
       const { url } = await api(`/api/connectors/${slug}/authorize`, request);
@@ -654,29 +676,15 @@ export function PluginsPanel() {
           </label>
         </div>
 
-        {/* A stale snapshot is represented by the small refresh status dot;
-            "configure your own connection service" is advice for someone
-            who never set one up, not for a temporary upstream outage. */}
-        {!configured && (
+        {/* A local desktop retries managed registration when Connect is used,
+            so a global warning would be premature and would also imply that
+            the independent native Feishu connector is unavailable. */}
+        {!configured && remoteClient && (
           <div className="mx-6 mb-1 rounded-xl bg-warning/10 px-4 py-3 text-[13px] text-warning sm:mx-8">
-            {t(registrationState === 'network-unreachable' ? 'connectors.networkUnavailable'
-              : registrationState === 'service-error' ? 'connectors.serviceUnavailable'
-              : registrationState === 'pending' ? 'connectors.connectingService'
-              : 'connectors.notConfigured')}{" "}
-            <button
-              className={cn("font-medium underline underline-offset-2", remoteClient && "hidden")}
-              disabled={retryingService}
-              onClick={() => {
-                if (registrationState && registrationState !== "unavailable") {
-                  void refreshPlugins();
-                  return;
-                }
-                close();
-                dispatch({ type: "toggleAppSettings", open: true });
-              }}
-            >
-              {t(registrationState && registrationState !== "unavailable" ? "connectors.action.retry" : "connectors.openSettings")}
-            </button>
+            {t(registrationState === "network-unreachable" ? "connectors.networkUnavailable"
+              : registrationState === "service-error" ? "connectors.serviceUnavailable"
+              : registrationState === "pending" ? "connectors.connectingService"
+              : "connectors.notConfigured")}
           </div>
         )}
         {configured && !remoteClient && source === "curated" && mode === "self-hosted" && (
@@ -758,7 +766,11 @@ export function PluginsPanel() {
                     </div>
                     <button
                       type="button"
-                      disabled={!configured || inventoryPhase !== "ready" || busy || included || Boolean(unavailableReason)}
+                      disabled={connectorActionDisabled(configured, remoteClient, inventoryPhase, {
+                        busy,
+                        included,
+                        unavailableReason,
+                      })}
                       title={unavailableReason ?? undefined}
                       onClick={() => {
                         if (pending) {

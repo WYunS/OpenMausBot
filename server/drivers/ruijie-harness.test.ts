@@ -655,6 +655,46 @@ describe("Ruijie Harness driver", () => {
     }
   });
 
+  it("advertises and mounts the agents MCP used to persist setup and coordinate bots", async () => {
+    const dshHome = await mkdtemp(join(tmpdir(), "openmaus-rjh-agents-"));
+    try {
+      const instance = await RuijieHarnessDriver.create({
+        instanceId: "ruijieHarness", displayName: "锐捷 Harness", enabled: true, environment: {},
+        config: {
+          endpoint: "http://127.0.0.1:49724",
+          expectedAccountEmail: "wangyunshang@ruijie.com.cn",
+          dshHome,
+        },
+      });
+
+      expect(instance.adapter.capabilities).toMatchObject({ agentsMcp: true });
+      await instance.adapter.sendTurn({
+        threadId: "thread-agents",
+        text: "我的职责是审查代码，请记住并更新个人资料",
+        cwd: "C:\\work",
+        integrations: {
+          agents: {
+            command: "C:\\OpenMaus\\electron.exe",
+            args: ["agents-proxy.js"],
+            env: { OMB_AGENTS_TOKEN: "secret" },
+          },
+        },
+      });
+
+      const create = calls.find((call) => call.method === "session.create");
+      expect(create?.payload).toMatchObject({
+        cwd: "C:\\work",
+        agentPreset: expect.stringMatching(/^openmaus-agents-/),
+      });
+      const preset = await readFile(join(dshHome, ".agent-presets", create!.payload.agentPreset, "agent.cordis.yml"), "utf8");
+      expect(preset).toContain('command: "C:\\\\OpenMaus\\\\electron.exe"');
+      expect(preset).toContain('"OMB_AGENTS_TOKEN":"secret"');
+      expect(preset).toContain("failOnStartupError: true");
+    } finally {
+      await rm(dshHome, { recursive: true, force: true });
+    }
+  });
+
   it("mounts connected apps through a managed Harness user preset", async () => {
     const dshHome = await mkdtemp(join(tmpdir(), "openmaus-rjh-test-"));
     try {

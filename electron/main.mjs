@@ -44,7 +44,7 @@ import {
 } from "./managed-composio.mjs";
 import { createBrokerHostTransport } from "./managed-composio-transport.mjs";
 import { releaseBrokerUrl } from './connected-apps-release.mjs';
-import { desktopRuntimeLayout } from './desktop-runtime-layout.mjs';
+import { desktopRuntimeLayout, ruijieHarnessSidecarEnvironment } from './desktop-runtime-layout.mjs';
 import {
   createManagedCompanionTunnel,
   managedCompanionTunnelAccess,
@@ -70,7 +70,11 @@ import {
   withDesktopCompanionAccess,
   withoutDesktopCompanionAccess,
 } from "./desktop-companion-client.mjs";
-import { createRuijieSsoAccountService } from "./ruijie-sso-account.mjs";
+import {
+  createRuijieSsoAccountService,
+  RUIJIE_SSO_ACCESS_TOKEN_FIELD,
+  RUIJIE_SSO_REFRESH_TOKEN_FIELD,
+} from "./ruijie-sso-account.mjs";
 import {
   RuijieAuthorizationRecovery,
   authorizationWindowOptions,
@@ -674,6 +678,7 @@ export async function updateSecureCredentialDocument(derive, afterPersist) {
     return await secureCredentialState.update(derive, afterPersist);
   } finally {
     secureCredentials = secureCredentialState.read();
+    syncRuijieHarnessAuthentication(serverProc);
   }
 }
 
@@ -1173,6 +1178,7 @@ async function startServerOn(port) {
     OMB_DESKTOP_PARENT: "1",
     ...(desktopLayout.built ? { OMB_STATIC_DIR: desktopLayout.ui, OMB_BROWSER_BUNDLE_DIR: desktopLayout.browser } : {}),
     ...(desktopLayout.harness ? { OMB_RUIJIE_HARNESS_BUNDLE: desktopLayout.harness } : {}),
+    ...(desktopLayout.harness ? ruijieHarnessSidecarEnvironment(app.getPath("userData")) : {}),
     OMB_RESOURCES_PATH: resourcesPath,
     // The Windows installer ships the complete pinned browser engine. A fresh
     // isolated profile should expose it immediately; an explicit user false
@@ -1220,6 +1226,7 @@ async function startServerOn(port) {
     try {
       if (trustedApprovalMode.receive(proc, message)) return;
       if (receivePhoneSecretSave(proc, message)) return;
+      if (receiveRuijieHarnessAuthentication(proc, message)) return;
     } catch (error) {
       slog(`desktop private sync rejected: ${error?.message ?? error}`);
     }
@@ -1229,6 +1236,7 @@ async function startServerOn(port) {
     if (!serverSupervisor.isCurrent(proc)) return;
     syncDesktopMutationToken(proc);
     syncPhoneSecretKey(proc);
+    syncRuijieHarnessAuthentication(proc);
   });
   let exited = false;
   proc.once("exit", (code) => {
@@ -1295,6 +1303,7 @@ async function startServerPackaged() {
         // Close the narrow race where safeStorage recovers after this child
         // was forked but before startServerOn publishes it globally.
         syncWorkspaceCredentials(serverProc);
+        syncRuijieHarnessAuthentication(serverProc);
         // The browser/noVNC host can become ready while startServerOn is
         // still polling the child, before serverProc is published above. Its
         // first publish then has nobody to notify. Synchronize once after the
@@ -1335,6 +1344,50 @@ function syncWorkspaceCredentials(proc) {
   } catch (error) {
     slog(`workspace credential recovery sync failed: ${error?.message ?? error}`);
   }
+}
+
+function ruijieHarnessAuthentication(credentials = secureCredentials) {
+  const accessToken = credentials?.[RUIJIE_SSO_ACCESS_TOKEN_FIELD];
+  const refreshToken = credentials?.[RUIJIE_SSO_REFRESH_TOKEN_FIELD];
+  return typeof accessToken === "string" && accessToken
+    && typeof refreshToken === "string" && refreshToken
+    ? { accessToken, refreshToken }
+    : null;
+}
+
+function syncRuijieHarnessAuthentication(proc) {
+  if (!proc || credentialStoreUnavailable) return;
+  try {
+    const authentication = ruijieHarnessAuthentication();
+    proc.postMessage({
+      type: "openmausbot:ruijie-harness-auth",
+      ...(authentication ? { authentication } : {}),
+    });
+  } catch (error) {
+    slog(`Ruijie Harness authentication sync failed: ${error?.message ?? error}`);
+  }
+}
+
+function receiveRuijieHarnessAuthentication(proc, message) {
+  if (message?.type !== "openmausbot:ruijie-harness-auth-update") return false;
+  if (!serverSupervisor.isCurrent(proc)) return true;
+  const next = message.authentication;
+  if (next !== undefined && (
+    !next || typeof next !== "object" || Array.isArray(next)
+    || typeof next.accessToken !== "string" || !next.accessToken || next.accessToken.length > 16_384
+    || typeof next.refreshToken !== "string" || !next.refreshToken || next.refreshToken.length > 16_384
+  )) throw new Error("invalid Ruijie Harness authentication update");
+  void updateSecureCredentialDocument((credentials) => {
+    if (next) {
+      credentials[RUIJIE_SSO_ACCESS_TOKEN_FIELD] = next.accessToken;
+      credentials[RUIJIE_SSO_REFRESH_TOKEN_FIELD] = next.refreshToken;
+    } else {
+      delete credentials[RUIJIE_SSO_ACCESS_TOKEN_FIELD];
+      delete credentials[RUIJIE_SSO_REFRESH_TOKEN_FIELD];
+    }
+    return credentials;
+  }).catch((error) => slog(`Ruijie Harness authentication persistence failed: ${error?.message ?? error}`));
+  return true;
 }
 
 // Non-persistent cookie jar; Chromium tracks Windows/macOS system proxy/PAC
@@ -2828,6 +2881,7 @@ app.whenReady().then(async () => {
         }
         secureCredentialState = createSecureCredentialState(secureCredentials, saveSecureCredentials);
         syncWorkspaceCredentials(serverProc);
+        syncRuijieHarnessAuthentication(serverProc);
         syncManagedComposioCredentials();
         slog("credential store recovered in background; restored credentials without restarting the app");
       },

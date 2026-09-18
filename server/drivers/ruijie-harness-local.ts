@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { access, readFile, readlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
+import { createInterface } from "node:readline";
+import type { Readable, Writable } from "node:stream";
 import { promisify } from "node:util";
 
 const BRIDGE_FILENAME = "openmaus-bridge.json";
@@ -10,7 +12,7 @@ const PRODUCT_NAME = "锐捷 Harness";
 const WINDOWS_EXECUTABLE_NAME = "Ruijie-Harness.exe";
 const STARTUP_TIMEOUT_MS = 30_000;
 const POLL_INTERVAL_MS = 250;
-export const BUNDLED_HARNESS_VERSION = "2.1.9";
+export const BUNDLED_HARNESS_VERSION = "2.1.10";
 const BUNDLED_MANIFEST = "manifest.json";
 const BUNDLED_BRIDGE_CAPABILITY = "openmaus-server-v1";
 
@@ -47,6 +49,13 @@ export interface RuijieHarnessEndpointOptions {
   launchEnvironment?: NodeJS.ProcessEnv;
 }
 
+export interface RuijieHarnessAuthentication {
+  accessToken: string;
+  refreshToken: string;
+}
+
+type AuthenticationUpdate = RuijieHarnessAuthentication | undefined;
+
 interface ExecutableInspection {
   running: boolean;
   endpoints: string[];
@@ -65,7 +74,14 @@ export interface RuijieHarnessLocatorDependencies {
   executableForPid(pid: number): Promise<string | undefined>;
   inspectExecutable(path: string): Promise<ExecutableInspection>;
   probeEndpoint(endpoint: string): Promise<boolean>;
-  launchExecutable(path: string, args: readonly string[], environment: NodeJS.ProcessEnv): Promise<void>;
+  launchExecutable(
+    path: string,
+    args: readonly string[],
+    environment: NodeJS.ProcessEnv,
+    authentication: RuijieHarnessAuthentication | undefined,
+    onAuthenticationUpdate: (next: AuthenticationUpdate) => void,
+  ): Promise<void>;
+  updateLaunchedAuthentication(authentication: RuijieHarnessAuthentication | undefined): void;
   stopLaunchedExecutable(): Promise<void>;
   now(): number;
   sleep(milliseconds: number): Promise<void>;
@@ -185,7 +201,7 @@ async function findInstalledExecutable(
     || dependencies.environment.OMB_RUIJIE_HARNESS_BUNDLE?.trim();
   if (bundledRoot) {
     const bundled = await bundledRuijieHarnessExecutable(bundledRoot, dependencies);
-    if (bundled) return bundled;
+    return bundled;
   }
 
   for (const candidate of installedRuijieHarnessCandidates(
@@ -223,39 +239,18 @@ async function usableEndpointForExecutable(
   return { running: inspection.running };
 }
 
-async function liveInstalledEndpoint(
-  selectedExecutable: string,
-  bridgePath: string,
-  dependencies: RuijieHarnessLocatorDependencies,
-): Promise<string | undefined> {
-  const bridge = await dependencies.readBridge(bridgePath);
-  if (!bridge || !await dependencies.probeEndpoint(bridge.endpoint)) return undefined;
-  const owner = await dependencies.executableForPid(bridge.pid);
-  if (!owner || sameExecutable(owner, selectedExecutable, dependencies.platform)) return undefined;
-  const candidates = installedRuijieHarnessCandidates(
-    dependencies.platform,
-    dependencies.environment,
-    dependencies.home,
-  );
-  const registered = await dependencies.registeredExecutable();
-  if (registered) candidates.push(registered);
-  for (const candidate of candidates) {
-    if (sameExecutable(owner, candidate, dependencies.platform) && await dependencies.pathExists(candidate)) {
-      return bridge.endpoint;
-    }
-  }
-  return undefined;
-}
-
 export function createRuijieHarnessLocator(
   dependencies: RuijieHarnessLocatorDependencies = realDependencies(),
 ): {
   ensureEndpoint(options: RuijieHarnessEndpointOptions): Promise<string>;
+  updateAuthentication(authentication: AuthenticationUpdate, onUpdate?: (next: AuthenticationUpdate) => void): void;
   dispose(): Promise<void>;
 } {
   let pending: Promise<string> | undefined;
   let pendingAutoLaunch = false;
   let lastEndpoint: string | undefined;
+  let authentication: AuthenticationUpdate;
+  let persistAuthentication: (next: AuthenticationUpdate) => void = () => {};
 
   const resolve = async (options: RuijieHarnessEndpointOptions): Promise<string> => {
     const explicit = validLoopbackEndpoint(options.endpoint);
@@ -263,7 +258,7 @@ export function createRuijieHarnessLocator(
 
     const executable = await findInstalledExecutable(options, dependencies);
     if (!executable) {
-      throw new Error("未检测到内置或已安装的锐捷 Harness");
+      throw new Error(options.bundledRoot ? "内置锐捷 Harness 缺失、损坏或版本不兼容" : "未检测到锐捷 Harness");
     }
 
     let state = await usableEndpointForExecutable(executable, options.bridgePath, dependencies);
@@ -272,16 +267,19 @@ export function createRuijieHarnessLocator(
       throw new RuijieHarnessDormantError();
     }
     if (!state.running) {
-      // A separately installed compatible Harness may already own the shared
-      // bridge. Reuse it instead of starting a second profile owner. A stale
-      // bridge or an unrelated executable never passes these checks.
-      const existing = await liveInstalledEndpoint(executable, options.bridgePath, dependencies);
-      if (existing) return existing;
+      if (options.bundledRoot && !authentication) {
+        throw new Error("请先登录锐捷Bot企业账号，再使用内置 Harness");
+      }
       try {
         await dependencies.launchExecutable(
           executable,
           options.executableArgs?.length ? options.executableArgs : ["--openmaus-server"],
           options.launchEnvironment ?? {},
+          authentication,
+          (next) => {
+            authentication = next;
+            persistAuthentication(next);
+          },
         );
       } catch (cause) {
         const detail = cause instanceof Error ? cause.message : String(cause);
@@ -299,6 +297,15 @@ export function createRuijieHarnessLocator(
   };
 
   return {
+    updateAuthentication(next, onUpdate) {
+      const changed = next?.accessToken !== authentication?.accessToken
+        || next?.refreshToken !== authentication?.refreshToken;
+      authentication = next;
+      if (onUpdate) persistAuthentication = onUpdate;
+      if (!changed) return;
+      lastEndpoint = undefined;
+      dependencies.updateLaunchedAuthentication(next);
+    },
     async ensureEndpoint(options) {
       const explicit = validLoopbackEndpoint(options.endpoint);
       if (explicit) return Promise.resolve(explicit);
@@ -438,6 +445,7 @@ async function inspectPosixExecutable(path: string): Promise<ExecutableInspectio
 
 function realDependencies(): RuijieHarnessLocatorDependencies {
   let launchedChild: ReturnType<typeof spawn> | undefined;
+  let authenticationInput: Writable | undefined;
   return {
     platform: process.platform,
     arch: process.arch,
@@ -481,22 +489,50 @@ function realDependencies(): RuijieHarnessLocatorDependencies {
         return false;
       }
     },
-    launchExecutable: async (path, args, environment) => {
+    launchExecutable: async (path, args, environment, authentication, onAuthenticationUpdate) => {
       const child = spawn(path, [...args], {
         detached: false,
-        stdio: "ignore",
+        stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
         windowsHide: true,
-        env: { ...process.env, ...environment },
+        env: {
+          ...process.env,
+          ...environment,
+          RUIJIE_DSH_AUTH_INPUT_FD: "3",
+          RUIJIE_DSH_AUTH_OUTPUT_FD: "4",
+        },
       });
       await new Promise<void>((resolve, reject) => {
         child.once("error", reject);
         child.once("spawn", resolve);
       });
+      const input = child.stdio[3] as Writable | null;
+      const output = child.stdio[4] as Readable | null;
+      if (!input || !output) throw new Error("无法建立内置 Harness 身份通道");
+      authenticationInput = input;
+      input.write(JSON.stringify(authentication ? { type: "session", ...authentication } : { type: "clear" }) + "\n");
+      const lines = createInterface({ input: output });
+      lines.on("line", (line) => {
+        if (Buffer.byteLength(line) > 33_000) return;
+        try {
+          const value = JSON.parse(line) as Record<string, unknown>;
+          if (value.type === "clear") onAuthenticationUpdate(undefined);
+          if (value.type === "save"
+            && typeof value.accessToken === "string" && value.accessToken.length <= 16_384
+            && typeof value.refreshToken === "string" && value.refreshToken.length <= 16_384) {
+            onAuthenticationUpdate({ accessToken: value.accessToken, refreshToken: value.refreshToken });
+          }
+        } catch { /* Authentication channel never accepts malformed frames. */ }
+      });
       launchedChild = child;
+    },
+    updateLaunchedAuthentication: (authentication) => {
+      if (!authenticationInput) return;
+      authenticationInput.write(JSON.stringify(authentication ? { type: "session", ...authentication } : { type: "clear" }) + "\n");
     },
     stopLaunchedExecutable: async () => {
       const child = launchedChild;
       launchedChild = undefined;
+      authenticationInput = undefined;
       if (!child || child.exitCode !== null || child.killed) return;
       child.kill();
     },

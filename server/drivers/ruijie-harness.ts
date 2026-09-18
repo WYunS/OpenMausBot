@@ -199,6 +199,9 @@ async function resolveEndpoint(config: RuijieHarnessConfig, autoLaunch = true): 
       ...(process.env.RUIJIE_HARNESS_USER_DATA_DIR
         ? { RUIJIE_DSH_USER_DATA_DIR: process.env.RUIJIE_HARNESS_USER_DATA_DIR }
         : {}),
+      ...(process.env.RUIJIE_HARNESS_BRIDGE_DIR
+        ? { RUIJIE_DSH_BRIDGE_DIR: process.env.RUIJIE_HARNESS_BRIDGE_DIR }
+        : {}),
     },
     autoLaunch,
   });
@@ -221,7 +224,7 @@ async function resolveDshHome(config: RuijieHarnessConfig): Promise<string> {
 }
 
 type StdioIntegration = { command: string; args: string[]; env: Record<string, string> };
-type NamedStdioIntegration = { name: "computer" | "composio" | "browser"; integration: StdioIntegration };
+type NamedStdioIntegration = { name: "agents" | "computer" | "composio" | "browser"; integration: StdioIntegration };
 
 function computerIntegration(turn: SendTurnInput): StdioIntegration | undefined {
   if (turn.integrations?.localComputer) {
@@ -240,6 +243,9 @@ function computerIntegration(turn: SendTurnInput): StdioIntegration | undefined 
 
 function stdioIntegrations(turn: SendTurnInput, computer: StdioIntegration | undefined): NamedStdioIntegration[] {
   return [
+    ...(turn.integrations?.agents
+      ? [{ name: "agents" as const, integration: turn.integrations.agents }]
+      : []),
     ...(computer ? [{ name: "computer" as const, integration: computer }] : []),
     ...(turn.integrations?.composio
       ? [{ name: "composio" as const, integration: turn.integrations.composio }]
@@ -284,11 +290,11 @@ function mcpPresetContent(base: string, integrations: NamedStdioIntegration[], k
     `    command: ${JSON.stringify(integration.command)}\n` +
     `    args: ${JSON.stringify(integration.args)}\n` +
     `    env: ${JSON.stringify(integration.env)}\n` +
-    // Computer control is part of the requested work, so a missing computer
-    // bridge must stop the turn. Connected apps are optional: a broker outage
-    // must not prevent an otherwise ordinary Harness conversation from
-    // starting. A new task/session will resync its tools after recovery.
-    `    failOnStartupError: ${name === "computer" ? "true" : "false"}\n`
+    // Agent tools define setup/profile persistence and team coordination, and
+    // computer control is part of the requested work, so either missing bridge
+    // must stop the turn. Connected apps and the browser are optional: their
+    // transient outage must not prevent an otherwise ordinary conversation.
+    `    failOnStartupError: ${name === "agents" || name === "computer" ? "true" : "false"}\n`
   ).join("");
   const aliases = browser ? `- id: openmaus-browser-tools-${key}\n` +
     `  name: ${JSON.stringify(SPAWNED_PROXIES.harnessBrowserTools)}\n` +
@@ -776,6 +782,7 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
         nativeImageInput: true,
         effortLevels: ["none", "low", "medium", "high", "xhigh", "max"],
         queueing: false,
+        agentsMcp: true,
         computerMcp: true,
         localComputerMcp: true,
         composioMcp: true,

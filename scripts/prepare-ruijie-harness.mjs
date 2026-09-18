@@ -4,7 +4,7 @@ import { cp, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promi
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export const HARNESS_VERSION = '2.1.9';
+export const HARNESS_VERSION = '2.1.10';
 export const HARNESS_BUNDLE_SCHEMA = 1;
 export const HARNESS_BRIDGE_CAPABILITY = 'openmaus-server-v1';
 const root = fileURLToPath(new URL('../', import.meta.url));

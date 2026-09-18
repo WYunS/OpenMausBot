@@ -13,7 +13,7 @@ it('stages and verifies a pinned Windows Harness runtime without touching user d
   await writeFile(path.join(source, 'Ruijie-Harness.exe'), Buffer.from('fixture executable'));
   await writeFile(path.join(source, 'resources.pak'), Buffer.from('fixture resource'));
   const { output, manifest } = await prepareRuijieHarness({ target: 'win32-x64', source, directory: root, buildCommit: 'abc123' });
-  expect(manifest).toMatchObject({ version: '2.1.9', target: 'win32-x64', buildCommit: 'abc123' });
+  expect(manifest).toMatchObject({ version: '2.1.10', target: 'win32-x64', buildCommit: 'abc123' });
   await expect(verifyRuijieHarnessBundle(output, 'win32-x64')).resolves.toEqual(manifest);
 });
 

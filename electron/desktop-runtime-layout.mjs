@@ -1,6 +1,16 @@
 import path from 'node:path';
 import { existsSync, realpathSync } from 'node:fs';
 
+export function ruijieHarnessSidecarEnvironment(userData) {
+  const root = path.join(userData, 'harness-sidecar');
+  return {
+    RUIJIE_HARNESS_HOME: path.join(root, 'dsh'),
+    RUIJIE_HARNESS_USER_DATA_DIR: path.join(root, 'electron'),
+    RUIJIE_HARNESS_BRIDGE: path.join(root, 'bridge', 'openmaus-bridge.json'),
+    RUIJIE_HARNESS_BRIDGE_DIR: path.join(root, 'bridge'),
+  };
+}
+
 /** Content mode never changes application identity, data directories or updater mode. */
 export function desktopRuntimeLayout({ packaged, preview, appRoot, resourcesPath, platform, arch, resolveResourceRoot = realpathSync }) {
   const built = packaged || preview;

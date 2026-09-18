@@ -179,6 +179,10 @@ import {
 import type { GroupGoalRunCardData, GroupGoalRunStatus } from "../shared/group-goal-run.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
+import {
+  ruijieHarnessLocator,
+  type RuijieHarnessAuthentication,
+} from "./drivers/ruijie-harness-local.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
 import {
   cancelledChatFollowup,
@@ -539,6 +543,9 @@ type DesktopPrivateMessage = BrowserCleanupWireRequest | {
   botId: string;
   held: true;
 } | {
+  type: "openmausbot:ruijie-harness-auth-update";
+  authentication?: RuijieHarnessAuthentication;
+} | {
   type: "openmausbot:phone-secret-save";
   requestId: string;
   target: string;
@@ -583,6 +590,31 @@ function applyDesktopMutationTokenMessage(raw: unknown): boolean {
   }
   return true;
 }
+
+function validHarnessAuthentication(value: unknown): RuijieHarnessAuthentication | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.accessToken !== "string" || !candidate.accessToken || candidate.accessToken.length > 16_384
+    || typeof candidate.refreshToken !== "string" || !candidate.refreshToken || candidate.refreshToken.length > 16_384) return undefined;
+  return { accessToken: candidate.accessToken, refreshToken: candidate.refreshToken };
+}
+
+function applyRuijieHarnessAuthenticationMessage(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+  const message = raw as Record<string, unknown>;
+  if (message.type !== "openmausbot:ruijie-harness-auth") return false;
+  const authentication = message.authentication === undefined
+    ? undefined
+    : validHarnessAuthentication(message.authentication);
+  if (message.authentication !== undefined && !authentication) throw new Error("invalid Ruijie Harness authentication");
+  ruijieHarnessLocator.updateAuthentication(authentication, (next) => {
+    postDesktopPrivateMessage({
+      type: "openmausbot:ruijie-harness-auth-update",
+      ...(next ? { authentication: next } : {}),
+    });
+  });
+  return true;
+}
 // Browser data of a deleted bot or profile: the engine's saved session
 // state, cleared here on every host (the desktop no longer owns a browser).
 // The coordinator keeps its durable journal and replay; this is its outbox.
@@ -622,6 +654,7 @@ utilityParentPort?.on("message", (event) => {
   const message = event?.data;
   try {
     if (applyDesktopMutationTokenMessage(message)) return;
+    if (applyRuijieHarnessAuthenticationMessage(message)) return;
     if (applyWorkspaceCredentialSyncMessage(message, { target: cfg, environment: process.env })) {
       void reloadProviders().then(
         () => broadcast({ kind: "config", ...configStatus() }),
