@@ -228,6 +228,28 @@ export class ProfileRequestService {
     this.validateTarget = options.validateTarget;
   }
 
+  /** Explicit identity edits in the user's conversation are already requested.
+   * Keep proposals for agent-initiated, folder, and cross-bot changes. */
+  applyRequested(args: { botId: string; threadId: string; changes: unknown; reason: unknown }): {
+    applied: true; fields: string[]; name: string;
+  } {
+    reasonText(args.reason);
+    if (typeof args.changes !== "object" || !args.changes || Array.isArray(args.changes)
+      || Object.keys(args.changes).some((key) => !["name", "title", "description", "soul"].includes(key))) {
+      throw new ProfileRequestError("Only your own identity fields can be updated directly");
+    }
+    const changes = parseChanges(args.changes);
+    const target = this.store.bot(args.botId);
+    if (!target) throw new ProfileRequestError(NO_SUCH_BOT, 404);
+    const before = profileSnapshot(target);
+    const fields = PROFILE_REQUEST_FIELDS.filter((field) => changes[field] !== undefined && changes[field] !== before[field]);
+    if (!fields.length) return { applied: true, fields: [], name: target.name };
+    const updated = this.store.patchBotProfile(target.id, changes);
+    if (!updated) throw new ProfileRequestError(NO_SUCH_BOT, 404);
+    recordProfileChange(target.id, "bot", `chat:${args.threadId}`, before, { ...before, ...changes });
+    return { applied: true, fields, name: updated.name };
+  }
+
   propose(args: {
     botId: string;
     threadId: string;

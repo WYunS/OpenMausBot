@@ -18,7 +18,7 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, Copy, Download, LoaderCircle, RotateCcw, WrapText } from "lucide-react";
+import { Check, Copy, Download, WrapText } from "lucide-react";
 import { remarkMentions, type MentionPeer } from "@/lib/mentions";
 
 import {
@@ -30,7 +30,8 @@ import {
 } from "../lib/code-block";
 import { repairMarkdownTables } from "../lib/markdown-tables";
 import { remarkThreadRefs } from "../lib/thread-refs";
-import { MarkdownImagePreview, useLocalFileSave, type MessageAttachmentContext } from "./AttachmentPreview";
+import { MarkdownImagePreview, type MessageAttachmentContext } from "./AttachmentPreview";
+import { ExternalArtifactLink, LocalArtifactLink } from "./ArtifactLink";
 import { ThreadLink, threadLinkFromProps, useThreadRefs } from "./ThreadRefs";
 
 // tiny highlight cache so revisiting a thread doesn't re-tokenize settled
@@ -355,59 +356,6 @@ export function CodeBlock({ code, lang, streaming }: CodeBlockProps) {
   );
 }
 
-// A bot handing over a file it created renders as a button, not an anchor.
-// Two reasons the href is dropped rather than merely preventDefault()ed:
-// an absolute path in an href resolves against the page origin, so the link
-// pointed at http://127.0.0.1:8799<path> and opened the chat UI in a browser;
-// and an <a href="file://…"> would still reach setWindowOpenHandler on a
-// middle or modifier click, which calls shell.openExternal without the main
-// process' containment check.
-function LocalFileLink({ filePath, children, message }: { filePath: string; children?: ReactNode; message?: MessageAttachmentContext }) {
-  const save = useLocalFileSave(filePath, undefined, message);
-  if (!message) {
-    return <span title="Unavailable legacy file reference" className="break-words text-ink-secondary">{children}</span>;
-  }
-  const label = save.state === "saving"
-    ? "Saving…"
-    : save.state === "saved"
-      ? "Saved"
-      : save.state === "failed"
-        ? "Retry"
-        : null;
-
-  return (
-    <span dir="ltr" className="inline-flex flex-wrap items-center gap-x-1.5 [unicode-bidi:isolate]">
-      <button
-        type="button"
-        onClick={() => void save.save()}
-        disabled={save.state === "saving"}
-        title="Save a copy"
-        className="inline-flex items-center gap-1 break-words text-start text-accent underline decoration-accent/40 hover:decoration-accent disabled:cursor-wait"
-      >
-        {children}
-        {save.state === "saving" ? (
-          <LoaderCircle size={12} className="shrink-0 animate-spin" aria-hidden="true" />
-        ) : save.state === "saved" ? (
-          <Check size={12} className="shrink-0 text-success" aria-hidden="true" />
-        ) : save.state === "failed" ? (
-          <RotateCcw size={12} className="shrink-0" aria-hidden="true" />
-        ) : (
-          <Download size={12} className="shrink-0" aria-hidden="true" />
-        )}
-      </button>
-      {label && (
-        <span
-          role={save.state === "failed" ? "alert" : "status"}
-          title={save.state === "saved" ? save.savedTo : undefined}
-          className={`text-[12px] ${save.state === "saved" ? "text-success" : save.state === "failed" ? "text-danger" : "text-ink-secondary"}`}
-        >
-          {save.state === "failed" ? save.reason : label}
-        </span>
-      )}
-    </span>
-  );
-}
-
 export function markdownImageName(src: string, alt?: string): string {
   const supplied = alt?.trim();
   if (supplied) return supplied;
@@ -547,9 +495,9 @@ function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers 
           },
           a({ href, children }: { href?: string; children?: ReactNode }) {
             const localPath = localFilePath(href);
-            if (localPath) return <LocalFileLink filePath={localPath} message={message}>{children}</LocalFileLink>;
+            if (localPath) return <LocalArtifactLink filePath={localPath} message={message}>{children}</LocalArtifactLink>;
             return (
-              <a
+              <ExternalArtifactLink
                 href={href}
                 target="_blank"
                 rel="noreferrer"
@@ -557,7 +505,7 @@ function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers 
                 className="break-words text-accent underline decoration-accent/40 hover:decoration-accent [unicode-bidi:isolate]"
               >
                 {children}
-              </a>
+              </ExternalArtifactLink>
             );
           },
           table({ node, children }: BlockProps) {

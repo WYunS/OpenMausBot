@@ -107,6 +107,22 @@ function harness(options: { name: string; chiefOfStaff?: boolean }) {
 }
 
 describe("ProfileRequestService", () => {
+  it("saves an explicitly requested identity directly and records history without a confirmation card", async () => {
+    const { service, store, bot } = harness({ name: "Scout" });
+    const result = service.applyRequested({ botId: bot.id, threadId: bot.threadId,
+      changes: { name: "照片bot", title: "照片助手", description: "查找公开照片并附来源", soul: "负责查找公开照片，回答时附来源。" },
+      reason: "用户说：你叫照片bot，负责帮我找照片", });
+    expect(result).toMatchObject({ applied: true, fields: ["name", "title", "description", "soul"] });
+    expect(store.bot(bot.id)).toMatchObject({ name: "照片bot", title: "照片助手", soul: "负责查找公开照片，回答时附来源。" });
+    expect(store.messagesFor(bot.threadId)).toHaveLength(0);
+    await flushProfileHistory(bot.id);
+    expect(readHistory(bot.id).some((row) => row.field === "name" && row.via.startsWith("chat:"))).toBe(true);
+    service.applyRequested({ botId: bot.id, threadId: bot.threadId, changes: { name: "相册bot" }, reason: "rename only" });
+    await flushProfileHistory(bot.id);
+    expect(readHistory(bot.id)).toHaveLength(5);
+    expect(store.bot(bot.id)?.soul).toBe("负责查找公开照片，回答时附来源。");
+    expect(() => service.applyRequested({ botId: bot.id, threadId: bot.threadId, changes: { cwd: "" }, reason: "bad field" })).toThrow("identity");
+  });
   it("validates through the profile boundary, pins a revision, and appends a durable card", () => {
     const { service, store, bot } = harness({ name: "Scout" });
     const result = service.propose({

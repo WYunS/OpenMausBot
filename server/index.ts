@@ -9552,6 +9552,24 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         });
         return json(res, 201, proposed);
       }
+      if (method === "POST" && path === "/api/internal/profile") {
+        const parsed = z.object({
+          fromBotId: z.string().min(1).max(128), fromThreadId: z.string().min(1).max(128),
+          changes: z.unknown(), reason: z.unknown(),
+        }).strict().safeParse(await readInternalBody());
+        if (!parsed.success) return json(res, 400, { error: "invalid identity update" });
+        const from = internalSender;
+        const threadId = internalCapability.threadId;
+        if (internalCapability.depth !== 0 || internalTurnThreads.has(threadId) || isUnattended(from.id, threadId)) {
+          return json(res, 403, { error: "Direct identity updates require the user's own conversation; use propose_profile for a suggestion." });
+        }
+        if (!connectorThread(from.id, threadId)) return json(res, 403, { error: "source conversation does not belong to sender" });
+        const result = profileRequests.applyRequested({ botId: from.id, threadId, changes: parsed.data.changes, reason: parsed.data.reason });
+        if (result.fields.length) store.appendMessage(threadId, {
+          role: "bot", kind: "activity", tool: { name: `已更新 ${result.name} 的资料`, ok: true },
+        });
+        return json(res, 200, result);
+      }
       if (method === "POST" && path === "/api/internal/profile-requests") {
         const parsed = z.object({
           fromBotId: z.string().min(1).max(128),
@@ -11102,6 +11120,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           ? {
               "cross-origin-resource-policy": "same-origin",
               "referrer-policy": "no-referrer",
+              "content-security-policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'",
             }
           : {}),
       });

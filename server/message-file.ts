@@ -338,6 +338,11 @@ function mimeFor(path: string): string {
   switch (extname(path).toLowerCase()) {
     case ".md": return "text/markdown; charset=utf-8";
     case ".txt": return "text/plain; charset=utf-8";
+    case ".html":
+    case ".htm": return "text/html; charset=utf-8";
+    case ".svg": return "image/svg+xml";
+    case ".avif": return "image/avif";
+    case ".bmp": return "image/bmp";
     case ".csv": return "text/csv; charset=utf-8";
     case ".tsv": return "text/tab-separated-values; charset=utf-8";
     case ".json": return "application/json";

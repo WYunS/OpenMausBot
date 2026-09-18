@@ -58,6 +58,7 @@ let routinesResponse: unknown = {
 };
 let lastRoutineRequestBody: any = null;
 let lastProfileRequestBody: any = null;
+let lastDirectProfileBody: any = null;
 let profileRequestResponse: unknown = { requestId: "profile-request-1", summary: "Name → Kiwi" };
 let lastSessionSearchUrl = "";
 let lastSessionReadUrl = "";
@@ -232,6 +233,16 @@ beforeAll(async () => {
       });
       return;
     }
+    if (req.method === "POST" && req.url === "/api/internal/profile") {
+      let data = "";
+      req.on("data", (c) => (data += c));
+      req.on("end", () => {
+        lastDirectProfileBody = JSON.parse(data);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ applied: true, name: "照片bot", fields: ["name", "soul"] }));
+      });
+      return;
+    }
     if (req.method === "POST" && req.url === "/api/internal/profile-requests") {
       let data = "";
       req.on("data", (c) => (data += c));
@@ -358,6 +369,7 @@ describe("agents-proxy MCP surface", () => {
       "list_routines",
       "propose_routine",
       "propose_routine_action",
+      "update_profile",
       "propose_profile",
       "skills_list",
       "skill_manage",
@@ -1377,6 +1389,17 @@ describe("agents-proxy MCP surface", () => {
     });
     expect(badUpdate.result.isError).toBe(true);
     expect(lastRoutineRequestBody).toBeNull();
+  });
+
+  it("update_profile saves a requested identity without creating a proposal", async () => {
+    lastDirectProfileBody = null;
+    const res = await callTool("update_profile", { name: "照片bot", soul: "查找照片并附来源。", reason: "用户指定" });
+    expect(res.result.isError).toBeFalsy();
+    expect(lastDirectProfileBody).toMatchObject({ fromBotId: "bot-asker", changes: { name: "照片bot", soul: "查找照片并附来源。" } });
+    expect(res.result.content[0].text).toContain("Profile saved");
+    lastDirectProfileBody = null;
+    expect((await callTool("update_profile", { name: "Other", for_bot_id: "bot-helper", reason: "bad" })).result.isError).toBe(true);
+    expect(lastDirectProfileBody).toBeNull();
   });
 
   it("propose_profile posts the changed fields and reason to the internal route", async () => {

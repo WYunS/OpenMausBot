@@ -473,6 +473,7 @@ export function AttachmentPreviewDialog({
               key={`${current.src}:${attempt}`}
               src={current.src}
               alt={current.name}
+              referrerPolicy="no-referrer"
               onLoad={() => setLoadedSources((sources) => new Set(sources).add(current.src))}
               onError={() => setFailedSource(current.src)}
               className={cn(
@@ -513,11 +514,13 @@ function Thumbnail({
   onPreview,
   className,
   eager = false,
+  fit = "cover",
 }: {
   image: PreviewImage;
   onPreview: () => void;
   className?: string;
   eager?: boolean;
+  fit?: "cover" | "contain";
 }) {
   // Every caller keys this component by src. Resetting in an effect races a
   // cached/blob image's onLoad: it can become ready before the effect runs,
@@ -583,12 +586,14 @@ function Thumbnail({
             key={`${image.src}:${attempt}`}
             src={image.src}
             alt={image.name}
+            referrerPolicy="no-referrer"
             loading={eager ? "eager" : "lazy"}
             fetchPriority={eager ? "high" : undefined}
             onLoad={() => setState("ready")}
             onError={() => setState("failed")}
             className={cn(
-              "block size-full object-cover transition duration-200 group-hover/image:scale-[1.015]",
+              "block size-full transition duration-200 group-hover/image:scale-[1.015]",
+              fit === "contain" ? "object-contain" : "object-cover",
               state === "ready" ? "opacity-100" : "opacity-0",
             )}
           />
@@ -667,8 +672,6 @@ export function MarkdownImagePreview({
   );
   const localImageKey = localMessageImage ? `${threadId}\u0000${messageId}\u0000${localSourceOffset}` : null;
   const [visibleLocalImageKey, setVisibleLocalImageKey] = useState<string | null>(null);
-  const external = !filePath && isExternalImageSource(src);
-  const [approvedExternalSource, setApprovedExternalSource] = useState<string | null>(null);
 
   useEffect(() => {
     if (!localImageKey) return;
@@ -688,14 +691,11 @@ export function MarkdownImagePreview({
   }, [localImageKey]);
 
   const shouldLoadLocalImage = localMessageImage && (visibleLocalImageKey === localImageKey || open);
-  const externalAllowed = !external || approvedExternalSource === src;
-  const visibleSource = externalAllowed
-    ? localMessageImage
+  const visibleSource = localMessageImage
       ? shouldLoadLocalImage && filePath && threadId && messageId && localSourceOffset !== null
         ? messageImagePreviewUrl({ threadId, messageId }, localSourceOffset)
         : null
-      : src
-    : null;
+      : src;
   const image: PreviewImage = {
     src: visibleSource ?? "",
     name,
@@ -708,18 +708,12 @@ export function MarkdownImagePreview({
   return (
     <>
       <span ref={containerRef} className="my-2 block w-[min(36rem,70vw)] max-w-full">
-        {external && !externalAllowed ? (
-          <span className="flex aspect-[4/3] max-h-96 flex-col items-center justify-center gap-2 rounded-xl border border-hairline/40 bg-inset px-4 text-center text-[12px] text-ink-secondary">
-            <ImageOff size={20} />
-            <span>{t("attach.externalHidden")}</span>
-            <button type="button" className="rounded-md border border-hairline/50 bg-panel px-2.5 py-1 text-ink hover:bg-raised" onClick={(event) => { event.preventDefault(); event.stopPropagation(); setApprovedExternalSource(src); }}>{t("attach.loadImage")}</button>
-          </span>
-        ) : filePath && (!threadId || !messageId || localSourceOffset === null) ? (
+        {filePath && (!threadId || !messageId || localSourceOffset === null) ? (
           <span className="flex aspect-[4/3] max-h-96 items-center justify-center gap-2 rounded-xl border border-hairline/40 bg-inset text-[12px] text-ink-secondary" role="alert">
             <ImageOff size={17} /> {t("attach.oldImage")}
           </span>
         ) : visibleSource ? (
-          <Thumbnail key={image.src} image={image} onPreview={() => setOpen(true)} className="max-h-96" eager />
+          <Thumbnail key={image.src} image={image} onPreview={() => setOpen(true)} className="max-h-96" fit="contain" eager />
         ) : (
           <span className="flex aspect-[4/3] max-h-96 animate-pulse items-center justify-center rounded-xl border border-hairline/40 bg-inset" role="status">
             <LoaderCircle size={17} className="animate-spin text-ink-secondary/65" />

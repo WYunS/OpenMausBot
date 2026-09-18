@@ -282,11 +282,13 @@ describe("message-linked files", () => {
   it("refuses traversal and a symlink that resolves outside the allowed root", async () => {
     const secret = join(outside, "secret.md");
     writeFileSync(secret, "not for this conversation");
-    symlinkSync(secret, join(workspace, "escape.md"));
+    // A directory junction exercises the same canonical containment check
+    // without requiring Windows' elevated file-symlink privilege.
+    symlinkSync(outside, join(workspace, "escape"), process.platform === "win32" ? "junction" : "dir");
 
     await expect(openMessageFile("../outside/secret.md", [workspace]))
       .rejects.toMatchObject({ status: 403 });
-    await expect(openMessageFile("escape.md", [workspace]))
+    await expect(openMessageFile("escape/secret.md", [workspace]))
       .rejects.toMatchObject({ status: 403 });
   });
 

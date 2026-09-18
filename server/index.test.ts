@@ -6812,6 +6812,32 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("saves a user-requested identity immediately with durable history and scoped authorization", async () => {
+    const bot = (await api("POST", "/api/bots", { name: "Photo fixture" })).body.bot;
+    try {
+      const token = await mintTestCapability(BASE, bot.id, bot.threadId);
+      const update = (changes: unknown, extra = {}, bearer = token) => fetch(`${BASE}/api/internal/profile`, {
+        method: "POST", headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
+        body: JSON.stringify({ fromBotId: bot.id, fromThreadId: bot.threadId, changes, reason: "用户指定名字与职责", ...extra }),
+      });
+      expect((await update({ name: "照片bot", title: "照片助手", description: "寻找照片", soul: "查找照片并附来源。" })).status).toBe(200);
+      const state = (await api("GET", "/api/bots")).body.bots.find((b: any) => b.id === bot.id);
+      expect(state).toMatchObject({ name: "照片bot", title: "照片助手", description: "寻找照片" });
+      expect(state.messages.some((m: any) => m.card?.profileRequest)).toBe(false);
+      expect(readFileSync(join(home, ".openmausbot", "bots", bot.id, "SOUL.md"), "utf8")).toBe("查找照片并附来源。");
+      await expect.poll(async () => (await api("GET", `/api/bots/${bot.id}/history`)).body.rows.filter((r: any) => r.via.startsWith("chat:")).length).toBe(4);
+      expect((await update({ cwd: "" })).status).toBe(400);
+      expect((await update({ name: "wrong" }, { fromBotId: "another-bot" })).status).toBe(403);
+      expect((await update({ name: "wrong" }, { fromThreadId: "another-thread" })).status).toBe(403);
+      await mintTestCapability(BASE, bot.id, bot.threadId);
+      expect((await update({ name: "expired" })).status).toBe(401);
+      expect((await api("GET", "/api/bots")).body.bots.find((b: any) => b.id === bot.id).name).toBe("照片bot");
+    } finally {
+      await api("POST", `/api/bots/${bot.id}/interrupt`);
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
   it("keeps a proposed profile change inert until its card is confirmed, then records history", async () => {
     const soulFileOf = (botId: string) => join(home, ".openmausbot", "bots", botId, "SOUL.md");
     const bot = (await api("POST", "/api/bots", { name: "Scout" })).body.bot;

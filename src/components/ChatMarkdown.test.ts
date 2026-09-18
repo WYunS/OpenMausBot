@@ -207,24 +207,22 @@ describe("message-scoped file targets", () => {
 });
 
 describe("ChatMarkdown attachments", () => {
-  it("requires consent before loading a remote image", () => {
+  it("loads a bot-authored remote image inline", () => {
     const html = renderToStaticMarkup(createElement(ChatMarkdown, {
       text: "![Launch art](https://assets.example/hero.png)",
     }));
 
-    expect(html).toContain("External image hidden for privacy");
-    expect(html).toContain("Load image");
-    expect(html).not.toContain("src=\"https://assets.example/hero.png\"");
+    expect(html).not.toContain("Load image");
+    expect(html).toContain("src=\"https://assets.example/hero.png\"");
   });
 
-  it("requires consent for a protocol-relative image even inside a local link", () => {
+  it("loads a protocol-relative image even inside a local link", () => {
     const html = renderToStaticMarkup(createElement(ChatMarkdown, {
       text: "[![Launch art](//assets.example/hero.png)](/workspace/original.png)",
       message: { threadId: "thread-1", messageId: "message-1" },
     }));
 
-    expect(html).toContain("External image hidden for privacy");
-    expect(html).not.toContain("src=\"//assets.example/hero.png\"");
+    expect(html).toContain("src=\"//assets.example/hero.png\"");
   });
 
   it("keeps host paths private while routing them through the scoped file handler", () => {
@@ -248,12 +246,13 @@ describe("ChatMarkdown attachments", () => {
     expect(html).not.toContain("type=\"button\"");
   });
 
-  it("makes a message-authorized file link downloadable", () => {
+  it("opens a message-authorized PDF in a preview and retains download", () => {
     const html = renderToStaticMarkup(createElement(ChatMarkdown, {
       text: "[Download the report](/workspace/final-report.pdf)",
       message: { threadId: "thread-1", messageId: "message-1" },
     }));
     expect(html).toContain('title="Save a copy"');
+    expect(html).toContain('title="Open file preview"');
     expect(html).not.toContain("/workspace/final-report.pdf");
     expect(html).toContain("type=\"button\"");
   });
