@@ -115,6 +115,10 @@ sent mentions, multiline scrolling and responsive wrapping in real chat views.
 The [Group and Goal Local VM recipe](group-local-vm.md) checks per-speaker
 desktop routing, cancellation, and computer authority cleanup.
 
+The [selective Harness upgrade fixture](selective-harness-upgrade.md) checks
+native question payloads, confirmed cancellation/ownership, Off routing, and
+headless question-card/screenshot interactions in disposable environments.
+
 ## Evidence
 
 The [Japanese desktop font recipe](japanese-desktop.md) checks real Firefox and
