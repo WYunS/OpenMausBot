@@ -6,6 +6,7 @@ const launcher = new URL("../scripts/start-local-windows.ps1", import.meta.url);
 const windowlessLauncher = new URL("../scripts/start-local-windows.vbs", import.meta.url);
 const nativeLauncher = new URL("../scripts/OpenMausBot.DevLauncher.cs", import.meta.url);
 const shortcutInstaller = new URL("../scripts/install-local-windows-shortcut.ps1", import.meta.url);
+const previewPreparation = new URL("../scripts/prepare-local-preview.mjs", import.meta.url);
 const mainProcess = new URL("./main.mjs", import.meta.url);
 const onboarding = new URL("../src/components/Onboarding.tsx", import.meta.url);
 
@@ -14,6 +15,12 @@ test("source browser uses the complete staged Windows pair without overriding ex
   assert.match(source, /-not \$env:OMB_AGENT_BROWSER_PATH -and -not \$env:AGENT_BROWSER_EXECUTABLE_PATH/);
   assert.match(source, /\$env:OMB_BROWSER_BUNDLE_DIR = \$stagedBrowserRoot/);
   assert.match(source, /'manifest.json'/);
+});
+
+test("source preview stages the verified Windows CUA driver before Electron starts", async () => {
+  const source = await readFile(previewPreparation, "utf8");
+  assert.match(source, /import\s*\{\s*prepareCuaWindows\s*\}\s*from\s*["']\.\/prepare-cua-windows\.mjs["']/);
+  assert.match(source, /if\s*\(target\s*===\s*["']win32-x64["']\)\s*await\s+prepareCuaWindows\(\{\s*root\s*\}\)/);
 });
 
 test("the desktop wrapper starts PowerShell without flashing a console", async () => {
@@ -87,7 +94,7 @@ test("a cold shortcut launch starts Electron directly and verifies that it stays
 test("an opted-in development desktop uses the same private server ownership path as a package", async () => {
   const source = await readFile(mainProcess, "utf8");
   assert.match(source, /const OWNS_LOCAL_SERVER\s*=\s*app\.isPackaged\s*\|\|\s*process\.env\.OMB_DESKTOP_SERVER\s*===\s*"1"/);
-  assert.match(source, /else if \(OWNS_LOCAL_SERVER\) \{\s*serverReady = await startServerPackaged\(\)/);
+  assert.match(source, /else if \(OWNS_LOCAL_SERVER\) \{\s*await startServerPackaged\(\)/);
   assert.match(source, /const entry = desktopLayout.server/);
   assert.match(source, /execArgv:\s*desktopLayout.built\s*\?\s*\[\]\s*:\s*\["--experimental-strip-types"\]/);
 });

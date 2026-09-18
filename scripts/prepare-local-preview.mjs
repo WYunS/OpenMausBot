@@ -5,12 +5,14 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { archiveBrowserRuntimeLog, verifyBrowserBundle, stageBrowserTarget } from './prepare-browser.mjs';
+import { prepareCuaWindows } from './prepare-cua-windows.mjs';
 import { verifyFeishuRuntimeBundle, prepareFeishuRuntime } from './prepare-feishu-runtime.mjs';
 import { verifyDesktopBuildReceipt, writeDesktopBuildReceipt } from './desktop-build-receipt.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const target = `${process.platform}-${process.arch}`;
 mkdirSync(path.join(root, 'dist-native'), { recursive: true });
+if (target === 'win32-x64') await prepareCuaWindows({ root });
 function run(args) {
   const result = spawnSync(process.execPath, args, { cwd: root, stdio: 'inherit', windowsHide: true });
   if (result.error || result.status !== 0) throw new Error(`Preview preparation failed: ${args[0]} (${result.status})`);
