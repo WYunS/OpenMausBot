@@ -49,6 +49,11 @@ try {
   win.webContents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
   win.webContents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
   await until(`!document.querySelector('[role=dialog]')`);
+  await evaluate(`Array.from(document.querySelectorAll('.chat-md button')).find(b => b.textContent === 'Open image').click()`);
+  await until(`document.querySelector('dialog img')?.naturalWidth > 0`);
+  await screenshot("local-image-preview.png");
+  await evaluate(`document.querySelector('button[aria-label="Close file preview"]').click()`);
+  await until(`!document.querySelector('dialog')`);
   await evaluate(`Array.from(document.querySelectorAll('.chat-md button')).find(b => b.textContent === 'Open text').click()`);
   await until(`document.querySelector('dialog')?.innerText.includes('Artifact fixture:')`);
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('dialog')).backgroundColor === getComputedStyle(document.querySelector('dialog')).color`), false);
@@ -71,7 +76,7 @@ try {
   await send("你保存的职责是什么？");
   await until(`document.body.innerText.includes('职责已持久保存')`, 60000);
   assert.equal(errors.filter(error => !error.includes("Content Security Policy") && !error.includes("sandboxed")).length, 0, JSON.stringify(errors));
-  writeFileSync(join(config.evidence, "ui.json"), JSON.stringify({ ok: true, checks: ["composer -> MCP -> saved profile", "remote/local images decoded", "image dialog and Escape", "text/HTML preview", "HTML scripts inert", "website shell bridge", "reload and next-turn standing instructions"], console: errors }, null, 2));
+  writeFileSync(join(config.evidence, "ui.json"), JSON.stringify({ ok: true, checks: ["composer -> MCP -> saved profile", "remote/local images decoded", "absolute Windows path with hidden directory and Chinese filename", "image link POST preview", "image dialog and Escape", "text/HTML preview", "HTML scripts inert", "website shell bridge", "reload and next-turn standing instructions"], console: errors }, null, 2));
   win.destroy(); app.exit(0);
 } catch (error) {
   console.error(error);

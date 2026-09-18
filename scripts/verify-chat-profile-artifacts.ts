@@ -18,9 +18,11 @@ try {
   await runControlOmb(["new-bot", "--name", "Photo fixture", "--url", fixture.info.url]);
   const bot = (await api("GET", "/api/bots")).bots.find((b: any) => b.name === "Photo fixture");
   assert(bot);
-  const workspace = join(fixture.info.dataDir, "artifact-workspace");
+  const workspace = join(fixture.info.dataDir, ".artifact-workspace");
   mkdirSync(workspace);
   copyFileSync("electron/resources/app-icon.png", join(workspace, "sample.png"));
+  const localImagePath = join(workspace, "活动照片.png");
+  copyFileSync("electron/resources/app-icon.png", localImagePath);
   writeFileSync(join(workspace, "report.txt"), "Artifact fixture: this file opened inside the bot.");
   writeFileSync(join(workspace, "report.html"), '<h1>Artifact preview</h1><p>Generated HTML renders here.</p><script>parent.__artifactScriptRan=true</script>');
   await api("PATCH", `/api/bots/${bot.id}`, { cwd: workspace, title: "Redundant sidebar title", computer: "off" });
@@ -30,7 +32,7 @@ try {
     } }],
   });
   const webImage = new URL("/__fixture/image.png", ui.previewUrl).href;
-  const reply = `已保存名字和职责。\n\n![Remote sample](${webImage})\n\n![Local sample](sample.png)\n\n[Open text](report.txt) · [Open HTML](report.html) · [Source website](https://example.com/source)`;
+  const reply = `已保存名字和职责。\n\n![Remote sample](${webImage})\n\n![Local sample](${localImagePath})\n\n[Open image](${localImagePath}) · [Open text](report.txt) · [Open HTML](report.html) · [Source website](https://example.com/source)`;
   const plan = { [bot.id]: { turns: [
     { expectSystemIncludes: ["update_profile", "save those requested identity fields immediately"],
       steps: [{ tool: "update_profile", arguments: { name: "照片bot", title: "照片助手", description: "帮助寻找公开照片", soul: "负责寻找公开照片并附上来源。", reason: "用户明确指定名字和职责" } }], reply },

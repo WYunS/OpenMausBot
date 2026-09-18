@@ -207,6 +207,41 @@ describe("message-scoped file targets", () => {
 });
 
 describe("ChatMarkdown attachments", () => {
+  it("previews a Windows backslash image path containing Chinese filenames", () => {
+    const html = renderToStaticMarkup(createElement(ChatMarkdown, {
+      text: "![公开活动照片](C:\\Users\\Fixture\\.openmausbot\\照片\\活动照片.png)",
+      message: { threadId: "thread-1", messageId: "message-1" },
+    }));
+    expect(html).not.toContain("Image unavailable");
+    expect(html).toContain("Loading 公开活动照片");
+    expect(html).not.toContain('src="C:');
+  });
+
+  it("retains Windows separators before a hidden folder when resolving images", () => {
+    const preview = vi.spyOn(AttachmentPreview, "MarkdownImagePreview");
+    try {
+      renderToStaticMarkup(createElement(ChatMarkdown, {
+        text: "![活动](C:\\Users\\Fixture\\.openmausbot\\照片.png)",
+        message: { threadId: "thread-1", messageId: "message-1" },
+      }));
+      expect(preview.mock.calls[0]?.[0].filePath).toBe("C:/Users/Fixture/.openmausbot/%E7%85%A7%E7%89%87.png");
+    } finally { preview.mockRestore(); }
+  });
+
+  it("keeps reference-image labels and source offsets while repairing Windows paths", () => {
+    const preview = vi.spyOn(AttachmentPreview, "MarkdownImagePreview");
+    try {
+      renderToStaticMarkup(createElement(ChatMarkdown, {
+        text: "Intro\n\n![活动\\*照片][photo]\n\n[photo]: <C:\\Users\\Fixture\\.app\\活动 (1).png> \"Photo\"",
+        message: { threadId: "thread-1", messageId: "message-1" },
+      }));
+      expect(preview.mock.calls[0]?.[0]).toMatchObject({
+        name: "活动*照片", sourceOffset: 7,
+        filePath: "C:/Users/Fixture/.app/%E6%B4%BB%E5%8A%A8%20(1).png",
+      });
+    } finally { preview.mockRestore(); }
+  });
+
   it("loads a bot-authored remote image inline", () => {
     const html = renderToStaticMarkup(createElement(ChatMarkdown, {
       text: "![Launch art](https://assets.example/hero.png)",

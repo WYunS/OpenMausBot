@@ -30,6 +30,18 @@ beforeEach(() => {
 afterAll(() => rmSync(suite, { recursive: true, force: true }));
 
 describe("message-linked files", () => {
+  it("preserves Windows separators that Markdown would consume as punctuation escapes", () => {
+    const target = "C:\\Users\\Fixture\\.openmausbot\\_photos\\活动.png";
+    const markdown = `![活动照片](${target})`;
+    expect(messageImageTargetAt(markdown, 0)).toBe("C:/Users/Fixture/.openmausbot/_photos/活动.png");
+    expect(messageReferencesFile(markdown, target)).toBe(true);
+    expect(messageReferencesFile(markdown, "C:\\Users\\Fixture.openmausbot_photos\\活动.png")).toBe(false);
+    expect(messageReferencesFile(`\`\`\`markdown\n${markdown}\n\`\`\``, target)).toBe(false);
+    const reference = `![活动][photo]\n\n[photo]: <C:\\Users\\Fixture\\.openmausbot\\活动 (1).png> "Photo"`;
+    expect(messageImageTargetAt(reference, 0)).toBe("C:/Users/Fixture/.openmausbot/活动 (1).png");
+    expect(messageReferencesFile(reference, "C:/Users/Fixture/.openmausbot/活动 (1).png")).toBe(true);
+  });
+
   it("resolves a Markdown image from an opaque source offset", () => {
     const markdown = [
       "See this:",
