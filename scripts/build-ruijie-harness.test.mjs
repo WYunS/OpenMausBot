@@ -23,9 +23,14 @@ it('all release entrypoints checkout the same reviewed source', async () => {
   for (const file of ['package-release.yml', 'release.yml', 'package-win.yml']) {
     const workflow = parse(await readFile(new URL(`../.github/workflows/${file}`, import.meta.url), 'utf8'));
     const checkouts = Object.values(workflow.jobs).flatMap(job => job.steps ?? [])
-      .filter(step => step.with?.repository === HARNESS_RELEASE.repository);
+      .filter(step => step.with?.path === 'ruijie-harness');
     expect(checkouts.length).toBeGreaterThan(0);
-    for (const checkout of checkouts) expect(checkout.with.ref).toBe(HARNESS_RELEASE.commit);
+    for (const checkout of checkouts) {
+      expect(checkout.with.ref).toBe(HARNESS_RELEASE.commit);
+      expect(checkout.with.repository).toBe(file === 'package-release.yml'
+        ? "${{ github.repository == 'WYunS/OpenMausBot' && 'WYunS/ruijie-harness' || 'AI-Applications-Team/ruijie-harness' }}"
+        : HARNESS_RELEASE.repository);
+    }
   }
   const adapter = await readFile(new URL('../.release/adapter.mjs', import.meta.url), 'utf8');
   expect(adapter).toContain("scripts/build-ruijie-harness.mjs");

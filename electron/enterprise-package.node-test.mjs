@@ -3,6 +3,7 @@ import {createRequire} from 'node:module';
 import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import test from 'node:test';
+import {releaseRepository} from '../.release/repository.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url));
 const require=createRequire(import.meta.resolve('electron-builder'));
 const {getConfig,validateConfiguration}=require('app-builder-lib/out/util/config/config.js');
@@ -12,7 +13,8 @@ test('enterprise test config preserves identity/resources, excludes credentials,
   assert.equal(config.appId,'com.openmausbot.app');
   assert.equal(config.productName,'OpenMausBot');
   assert.equal(config.afterPack,'./scripts/after-pack.mjs');
-  assert.deepEqual(config.publish,[{provider:'github',owner:'AI-Applications-Team',repo:'OpenMausBot'}]);
+  const {owner,repo}=releaseRepository();
+  assert.deepEqual(config.publish,[{provider:'github',owner,repo}]);
   assert.equal(config.mac.identity,'-');assert.equal(config.mac.notarize,false);assert.equal(config.dmg.sign,false);
   assert.deepEqual(config.win.target,[{target:'nsis',arch:['x64']}]);
   assert(config.extraResources.some(x=>x.to==='server'));

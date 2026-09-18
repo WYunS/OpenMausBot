@@ -5,8 +5,9 @@ import {createReadStream} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-const repository='AI-Applications-Team/OpenMausBot';
-const commonEnv={OMB_ENTERPRISE_TEST_BUILD:'1',OMB_EXPECTED_UPDATE_OWNER:'AI-Applications-Team',OMB_EXPECTED_UPDATE_REPO:'OpenMausBot'};
+import {releaseRepository} from './repository.mjs';
+const {repository,owner,repo}=releaseRepository();
+const commonEnv={OMB_ENTERPRISE_TEST_BUILD:'1',OMB_EXPECTED_UPDATE_OWNER:owner,OMB_EXPECTED_UPDATE_REPO:repo};
 function run(command,args,env={}) {
   const result=spawnSync(command,args,{stdio:'inherit',shell:process.platform==='win32'&&command==='corepack',windowsHide:true,env:{...process.env,...commonEnv,...env}});
   if(result.error)throw result.error;
@@ -16,7 +17,7 @@ const pnpm=(args,env)=>run('corepack',['pnpm',...args],env);
 const node=(args,env)=>run(process.execPath,args,env);
 export async function preflight(ctx) {
   const blockers=[];
-  assert.equal(process.env.GITHUB_REPOSITORY || repository,repository,'Use the enterprise repository');
+  releaseRepository();
   for(const file of ['electron-builder.enterprise.mjs','scripts/package-enterprise-macos.mjs','scripts/enterprise-macos-sign.mjs','scripts/smoke-feishu-package.mjs']) {
     try {await readFile(file);}catch{blockers.push(`Missing release integration: ${file}`);}
   }

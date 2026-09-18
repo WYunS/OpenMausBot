@@ -2,6 +2,8 @@
 
 入口：[Actions → 打包发布](https://github.com/AI-Applications-Team/OpenMausBot/actions/workflows/package-release.yml) → **Run workflow**。
 
+个人仓库入口：[WYunS/OpenMausBot → 打包发布](https://github.com/WYunS/OpenMausBot/actions/workflows/package-release.yml)。工作流分支和 `source_ref` 都选 `main`，`version` 留空读取当前 `0.1.84`，选择平台；仅下载安装包选 `mode=artifacts`。个人仓库从公开的 `WYunS/ruijie-harness` 镜像读取同一个固定提交，不需要企业仓库访问凭据。构建说明和下载仓库标识随实际仓库切换，仍保留全部构建、资源和验收检查。企业仓库的 `v0.1.84` 标签不因个人仓库适配而移动。
+
 1. 工作流分支和 `source_ref` 通常都选 `main`。
 2. `version` 填一个未发布过的版本，例如 `v0.1.76`。留空读取所选源码的 `package.json`；不会自动增加版本号。
 3. `platforms` 默认 `all`；也可以只选 `macos`、`windows` 或 `linux`。

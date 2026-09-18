@@ -97,7 +97,7 @@ jobs:
         if: runner.os != 'Linux'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          repository: AI-Applications-Team/ruijie-harness
+          repository: ${{ github.repository == 'WYunS/OpenMausBot' && 'WYunS/ruijie-harness' || 'AI-Applications-Team/ruijie-harness' }}
           ref: f48fe5cb09e37c1bcb4ed2c19f75ce5e1bf8aeae
           path: ruijie-harness
           persist-credentials: false
