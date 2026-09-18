@@ -91,6 +91,15 @@ jobs:
           node-version: ${{ needs.prepare.outputs.node }}
       - name: Enable pinned package manager
         run: corepack enable
+      - name: Checkout reviewed Harness sidecar source
+        if: runner.os != 'Linux'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: AI-Applications-Team/ruijie-harness
+          ref: a7c71c4cadaad2db218d126146973e38649a6f43
+          path: ruijie-harness
+          persist-credentials: false
+          submodules: recursive
       - name: Install Linux build and test dependencies
         if: runner.os == 'Linux'
         run: |

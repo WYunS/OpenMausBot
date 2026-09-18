@@ -3,8 +3,10 @@ import { closeSync, lstatSync, openSync, readSync, readdirSync, writeFileSync } 
 import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { verifyFeishuRuntimeBundle } from "./prepare-feishu-runtime.mjs";
+import { verifyRuijieHarnessBundle } from "./prepare-ruijie-harness.mjs";
 
 const feishuSlice = (app, file) => relative(app, file).replaceAll("\\", "/").match(/^Contents\/Resources\/tuantuan-feishu-runtime\/darwin-(arm64|x64)\//)?.[1];
+const harnessSlice = (app, file) => relative(app, file).replaceAll("\\", "/").match(/^Contents\/Resources\/ruijie-harness\/darwin-(arm64|x64)\//)?.[1];
 
 export function run(command, args) {
   const result = spawnSync(command, args, { encoding: "utf8", timeout: 180_000, maxBuffer: 8 * 1024 * 1024 });
@@ -47,11 +49,12 @@ export function signAdHoc(appPath) {
   for (const file of binaries) {
     // These approved third-party bytes already carry their vendor signatures
     // (or the vendor's unsigned status). Preserve their exact pinned hashes.
-    if (feishuSlice(app, file)) continue;
+    if (feishuSlice(app, file) || harnessSlice(app, file)) continue;
     const executable = run("/usr/bin/file", ["--brief", file]).includes("executable");
     run("/usr/bin/codesign", ["--force", "--sign", "-", "--timestamp=none", "--options", "runtime", ...(executable ? ["--entitlements", entitlements] : []), file]);
   }
   for (const bundle of [...bundles, app]) {
+    if (harnessSlice(app, bundle)) continue;
     run("/usr/bin/codesign", ["--force", "--sign", "-", "--timestamp=none", "--options", "runtime", "--entitlements", entitlements, bundle]);
   }
 }
@@ -63,8 +66,18 @@ export async function verifyAdHocUniversal(appPath, reportPath) {
   const report = { schemaVersion: 1, bundleId: identifier, signing: "ad-hoc signed, not notarized", notarized: false, components: [], humanTccAcceptance: "not-run" };
   for (const arch of ["arm64", "x64"]) {
     await verifyFeishuRuntimeBundle(join(app, "Contents/Resources/tuantuan-feishu-runtime", `darwin-${arch}`), `darwin-${arch}`);
+    const root = join(app, "Contents/Resources/ruijie-harness", `darwin-${arch}`);
+    const manifest = await verifyRuijieHarnessBundle(root, `darwin-${arch}`);
+    const executable = join(root, manifest.executable);
+    const architectures = run("/usr/bin/lipo", ["-archs", executable]).split(/\s+/);
+    if (!architectures.includes(arch === "x64" ? "x86_64" : "arm64")) throw new Error(`Wrong Harness architecture: ${executable}`);
+    run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=2", resolve(executable, "../../..")]);
   }
   for (const file of [...binaries, ...bundles, app]) {
+    if (harnessSlice(app, file)) {
+      report.components.push({ path: relative(app, file), signature: "Harness source-built signature and complete runtime digest preserved" });
+      continue;
+    }
     const pinnedFeishu = feishuSlice(app, file);
     if (pinnedFeishu) {
       const architectures = run("/usr/bin/lipo", ["-archs", file]).split(/\s+/);

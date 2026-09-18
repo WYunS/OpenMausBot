@@ -6,24 +6,27 @@ import { posix, win32 } from "node:path";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { promisify } from "node:util";
+import { HARNESS_RELEASE } from "../../shared/ruijie-harness-release.ts";
 
 const BRIDGE_FILENAME = "openmaus-bridge.json";
 const PRODUCT_NAME = "锐捷 Harness";
 const WINDOWS_EXECUTABLE_NAME = "Ruijie-Harness.exe";
 const STARTUP_TIMEOUT_MS = 30_000;
 const POLL_INTERVAL_MS = 250;
-export const BUNDLED_HARNESS_VERSION = "2.1.10";
+export const BUNDLED_HARNESS_VERSION = HARNESS_RELEASE.version;
 const BUNDLED_MANIFEST = "manifest.json";
 const BUNDLED_BRIDGE_CAPABILITY = "openmaus-server-v1";
 
 export interface RuijieHarnessBundleManifest {
-  schemaVersion: 1;
+  schemaVersion: 2;
   version: string;
   target: string;
   executable: string;
   bridge: { schemaVersion: 1; capability: string };
   executableSha256: string;
-  buildCommit?: string;
+  buildCommit: string;
+  payload: Record<string, string>;
+  runtimeSha256: string;
 }
 
 /** Installed and startable, but intentionally not launched by a passive probe. */
@@ -96,9 +99,11 @@ export async function bundledRuijieHarnessExecutable(
     const manifest = JSON.parse(await dependencies.readText(pathApi.join(root, BUNDLED_MANIFEST))) as Partial<RuijieHarnessBundleManifest>;
     const target = `${dependencies.platform}-${dependencies.arch}`;
     if (
-      manifest.schemaVersion !== 1
+      manifest.schemaVersion !== HARNESS_RELEASE.schemaVersion
       || manifest.version !== BUNDLED_HARNESS_VERSION
       || manifest.target !== target
+      || manifest.buildCommit !== HARNESS_RELEASE.commit
+      || !/^[a-f0-9]{64}$/u.test(manifest.runtimeSha256 ?? "")
       || manifest.bridge?.schemaVersion !== 1
       || manifest.bridge?.capability !== BUNDLED_BRIDGE_CAPABILITY
       || typeof manifest.executable !== "string"
@@ -111,6 +116,21 @@ export async function bundledRuijieHarnessExecutable(
     const prefix = resolvedRoot.endsWith(pathApi.sep) ? resolvedRoot : resolvedRoot + pathApi.sep;
     if (!executable.startsWith(prefix) || !await dependencies.pathExists(executable)) return undefined;
     if (await dependencies.sha256(executable) !== manifest.executableSha256) return undefined;
+    // Full-tree verification is a build/release gate. Startup verifies the
+    // archive, metadata and entrypoint without rehashing gigabytes on every probe.
+    const resources = dependencies.platform === "darwin"
+      ? posix.join(posix.dirname(manifest.executable.replaceAll("\\", "/")), "../Resources")
+      : "runtime/resources";
+    const payload = ["app.asar", "app.asar.unpacked/package.json", "app.asar.unpacked/lib/main.js"]
+      .map(file => posix.join(resources, file));
+    if (!manifest.payload || Object.keys(manifest.payload).length !== payload.length) return undefined;
+    for (const file of payload) {
+      if (!/^[a-f0-9]{64}$/u.test(manifest.payload[file] ?? "")
+        || await dependencies.sha256(pathApi.join(root, file)) !== manifest.payload[file]) return undefined;
+    }
+    const pkg = JSON.parse(await dependencies.readText(pathApi.join(root, payload[1])));
+    if (pkg.name !== "dsh-plugin-desktop" || pkg.version !== BUNDLED_HARNESS_VERSION
+      || pkg.main !== "lib/main.js" || pkg.ruijieHarnessBuildCommit !== HARNESS_RELEASE.commit) return undefined;
     return executable;
   } catch {
     return undefined;

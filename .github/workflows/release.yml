@@ -108,7 +108,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: AI-Applications-Team/ruijie-harness
-          ref: 38fc3f4a79a5bab30a6a07d852c4ed3ef832d3b3
+          ref: a7c71c4cadaad2db218d126146973e38649a6f43
           path: ruijie-harness
           persist-credentials: false
           submodules: recursive
@@ -118,19 +118,10 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Build pinned universal Harness sidecar
-        working-directory: ruijie-harness
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: |
-          corepack enable
-          yarn install --immutable
-          yarn workspace dsh-community-market build
-          yarn workspace dsh-plugin-desktop build
-          cd dsh-plugin-desktop
-          yarn exec electron-builder --dir --mac --universal --publish never
+      - name: Build pinned Harness sidecar
+        run: node scripts/build-ruijie-harness.mjs --source ruijie-harness
       - name: Clean generated output
-        run: rm -rf dist dist-server dist-native release
+        run: rm -rf dist dist-server release
 
       - name: Import the Developer ID certificate into a throwaway keychain
         env:
@@ -153,7 +144,7 @@ jobs:
         env:
           RUIJIE_HARNESS_BUNDLE_SOURCE_DARWIN_ARM64: ${{ github.workspace }}/ruijie-harness/dsh-plugin-desktop/dist/mac-universal/锐捷 Harness.app
           RUIJIE_HARNESS_BUNDLE_SOURCE_DARWIN_X64: ${{ github.workspace }}/ruijie-harness/dsh-plugin-desktop/dist/mac-universal/锐捷 Harness.app
-          RUIJIE_HARNESS_BUILD_COMMIT: 38fc3f4a79a5bab30a6a07d852c4ed3ef832d3b3
+          RUIJIE_HARNESS_BUILD_COMMIT: a7c71c4cadaad2db218d126146973e38649a6f43
         run: pnpm package:mac
 
       - name: "Gate: both packaged apps use the canonical updater feed"
@@ -300,7 +291,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: AI-Applications-Team/ruijie-harness
-          ref: 38fc3f4a79a5bab30a6a07d852c4ed3ef832d3b3
+          ref: a7c71c4cadaad2db218d126146973e38649a6f43
           path: ruijie-harness
           persist-credentials: false
           submodules: recursive
@@ -310,23 +301,15 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Build pinned Windows Harness sidecar
-        working-directory: ruijie-harness
-        shell: bash
-        run: |
-          corepack enable
-          yarn install --immutable
-          yarn workspace dsh-community-market build
-          yarn workspace dsh-plugin-desktop build
-          cd dsh-plugin-desktop
-          yarn exec electron-builder --dir --win --x64 --publish never
+      - name: Build pinned Harness sidecar
+        run: node scripts/build-ruijie-harness.mjs --source ruijie-harness
       - name: Clean generated output
         shell: bash
         run: rm -rf dist dist-server release
       - run: pnpm package:win
         env:
           RUIJIE_HARNESS_BUNDLE_SOURCE_WIN32_X64: ${{ github.workspace }}\ruijie-harness\dsh-plugin-desktop\dist\win-unpacked
-          RUIJIE_HARNESS_BUILD_COMMIT: 38fc3f4a79a5bab30a6a07d852c4ed3ef832d3b3
+          RUIJIE_HARNESS_BUILD_COMMIT: a7c71c4cadaad2db218d126146973e38649a6f43
       - name: "Gate: bundled browser works with an empty home"
         run: node scripts/smoke-browser-bundle.mjs --resources "${{ github.workspace }}/release/win-unpacked/resources"
       - name: "Gate: packaged Windows server discovers its browser"

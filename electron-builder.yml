@@ -79,6 +79,8 @@ extraResources:
   - from: dist-native/android-platform-tools
     to: android-platform-tools
 mac:
+  # The sidecar is signed and hashed before staging; preserve its exact bytes.
+  signIgnore: ['ruijie-harness/']
   # Two single-arch artifacts rather than one universal binary: the app is
   # architecture-specific, and universal would make users download both halves.
   # electron-updater picks by filename (arm64-marked files on Apple silicon,

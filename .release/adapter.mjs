@@ -42,6 +42,7 @@ export async function build(ctx) {
   node(['--test','electron/enterprise-package.node-test.mjs','electron/desktop-runtime-layout.node-test.mjs','electron/ruijie-sandbox-bootstrap.node-test.mjs']);
   pnpm(['exec','vitest','run','server/browser-bundle-universal.test.ts','server/store.test.ts']);
   pnpm(['package:prepare'],env);
+  if(ctx.target!=='linux-x64')node(['scripts/build-ruijie-harness.mjs','--source',path.join(ctx.root,'ruijie-harness')]);
   if(ctx.target==='windows-x64') {
     pnpm(['build:cua:windows']);pnpm(['build:feishu:windows']);node(['scripts/desktop-build-receipt.mjs','--write']);
     pnpm(['exec','electron-builder','--config','electron-builder.enterprise.mjs','--win','--x64','--publish','never']);

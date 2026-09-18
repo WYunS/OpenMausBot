@@ -16,16 +16,21 @@ test('bundled Harness state is isolated below the Bot user-data directory', () =
   });
 });
 
-test('Universal Feishu selects the native slice and never substitutes the other CPU', () => {
+test('Universal Feishu and Harness select the native slice and never substitute the other CPU', () => {
   const resourcesPath = mkdtempSync(path.join(tmpdir(), 'ruijie-universal-feishu-'));
   try {
     const runtime = path.join(resourcesPath, 'tuantuan-feishu-runtime');
     mkdirSync(path.join(runtime, 'darwin-arm64'), { recursive: true });
     writeFileSync(path.join(runtime, 'universal.json'), JSON.stringify({ schemaVersion: 1, targets: ['darwin-arm64', 'darwin-x64'] }));
+    const harness = path.join(resourcesPath, 'ruijie-harness');
+    mkdirSync(path.join(harness, 'darwin-arm64'), { recursive: true });
+    writeFileSync(path.join(harness, 'universal.json'), JSON.stringify({ schemaVersion: 1, targets: ['darwin-arm64', 'darwin-x64'] }));
     for (const arch of ['arm64', 'x64']) {
       const layout = desktopRuntimeLayout({ packaged: true, appRoot: resourcesPath, resourcesPath, platform: 'darwin', arch });
       assert.equal(layout.feishu, path.join(runtime, `darwin-${arch}`));
       assert.equal(existsSync(layout.feishu), arch === 'arm64');
+      assert.equal(layout.harness, path.join(harness, `darwin-${arch}`));
+      assert.equal(existsSync(layout.harness), arch === 'arm64');
     }
   } finally { rmSync(resourcesPath, { recursive: true, force: true }); }
 });

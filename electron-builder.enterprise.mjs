@@ -19,7 +19,7 @@ export default {
   artifactName: 'RuijieBot-${version}-${arch}.${ext}',
   extraResources: [...base.extraResources, {from:'build/enterprise-release.json',to:'enterprise-release.json'}],
   publish: [{provider:'github',owner:'AI-Applications-Team',repo:'OpenMausBot'}],
-  mac: {...base.mac,identity:'-',notarize:false,signIgnore:['tuantuan-feishu-runtime/']},
+  mac: {...base.mac,identity:'-',notarize:false,signIgnore:['tuantuan-feishu-runtime/','ruijie-harness/']},
   dmg: {...base.dmg,sign:false},
   win: {...base.win,target:[{target:'nsis',arch:['x64']}]},
 };

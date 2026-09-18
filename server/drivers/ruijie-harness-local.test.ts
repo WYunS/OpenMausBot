@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { HARNESS_RELEASE } from "../../shared/ruijie-harness-release.ts";
+
+const payload = Object.fromEntries(["app.asar", "app.asar.unpacked/package.json", "app.asar.unpacked/lib/main.js"].map(file => [`runtime/resources/${file}`, "a".repeat(64)]));
+const packageText = JSON.stringify({ name: "dsh-plugin-desktop", version: HARNESS_RELEASE.version, main: "lib/main.js", ruijieHarnessBuildCommit: HARNESS_RELEASE.commit });
 
 import {
   createRuijieHarnessLocator,
@@ -48,8 +52,8 @@ describe("installed Ruijie Harness discovery", () => {
     const locator = createRuijieHarnessLocator(dependencies({
       environment: {},
       pathExists: async (path) => path === bundled || path === WINDOWS_EXECUTABLE,
-      readText: async () => JSON.stringify({
-        schemaVersion: 1, version: "2.1.10", target: "win32-x64",
+      readText: async (file) => file.endsWith("package.json") ? packageText : JSON.stringify({
+        schemaVersion: 2, buildCommit: HARNESS_RELEASE.commit, payload, runtimeSha256: "b".repeat(64), version: "2.1.10", target: "win32-x64",
         executable: "runtime/Ruijie-Harness.exe",
         executableSha256: "a".repeat(64),
         bridge: { schemaVersion: 1, capability: "openmaus-server-v1" },
@@ -76,8 +80,8 @@ describe("installed Ruijie Harness discovery", () => {
     const locator = createRuijieHarnessLocator(dependencies({
       environment: {},
       pathExists: async (path) => path === bundled,
-      readText: async () => JSON.stringify({
-        schemaVersion: 1, version: "2.1.10", target: "win32-x64",
+      readText: async (file) => file.endsWith("package.json") ? packageText : JSON.stringify({
+        schemaVersion: 2, buildCommit: HARNESS_RELEASE.commit, payload, runtimeSha256: "b".repeat(64), version: "2.1.10", target: "win32-x64",
         executable: "runtime/Ruijie-Harness.exe", executableSha256: "a".repeat(64),
         bridge: { schemaVersion: 1, capability: "openmaus-server-v1" },
       }),
@@ -128,8 +132,8 @@ describe("installed Ruijie Harness discovery", () => {
     const launchExecutable = vi.fn(async (path) => { running = path === WINDOWS_EXECUTABLE; });
     const locator = createRuijieHarnessLocator(dependencies({
       environment: { OMB_RUIJIE_HARNESS_BUNDLE: "C:\\resources\\ruijie-harness" },
-      readText: async () => JSON.stringify({
-        schemaVersion: 1, version: "2.1.10", target: "win32-x64",
+      readText: async (file) => file.endsWith("package.json") ? packageText : JSON.stringify({
+        schemaVersion: 2, buildCommit: HARNESS_RELEASE.commit, payload, runtimeSha256: "b".repeat(64), version: "2.1.10", target: "win32-x64",
         executable: "runtime/Ruijie-Harness.exe",
         executableSha256: "a".repeat(64),
         bridge: { schemaVersion: 1, capability: "openmaus-server-v1" },
@@ -159,8 +163,8 @@ describe("installed Ruijie Harness discovery", () => {
     const locator = createRuijieHarnessLocator(dependencies({
       environment: { LOCALAPPDATA: "C:\\Users\\test\\AppData\\Local" },
       pathExists: async (path) => path === bundled || path === WINDOWS_EXECUTABLE,
-      readText: async () => JSON.stringify({
-        schemaVersion: 1, version: "2.1.10", target: "win32-x64",
+      readText: async (file) => file.endsWith("package.json") ? packageText : JSON.stringify({
+        schemaVersion: 2, buildCommit: HARNESS_RELEASE.commit, payload, runtimeSha256: "b".repeat(64), version: "2.1.10", target: "win32-x64",
         executable: "runtime/Ruijie-Harness.exe", executableSha256: "a".repeat(64),
         bridge: { schemaVersion: 1, capability: "openmaus-server-v1" },
       }),

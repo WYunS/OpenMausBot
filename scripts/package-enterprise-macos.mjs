@@ -22,6 +22,8 @@ const vendor = join(release, "universal-browser-inputs");
 mkdirSync(vendor, { recursive: true });
 const feishuVendor = join(release, "universal-feishu-inputs");
 mkdirSync(feishuVendor, { recursive: true });
+const harnessVendor = join(release, "universal-harness-inputs");
+mkdirSync(harnessVendor, { recursive: true });
 function removeIntermediateSeals(directory) {
   for (const name of readdirSync(directory)) {
     const file = join(directory, name);
@@ -39,6 +41,9 @@ for (const [arch, app] of Object.entries(slices)) {
   const feishu = join(app, "Contents/Resources/tuantuan-feishu-runtime");
   if (!existsSync(join(feishu, "manifest.json"))) throw new Error(`Missing ${arch} Feishu stage`);
   renameSync(feishu, join(feishuVendor, `darwin-${arch}`));
+  const harness = join(app, "Contents/Resources/ruijie-harness");
+  if (!existsSync(join(harness, "manifest.json"))) throw new Error(`Missing ${arch} Harness stage`);
+  renameSync(harness, join(harnessVendor, `darwin-${arch}`));
   // Thin-app resource seals describe different binaries. They are intermediate
   // build data; recreate every signature after merging, before any packaging.
   removeIntermediateSeals(app);
@@ -64,6 +69,11 @@ const feishuRoot = join(outputApp, "Contents/Resources/tuantuan-feishu-runtime")
 mkdirSync(feishuRoot);
 for (const arch of ["arm64", "x64"]) cpSync(join(feishuVendor, `darwin-${arch}`), join(feishuRoot, `darwin-${arch}`), { recursive: true });
 writeFileSync(join(feishuRoot, "universal.json"), `${JSON.stringify({ schemaVersion: 1, targets: ["darwin-arm64", "darwin-x64"] }, null, 2)}\n`);
+
+const harnessRoot = join(outputApp, "Contents/Resources/ruijie-harness");
+mkdirSync(harnessRoot);
+for (const arch of ["arm64", "x64"]) cpSync(join(harnessVendor, `darwin-${arch}`), join(harnessRoot, `darwin-${arch}`), { recursive: true, verbatimSymlinks: true });
+writeFileSync(join(harnessRoot, "universal.json"), `${JSON.stringify({ schemaVersion: 1, targets: ["darwin-arm64", "darwin-x64"] }, null, 2)}\n`);
 
 // electron-builder's directory target does not create updater metadata. Add it
 // to the merged app before sealing resources, pointing at this enterprise repo.
