@@ -171,6 +171,8 @@ jobs:
 
   package-linux:
     name: package + smoke (Ubuntu 24.04 x64)
+    # Source handoffs to downstream main do not authorize installer builds.
+    if: github.event_name != 'push' || github.repository == 'milind-soni/OpenMausBot'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
