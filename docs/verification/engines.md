@@ -46,6 +46,17 @@ prove real OAuth login or native Windows execution.
 
 ## Gotchas
 
+- After changing bundled Harness discovery, run `node scripts/verify-harness-electron.mjs`
+  against the prepared `dist-native/ruijie-harness/<platform>-<arch>` bundle
+  (or pass its absolute path). It bundles the production locator and exercises
+  it inside a real Electron utility process with a disposable profile. It does
+  not launch Harness, use account credentials, or send model requests. Ordinary
+  Node and `ELECTRON_RUN_AS_NODE` cannot catch Electron's ASAR filesystem behavior:
+  archive integrity hashes must use physical bytes through `original-fs`.
+  This catches the 2026-09-20 false "missing, damaged or incompatible" failure.
+  Also run `pnpm exec vitest run server/drivers/ruijie-harness-local.test.ts`
+  to preserve rejection of genuinely damaged or incompatible bundles.
+
 - Doctor proves server/engine readiness, not authentication against a real
   provider.
 - Model-picker rendering is Electron UI and remains outside this first map.

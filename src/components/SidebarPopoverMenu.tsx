@@ -157,7 +157,7 @@ export function SidebarPopoverMenu({
                 }}
                 className={cn(
                   "flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] disabled:opacity-60",
-                  item.active ? "bg-raised text-ink" : "text-ink hover:bg-raised/70",
+                  item.active ? "bg-selected text-ink" : "text-ink hover:bg-hover",
                 )}
               >
                 {item.icon && (

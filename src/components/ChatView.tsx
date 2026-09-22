@@ -191,7 +191,7 @@ class MessageBoundary extends Component<{ children: ReactNode; fallbackText: str
   render() {
     if (this.state.failed) {
       return (
-        <div className="chat-bubble chat-text w-fit max-w-[min(42rem,78%)] rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap text-ink">
+        <div className="chat-bubble chat-text w-fit max-w-[min(40rem,84%)] rounded-[14px] bg-card px-3 py-2 text-ui-body whitespace-pre-wrap text-ink">
           {this.props.fallbackText}
         </div>
       );
@@ -223,7 +223,7 @@ function BubbleEditor({
     if (draft.trim()) onSubmit(draft.trim());
   };
   return (
-    <div className="w-full max-w-[min(42rem,78%)] rounded-2xl border border-hairline/40 bg-bubble-user px-4 py-3">
+    <div className="w-full max-w-[min(40rem,84%)] rounded-[14px] border border-hairline/40 bg-bubble-user px-3 py-2.5">
       <textarea
         ref={ref}
         value={draft}
@@ -237,7 +237,7 @@ function BubbleEditor({
           if (e.key === "Escape") onCancel();
         }}
         rows={Math.min(10, Math.max(2, draft.split("\n").length))}
-        className="w-full resize-none bg-transparent text-[15px] leading-relaxed text-ink focus:outline-none"
+        className="w-full resize-none bg-transparent text-ui-body text-ink focus:outline-none"
       />
       <div className="mt-2 flex items-center justify-end gap-2">
         <button
@@ -363,13 +363,13 @@ function Bubble({
         )}
         <div
           className={cn(
-            "chat-bubble w-fit max-w-[min(42rem,78%)] rounded-2xl text-[15px] leading-relaxed",
+            "chat-bubble w-fit max-w-[min(40rem,84%)] rounded-[14px] text-ui-body",
             emerging && "turn-answer",
             user && webhookView
               ? "overflow-hidden border border-accent/25 bg-card text-ink shadow-[0_10px_30px_rgba(0,0,0,0.18)]"
               : user
-                ? "bg-bubble-user px-4 py-2.5 whitespace-pre-wrap text-ink"
-                : "bg-card px-4 py-2.5 text-ink",
+                ? "bg-bubble-user px-3 py-2 whitespace-pre-wrap text-ink"
+               : "chat-answer bg-card px-3 py-2 text-ink",
           )}
           title={new Date(message.at).toLocaleString()}
         >
@@ -1111,12 +1111,13 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
         className={cn(
           // @container so the chips on the right can fold to icon bubbles
           // when the column is narrow (side panel open, small window)
-          "@container/chathead flex min-h-[64px] shrink-0 items-center justify-between px-5 py-3",
+          "@container/chathead flex shrink-0 items-center justify-between px-5",
+          streamlined ? "min-h-12 py-1" : "min-h-[64px] py-3",
           // Room for the drawer button, which overlays this corner below md.
           "pl-11 md:pl-5",
         )}
       >
-        <div className="flex min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-1">
+        <div className="flex min-w-0 items-center gap-2 rounded-lg">
           <button
             onClick={() => dispatch({ type: "toggleSettings", open: true })}
             className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-raised/50"
@@ -1199,6 +1200,8 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
               state.computerOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
             )}
             title={t("chat.computer")}
+            aria-label={t("chat.computer")}
+            aria-pressed={state.computerOpen}
           >
             <Monitor size={18} />
           </button>

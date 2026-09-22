@@ -42,6 +42,20 @@ test('does not accept a branded path reached through a directory junction', asyn
   assert.equal(await isLegacyFeishuEntry(entry), false);
 });
 
+test('recognizes an old source path only when it resolves to the current shipped bridge', async (t) => {
+  const { root, entry } = await fixture(t);
+  const currentFolder = path.join(root, 'current', 'connectors', 'feishu');
+  await mkdir(currentFolder, { recursive: true });
+  for (const name of ['mcp.mjs', 'tools.mjs']) await copyFile(new URL(`./${name}`, import.meta.url), path.join(currentFolder, name));
+  const oldRoot = path.join(root, 'previous-source');
+  await symlink(path.join(root, 'current'), oldRoot, process.platform === 'win32' ? 'junction' : 'dir');
+  const currentScript = path.join(currentFolder, 'mcp.mjs');
+  entry.args = [path.join(oldRoot, 'connectors', 'feishu', 'mcp.mjs')];
+  assert.equal(await isLegacyFeishuEntry(entry, currentScript), true);
+  assert.equal(await isLegacyFeishuEntry({ ...entry, envKeys: [...entry.envKeys, 'NODE_OPTIONS'] }, currentScript), false);
+  assert.equal(await isLegacyFeishuEntry(entry, path.join(root, 'unrelated', 'mcp.mjs')), false);
+});
+
 test('installer relocation receipt recognizes the exact removed previous package and no other path', async (t) => {
   const { root, folder, entry } = await fixture(t);
   const currentRoot = path.join(root, 'new', 'tuantuan');

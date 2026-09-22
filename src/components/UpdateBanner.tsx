@@ -54,7 +54,9 @@ export function UpdateBanner() {
   const handoff = s.installMode === "handoff";
 
   const title =
-    s.status === "available"
+    s.status === "manual"
+      ? "Install updates manually"
+      : s.status === "available"
       ? `${brand().name} ${s.version} is available`
       : s.status === "downloading"
         ? `Downloading ${s.version ?? "update"}…`
@@ -70,7 +72,9 @@ export function UpdateBanner() {
                 ? "Finish in a terminal"
                 : "Update failed";
   const subtitle =
-    s.status === "available"
+    s.status === "manual"
+      ? "Download the installer from the release page."
+      : s.status === "available"
       ? "A newer version is ready to download."
       : s.status === "downloading"
         ? // no percent yet means the transfer hasn't reported in — don't imply 0
@@ -96,7 +100,7 @@ export function UpdateBanner() {
                   : friendlyError(s.message);
 
   return (
-    <div className="animate-panel-in fixed bottom-4 left-4 z-50 w-[300px] rounded-xl border border-hairline/40 bg-panel p-3.5 shadow-2xl shadow-black/50">
+    <div className="animate-panel-in fixed bottom-4 left-4 z-50 w-[300px] rounded-xl border border-hairline/50 bg-menu p-3.5 shadow-lg shadow-black/25">
       <div className="flex items-start gap-2.5">
         <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-accent/15 text-accent">
           <Sparkles size={14} />
@@ -151,6 +155,18 @@ export function UpdateBanner() {
 
       {!busy && (
         <div className="mt-2.5 flex gap-2">
+          {s.status === "manual" && (
+            <button
+              onClick={() => {
+                setPending("download");
+                void updater.download().finally(() => setPending(null));
+              }}
+              disabled={pending !== null}
+              className={primaryAction}
+            >
+              <PackageOpen size={13} /> Open release page
+            </button>
+          )}
           {s.status === "available" && (
             <button
               onClick={() => {

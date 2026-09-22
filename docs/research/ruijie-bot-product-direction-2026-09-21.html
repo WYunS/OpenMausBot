@@ -1,0 +1,1005 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>锐捷 Bot：持续任务助手的产品形态与架构决策</title>
+<style>
+:root{--ink:#182d37;--muted:#5c7079;--accent:#17675d;--line:#d9e2e3;--paper:#fff;--wash:#f3f6f5;--tint:#eaf3ef;--warm:#faf7ef}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:35px}body{margin:0;background:var(--wash);color:var(--ink);font-family:"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;font-size:16px;line-height:1.85}a{color:var(--accent);text-underline-offset:3px;overflow-wrap:anywhere}button{font:inherit;cursor:pointer;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);padding:7px 14px}button:hover{border-color:var(--accent)}a:focus-visible,button:focus-visible,summary:focus-visible,.table-scroll:focus-visible{outline:3px solid #83bba9;outline-offset:4px}
+.layout{display:grid;grid-template-columns:240px minmax(0,1040px);max-width:1390px;margin:0 auto;gap:42px;padding:45px 35px 90px}.sidebar{position:sticky;top:28px;height:calc(100vh - 56px);overflow:auto;font-size:13px}.brand{letter-spacing:2px;font-weight:700;font-size:12px;color:var(--accent);padding:0 10px 12px}.sidebar .subtitle{padding:0 10px 20px;color:var(--muted)}nav a{display:flex;gap:12px;text-decoration:none;padding:10px;border-left:2px solid transparent;line-height:1.45;margin:4px 0;color:var(--muted)}nav a span{font-variant-numeric:tabular-nums;font-size:11px;opacity:.7;padding-top:2px}nav a:hover,nav a.active{background:var(--tint);color:var(--accent);border-color:var(--accent)}.side-actions{padding:20px 10px;border-top:1px solid var(--line);margin-top:20px}.side-actions p{font-size:12px;color:var(--muted)}.main{min-width:0}.hero{padding:25px 0 32px;border-bottom:2px solid var(--ink);margin-bottom:32px}.eyebrow{font-size:12px;letter-spacing:2px;color:var(--accent);font-weight:700}.hero h1{font-size:38px;line-height:1.4;letter-spacing:-.8px;margin:16px 0}.hero .lede{font-size:19px;line-height:1.8;color:var(--muted);max-width:840px}.decision-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);margin-top:26px}.decision-strip>div{padding:15px 18px;background:var(--paper)}.decision-strip small{display:block;color:var(--muted);font-size:12px;margin-bottom:3px}.decision-strip strong{font-size:15px}.document{background:var(--paper);padding:34px 42px 44px;border:1px solid var(--line)}p{margin:0 0 19px}strong{font-weight:650}section{padding-top:8px;margin-top:30px}section:first-of-type{margin-top:18px}h2{font-size:24px;line-height:1.55;padding-top:26px;border-top:1px solid var(--line);margin:0 0 25px;letter-spacing:-.4px}h3{font-size:19px;line-height:1.6;margin:29px 0 16px}ul,ol{padding-left:24px;margin:16px 0 24px}li{margin:9px 0}code{font-family:Consolas,monospace;font-size:.88em;background:var(--wash);border-radius:3px;padding:2px 4px;overflow-wrap:anywhere}.table-scroll{overflow:auto;margin:22px 0 27px;border:1px solid var(--line);border-radius:5px}table{border-collapse:collapse;min-width:640px;width:100%;font-size:14px;line-height:1.75}th{background:var(--tint);color:var(--accent);font-weight:650;text-align:left}td,th{padding:13px 14px;border-bottom:1px solid var(--line);vertical-align:top;min-width:105px}tr:last-child td{border-bottom:0}td:first-child{font-weight:550}tbody tr:nth-child(even){background:#fafcfa}blockquote{border-left:3px solid #91b6a5;background:var(--wash);margin:20px 0;padding:16px 20px;color:var(--muted)}blockquote p:last-child{margin:0}
+.architecture{margin:28px 0;background:#f7faf8;border:1px solid #c4d9cf;border-radius:8px;padding:24px;line-height:1.6}.architecture figcaption{display:flex;gap:18px;align-items:baseline;margin-bottom:20px}.architecture figcaption span{font-size:12px;color:var(--accent)}.architecture figcaption strong{font-size:18px}.architecture b,.architecture span{display:block}.architecture .entry{border:1px solid #bdd0c7;border-radius:5px;text-align:center;background:#fff;padding:12px}.architecture .entry span,.architecture .targets span,.architecture .workspace span{font-size:12px;color:var(--muted);margin-top:5px}.architecture .arrow{text-align:center;color:var(--accent);line-height:1.4;font-size:22px;padding:4px}.workspace{border:1px solid #93b7a7;border-radius:6px;padding:16px;display:grid;grid-template-columns:1.7fr 1fr;gap:0 22px;background:#eaf3ef}.workspace-label{grid-column:1/-1;font-size:12px;color:var(--accent);margin-bottom:15px}.workspace-core{text-align:center}.record,.engine{background:#fff;border:1px solid #bfd2c9;border-radius:5px;padding:12px}.model{align-self:center;text-align:center;border:1px dashed #a8beb3;padding:13px;border-radius:5px;font-size:14px}.model .exchange{font-size:22px!important;color:var(--accent)!important}.target-arrows{display:flex;align-items:center;justify-content:space-around;font-size:25px;color:var(--accent);padding:6px}.target-arrows span{font-size:12px}.targets{display:grid;grid-template-columns:1fr 1fr;gap:20px;text-align:center}.targets>div{border:1px solid #c9d6d0;padding:14px;border-radius:5px;background:#fff;font-size:14px}.architecture .diagram-note{font-size:12px;color:var(--muted);margin:18px 0 0;border-top:1px solid #d8e3dc;padding-top:13px}
+.evidence{margin-top:18px;border:1px solid var(--line);border-radius:5px;background:var(--paper)}.evidence summary{padding:18px 22px;cursor:pointer;font-weight:650;font-size:15px}.evidence-body{border-top:1px solid var(--line);padding:22px 30px;font-size:14px}.evidence-body h2{font-size:20px}.evidence-body h3{font-size:18px}.evidence-body table{font-size:13px}.endnote{font-size:12px;color:var(--muted);margin-top:25px}.mobile-top{display:none}
+@media(min-width:1500px){.layout{padding-top:55px}}@media(max-width:1100px){.layout{grid-template-columns:185px minmax(0,1fr);gap:23px;padding:25px 22px}.document{padding:25px}.hero h1{font-size:31px}.decision-strip strong{font-size:14px}.decision-strip>div{padding:12px}}
+@media(max-width:760px){body{font-size:15px}.layout{display:block;padding:20px 14px 45px}.sidebar{position:static;height:auto;overflow:visible}.brand{padding:0}.sidebar .subtitle,.side-actions{display:none}nav{display:flex;overflow:auto;gap:5px;padding:8px 0 13px}nav a{white-space:nowrap;padding:7px 10px;border:1px solid var(--line);border-radius:4px;font-size:12px}nav a span{display:none}.hero{padding:12px 3px 24px;margin-bottom:20px}.hero h1{font-size:27px;letter-spacing:0}.hero .lede{font-size:16px}.eyebrow{font-size:10px}.document{padding:21px 17px}.decision-strip{grid-template-columns:1fr;gap:1px}.decision-strip>div{display:flex;justify-content:space-between;gap:15px}.decision-strip small{margin:0}.decision-strip strong{font-size:13px}h2{font-size:21px}h3{font-size:18px}.architecture{padding:14px}.architecture figcaption{display:block}.architecture figcaption strong{font-size:16px;margin-top:5px}.workspace{grid-template-columns:1fr;gap:12px;padding:12px}.model{font-size:13px}.model .exchange{display:none}.targets{gap:10px}.targets>div{padding:10px;font-size:13px}.evidence-body{padding:15px}.mobile-top{display:block;text-align:right;font-size:12px;margin:15px 0}}
+@media print{body{background:#fff;font-size:11pt;line-height:1.65}.layout{display:block;padding:0;max-width:none}.sidebar,.mobile-top{display:none}.hero{padding:0 0 15px}.hero h1{font-size:25pt}.hero .lede{font-size:12pt}.document{border:0;padding:0}.decision-strip{break-inside:avoid}section{margin-top:20px}h2,h3{break-after:avoid}h2{font-size:17pt}h3{font-size:13pt}table{font-size:9pt;min-width:0;table-layout:fixed}td,th{min-width:0;padding:7px;overflow-wrap:anywhere}tr{break-inside:avoid}.table-scroll{overflow:visible;border-radius:0}p,li{orphans:3;widows:3}.architecture{break-inside:avoid}.evidence:not([open]){display:none}a{color:inherit}nav{display:none}@page{margin:17mm}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style></head><body id="top"><div class="layout">
+<aside class="sidebar"><div class="brand">锐捷 BOT · 产品方向</div><div class="subtitle">2026.09.21 / 评审稿<br>产品承诺 → 架构 → 验证</div><nav aria-label="章节目录"><a href="#decision"><span>01</span>建议决策</a><a href="#promise"><span>02</span>产品承诺</a><a href="#hosting"><span>03</span>任务托管位置</a><a href="#assistant"><span>04</span>一个助手如何统一</a><a href="#runtime"><span>05</span>本机封装与引擎</a><a href="#journeys"><span>06</span>六条用户旅程</a><a href="#benchmark"><span>07</span>对标事实与推断</a><a href="#delivery"><span>08</span>源码与研发工作包</a><a href="#gates"><span>09</span>阶段评审与指标</a><a href="#sources"><span>10</span>依据索引</a></nav><div class="side-actions"><button id="print">打印 / 保存 PDF</button><p>先看建议决策，再按议题阅读。详细核验资料在文末，可展开查看。</p></div></aside>
+<main class="main"><header class="hero"><div class="eyebrow">产品形态探索 / 决策依据 / 建设路径</div><h1>持续任务助手<br>产品形态与架构决策</h1><p class="lede">用户交代目标后，助手记住约定、选择工作环境、持续推进，并把结果或阻碍交代清楚。</p><div class="decision-strip"><div><small>建议路线</small><strong>托管工作区＋可替换执行环境</strong></div><div><small>首版部署</small><strong>职责分开，可以同机</strong></div><div><small>引擎判断</small><strong>Harness 优先验证，可被否决</strong></div></div></header>
+<article class="document">
+<p>2026 年 9 月 21 日 · 产品方向评审稿</p>
+<p><strong>评审对象：</strong> 面向公司内部知识工作者的完整桌面 AI 产品，既能持续完成云端任务，也能操作用户办公电脑。首批用户范围已确认；具体高频任务、使用意愿与收益仍需验证，本文中的用户故事是设计推演，不是已完成的用户访谈。</p>
+<p><strong>阅读方式：</strong> 第 1 节用于决策汇报；第 2—7 节解释选择；第 8—9 节支持研发拆解与阶段评审。源码事实和外部产品证据在文末单独索引。所有目标行为均为建议，不能视为现有版本已实现。</p>
+<section id="decision"><h2>1. 建议决策：围绕“可托付的任务”建立产品，而不是围绕引擎建立产品</h2>
+<p>建议把锐捷 Bot 定义为：<strong>用户交代目标后，能够记住约定、选择合适的工作环境、持续推进，并把结果或阻碍交代清楚的个人工作助手。</strong></p>
+<p>它的核心价值是让一部分工作不再依赖用户持续盯着聊天窗口。电脑操作、长任务和定时任务是实现这一价值的能力；模型和 Harness 是产品内部的实现选择。</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="比较与决策表"><table>
+<thead>
+<tr>
+<th>决策</th>
+<th>建议</th>
+<th>产品上的含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>助手归属</td>
+<td>以持久工作区承载 Bot 身份、任务和结果</td>
+<td>换设备、换执行进程、更新云电脑，不应等于换了一个助手</td>
+</tr>
+<tr>
+<td>任务托管</td>
+<td>云端工作区负责已接收的托管任务；首版可以与执行器同机部署</td>
+<td>本机关机后，已有托管约定仍有效；不要求一开始建设大型云平台</td>
+</tr>
+<tr>
+<td>执行环境</td>
+<td>任务记录与可重建的操作环境分开管理</td>
+<td>重装云电脑不能把日程、任务历史和结果索引一起重装掉</td>
+</tr>
+<tr>
+<td>聊天与执行</td>
+<td>一个产品身份，允许多个独立任务会话</td>
+<td>用户不用面对“聊天机器人”和“干活机器人”两套互相甩任务的界面</td>
+</tr>
+<tr>
+<td>本机能力</td>
+<td>云端任务通过已授权的本机连接执行；独立本地任务保留自己的责任归属</td>
+<td>能操作本机不等于必须先让本地模型当总指挥</td>
+</tr>
+<tr>
+<td>引擎与模型</td>
+<td>锐捷 Harness 为优先验证候选，Codex 为有条件替代；产品统一管理模型策略</td>
+<td>不让普通用户挑引擎、填模型参数或安装 CLI</td>
+</tr>
+</tbody>
+</table></div>
+<p>这不是要求“把所有能力搬到云端”。<strong>用户交互在桌面，任务责任在工作区，动作发生在目标电脑，模型推理由获准的模型服务提供。</strong> 四者可以分开部署，也可以在初期部分合并。</p>
+<p>有三项应当本轮定下来：任务必须有唯一归属；执行环境更新不得改变任务归属；用户购买的是完整能力而非引擎选择器。有三项应保留验证空间：首批任务中本机依赖的比例、Harness 的目标服务器运行条件、是否值得长期保留默认内置的本地执行器。</p>
+</section><section id="promise"><h2>2. 先确定产品承诺，再判断是否需要云端</h2>
+<h3>2.1 首批场景应当兼顾价值与可交付性</h3>
+<p>建议优先服务“重复资料整理、周期性汇报、跨应用信息加工”的知识工作者。原因是这些工作既有明确交付物，也能逐步从人工监督转成稳定托管；用户容易判断是否真的节省了工作。</p>
+<p>首批不应以“任意网站、任意软件、任意复杂任务都可全自动完成”为承诺。这样的目标会把环境兼容、视觉操作和业务判断的所有不确定性同时推给产品。</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="比较与决策表"><table>
+<thead>
+<tr>
+<th>场景族</th>
+<th>用户真正购买的价值</th>
+<th>是否应优先</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>每日信息巡检、资料整理、定时生成报告</td>
+<td>不需要自己记得打开软件并发起工作</td>
+<td>优先，适合验证托管和结果交付</td>
+</tr>
+<tr>
+<td>本机文件与在线资料结合，生成办公产物</td>
+<td>减少跨窗口搬运和重复加工</td>
+<td>优先，但需显式处理文件来源与本机离线</td>
+</tr>
+<tr>
+<td>公司内网业务操作</td>
+<td>复用办公身份、网络和应用环境</td>
+<td>选一个受控流程试点；不能承诺关机后仍能访问本机内网</td>
+</tr>
+<tr>
+<td>完全开放的长链桌面操作</td>
+<td>替代人工处理复杂界面</td>
+<td>后续扩大，先证明可观察、可停止、可恢复</td>
+</tr>
+</tbody>
+</table></div>
+<p>本轮最重要的业务验证不是“用户喜欢哪个模型”，而是：<strong>哪些任务用户愿意提前托付，哪些必须在本机完成，哪些结果值得持续付出云资源成本。</strong></p>
+<h3>2.2 五项可感知承诺</h3>
+<ol>
+<li><strong>交代有凭据。</strong> 用户能看到任务已被哪一个工作区接收、何时执行、结果到哪里；模型回复“好的”不等于托管成功。</li>
+<li><strong>关机有边界。</strong> 已接收且不依赖本机的任务继续；依赖本机的步骤显示等待，不把“离线可运行”无限扩大。</li>
+<li><strong>过程可干预。</strong> 用户能询问进度、补充要求、暂停或接管电脑；干预指向具体任务。</li>
+<li><strong>结果可核对。</strong> 完成意味着有可访问的产物或业务回执；失败意味着说明阻碍和下一步。</li>
+<li><strong>升级不失约。</strong> 更换模型、引擎、客户端或云电脑时，已有任务和结果有明确的保留与恢复规则。</li>
+</ol>
+<p>这些承诺决定后续架构。仅把一条定时命令放到服务器上，可以解决“到点启动”；不足以独立兑现其余四项。</p>
+<h3>2.3 对未来形态的判断：从一次提示，演进为可持续管理的工作约定</h3>
+<p>值得探索的方向，是用户逐渐从“告诉 AI 每一步怎么做”，转向“约定结果、输入、时间和授权范围”。例如日报跑通后，用户维护的是信息源、报告标准和例外处理，不必每天重复描述同一套步骤。完成记录与人工纠正应帮助改进下一次执行，但不能未经用户确认就改变业务目标或扩大授权。</p>
+<p>这意味着产品长期积累的资产是：可复用的任务定义、获准的企业连接、稳定的执行环境，以及经过结果验证的工作方法。引擎或模型升级可以改善这些资产的执行效果，不应让用户重新建立全部工作关系。</p>
+<p>建设顺序应是单次交办可交付、重复工作可托管，再发展多任务协作。先从结构化应用接口解决可稳定执行的部分，桌面操作覆盖缺少接口的流程；不要让每一项工作都必须经过截图和鼠标。协作也不等于增加更多聊天角色，只有任务确实需要并行专长且收益超过交接成本时，才增加内部执行者。</p>
+<p>这是战略假设，仍需用持续采用验证。如果用户反复要求重新手工执行、不愿把同类任务继续托付，或维护流程比亲自完成更费力，产品应先收窄场景，不能以“未来 AI 都会这样”替代证据。</p>
+</section><section id="hosting"><h2>3. 任务托管在哪里：远程执行机与云端后台究竟有什么区别</h2>
+<h3>3.1 直接把任务放在远程执行机上，是成立的方案</h3>
+<p>可以在一台长期在线的远程电脑上部署 Bot 后台、定时器、Harness、浏览器和文件目录。只要机器和相关进程运行，本机关机不会阻止它工作。<strong>“没有另一台后台服务器”并不意味着无法做定时托管。</strong></p>
+<p>真正的区别是：当这台远程电脑休眠、损坏、重建、迁移或需要换执行器时，任务约定和操作环境是不是一起失效。</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="比较与决策表"><table>
+<thead>
+<tr>
+<th>路线</th>
+<th>怎么运行</th>
+<th>获得什么</th>
+<th>承担什么</th>
+<th>适用判断</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A 本地总管＋远程工具</td>
+<td>本地 Bot 记任务、调用模型，再操作远程电脑</td>
+<td>最接近当前桌面路径，本机操作自然</td>
+<td>本地离线影响未来触发；远程电脑常驻不能替代本地调度</td>
+<td>适合在场协助，不能作为持续托管的默认路线</td>
+</tr>
+<tr>
+<td>B 一体化远程工作机</td>
+<td>后台、引擎、任务数据与桌面环境全部放在同一环境里</td>
+<td>建设最快，固定容量时容易管理</td>
+<td>机器故障、重建和休眠影响整套能力；恢复与升级耦合</td>
+<td>可做验证样机，也适合用户明确接受停机的专用部署</td>
+</tr>
+<tr>
+<td>C 托管工作区＋可替换执行环境</td>
+<td>任务管理与执行环境有独立生命周期；初期仍可同机</td>
+<td>保留简单部署，同时为恢复、扩容和环境更新留下路径</td>
+<td>要补任务领取、结果回传、持久数据和权限分工</td>
+<td><strong>建议产品路线</strong></td>
+</tr>
+<tr>
+<td>D 本地智能总管＋云端智能执行者</td>
+<td>本地模型理解需求并向云端模型派发任务</td>
+<td>本地专长和云端能力都可独立发展</td>
+<td>增加上下文交接、重复判断、责任同步和离线后的指挥权问题</td>
+<td>有强本地决策需求时再考虑，不宜默认引入</td>
+</tr>
+</tbody>
+</table></div>
+<p>路线 C 的“分开”首先是职责、权限和数据生命周期的分开，不是立即购买两台服务器。首版可以在一台受控主机里，让工作区后台长期运行，执行器运行任务，浏览器或桌面在受限环境内操作。任务记录保存到不会随操作环境重建而清空的位置，并有机器之外的备份。</p>
+<p><strong>这种同机部署可以隔离环境重建的影响，却不能消除整台主机故障。</strong> 初期若没有故障切换能力，应按“故障后可恢复”验收，不能宣传“故障时不中断”。将来需要桌面休眠、多个执行环境或更高可用性时，再将后台物理独立部署。</p>
+<p>隔离成立还需要具体约束：执行账号不能改写任务记录，环境重建只作用于指定范围，执行盘写满不能拖垮任务存储。“已接收”的保证也必须与存储方式一致：仅本机落盘只能覆盖相应故障范围；若正式承诺整机丢失后已接收的约定仍不丢失，就要在确认前完成覆盖该故障范围的持久保存。周期备份可能丢失最近记录，不能在措辞上省略这一差别。</p>
+<h3>3.2 两种部署在同一个用户故事中的差别</h3>
+<p>用户设定“每天 8 点整理行业动态”。如果远程执行机持续在线，路线 B 与 C 都能完成，用户看不出差异。</p>
+<p>随后用户在 7:55 更新云电脑：</p>
+<ul>
+<li><strong>路线 B：</strong> 如果定时器也在被重建的环境中，8 点可能无人触发；恢复后需要判断补跑还是跳过。如果任务数据也在该环境里，还涉及找回约定。</li>
+<li><strong>路线 C：</strong> 后台保留日程，知道执行环境正在更新；到点后记录“等待环境”，待健康检查通过再执行，或者按事先约定错过即跳过。若后台与桌面同机而整机重启，仍会暂停调度，但恢复后应保留同样的处理依据。</li>
+</ul>
+<p>因此，选择 C 的理由不是“云端后台更高级”，而是产品未来要支持更新、故障恢复和不同执行环境时，不应重新设计任务归属。</p>
+<h3>3.3 不需要让整个 AI 全天运行</h3>
+<p>需要持续可用的是任务记录、调度触发和状态入口。Harness 可以在有任务时启动或保留一定时间的会话；模型按请求推理；云桌面只有需要浏览器或图形操作时才必须可用。</p>
+<p>“一直记得约定”和“一直运行昂贵的桌面与模型调用”是不同成本。首版可以保持环境常驻以减少变量，后续再验证休眠、预热和恢复时间，不能先承诺即时唤醒又未经测量。</p>
+<figure class="architecture" aria-label="建议架构：桌面入口连接持久工作区，任务执行器调用模型，并操作云环境或授权本机。职责分开，初期可同机部署。">
+  <figcaption><span>建议架构</span><strong>任务归属稳定，执行环境可替换</strong></figcaption>
+  <div class="entry"><b>桌面入口</b><span>交代任务 · 查询进度 · 批准与接管</span></div>
+  <div class="arrow" aria-hidden="true">↓</div>
+  <div class="workspace"><div class="workspace-label">托管工作区 · 后台与执行器初期可同机部署</div>
+    <div class="workspace-core"><div class="record"><b>持久任务记录与调度</b><span>身份 / 约定 / 当前状态 / 结果</span></div><div class="arrow" aria-hidden="true">↓</div>
+    <div class="engine"><b>任务执行器 · Harness</b><span>每项任务有独立会话、权限和执行记录</span></div></div>
+    <div class="model"><span class="exchange">↔</span><b>获准的模型服务</b><span>按产品策略调用<br>不等于在本机安装模型权重</span></div>
+  </div>
+  <div class="target-arrows" aria-hidden="true">↙<span>按任务与授权选择</span>↘</div>
+  <div class="targets"><div><b>云执行环境</b><span>应用 · 浏览器 · 文件<br>可更新、恢复与替换</span></div><div><b>授权本机连接 → 办公电脑</b><span>读取 · 操作 · 停止 · 撤权<br>离线时相关步骤等待</span></div></div>
+  <p class="diagram-note">动作结果回到任务记录。同机部署不消除整机故障；独立本地任务由本地工作区负责，不自动接管托管任务。</p>
+</figure>
+<p>图示是职责划分。首版工作区后台与执行器可以同机部署；操作环境要限制其修改任务记录和系统凭据的能力。桌面入口发给云端的任务，不需要先经过本地 Harness。</p>
+<h3>3.4 公司统一管理，不等于所有用户共用一台桌面</h3>
+<p>首版建议按用户分配独立工作区；同一用户的多个 Bot 可以复用获准的数据与工具，但每项任务各有记录，同一可见桌面的操作必须排队。不同用户的账号、浏览器登录、文件和任务不能因共用服务器而混在一起。</p>
+<p>公司统一管理账号准入、工作区分配、版本、用量和资源限额；每个工作区保管自己的任务与执行状态。先把少量独立工作区运转好，再增加自动开通和弹性分配。团队共享工作区属于后续明确授权的产品能力，不能把“共享一个工作目录”当成已完成的团队协作。</p>
+</section><section id="assistant"><h2>4. 一个助手、几个模型、分别在哪里</h2>
+<h3>4.1 “助手活在哪里”需要拆成四个可回答的问题</h3>
+<div class="table-scroll" tabindex="0" role="region" aria-label="比较与决策表"><table>
+<thead>
+<tr>
+<th>用户感知的对象</th>
+<th>建议放在哪里</th>
+<th>为什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bot 的身份、任务承诺、可用记忆和结果</td>
+<td>它归属的持久工作区；托管模式部署在公司或获准的云环境</td>
+<td>不随聊天窗口、执行器进程消失</td>
+</tr>
+<tr>
+<td>正在理解与推进某项任务的执行过程</td>
+<td>工作区分配的 Harness 运行环境，靠近主要工具与数据</td>
+<td>便于持续执行；它可以与云电脑同机，也可以独立</td>
+</tr>
+<tr>
+<td>大模型推理</td>
+<td>公司允许的模型服务或私有推理环境</td>
+<td>“本地装 Harness”不等于“模型权重在本机”</td>
+</tr>
+<tr>
+<td>点击、读文件、操作应用</td>
+<td>任务指定的云电脑或已授权本机</td>
+<td>动作位置由业务需要和权限决定</td>
+</tr>
+</tbody>
+</table></div>
+<p>建议初期让云端工作区的同一套执行体系同时承担对话与任务推进，不额外建设“只会聊天的前台模型”。但<strong>不要让整个 Bot 只有一条执行会话</strong>：日报任务正在工作时，用户仍应能够查询状态，必要时创建另一个任务。现有代码已经有独立任务及 provider 会话的基础，不应重新退回单聊天流。[S4]</p>
+<p>同一 Bot 的多个任务可共享经管理的长期偏好和身份，不自动混用所有临时上下文。每个任务应保留自己的目标、输入版本、已完成步骤、权限和产物。跨模型或跨引擎继续时，交接这些明确记录，不能假设能够搬运另一套引擎的全部内部状态。</p>
+<h3>4.2 “统一”体现为四个产品规则</h3>
+<ul>
+<li><strong>统一入口：</strong> 用户从同一产品发起、查询和修改任务，不需要先选择哪套引擎。</li>
+<li><strong>统一责任：</strong> 一个任务只有一个权威记录和当前负责人，不因用户开关机自动换归属。</li>
+<li><strong>统一结果：</strong> 工作区汇总最终结果、证据和需要用户处理的事项，模型自行说“完成”不能直接盖过工具失败。</li>
+<li><strong>统一权限：</strong> 更换模型、继续会话或转交子任务，不自动扩大数据范围和电脑操作权限。</li>
+</ul>
+<p>统一不是所有任务强制使用同一个模型，也不是所有工作必须塞进同一条对话。</p>
+<h3>4.3 模型可以切换，但应由产品承担复杂度</h3>
+<p>建议用有限的、经过验证的能力策略，替代向用户开放完整模型目录：</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="比较与决策表"><table>
+<thead>
+<tr>
+<th>工作阶段</th>
+<th>产品策略</th>
+<th>不应发生的行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>查询已有任务状态</td>
+<td>优先读取确定的任务记录；必要时由模型组织表达</td>
+<td>为回答“做完了吗”重新启动一次完整任务</td>
+</tr>
+<tr>
+<td>普通理解、摘要、结构化工具操作</td>
+<td>使用达到质量要求的基础策略</td>
+<td>为降低单次调用成本忽略总重试成本</td>
+</tr>
+<tr>
+<td>需要视觉识别或复杂纠错</td>
+<td>转入已验证的专长策略，保持任务编号和约束</td>
+<td>让无相应输入能力的模型反复猜界面</td>
+</tr>
+<tr>
+<td>达到失败、时长或成本阈值</td>
+<td>有限升级能力，或明确请求人工处理</td>
+<td>无限切模型、无限重试，掩盖失败</td>
+</tr>
+</tbody>
+</table></div>
+<p>第一版只需少量策略和明确升级条件，不必建设开放式“模型自动竞赛”。切换原则上发生在新任务或可记录的阶段结束处；需要会话内切换时，必须验证当前引擎适配是否支持。执行环境和已有权限不因模型切换而改变。</p>
+<p><strong>本地执行也不自动等于数据不出本机。</strong> 本地 Harness 如果调用外部模型，发送的文件内容、截图或上下文仍会离开本机。需要数据留在公司内时，应同时约束执行位置、模型端点和允许发送的数据，不能用“本地模式”替代这三项说明。</p>
+</section><section id="runtime"><h2>5. 本机究竟封装什么，云端究竟选择谁</h2>
+<h3>5.1 本机安装包应交付完整体验</h3>
+<p>本机至少包含桌面界面、登录与工作区连接、任务进度与审批、本机文件和电脑操作连接、停止与人工接管、更新和故障诊断能力。用户不应为了使用这些能力再去安装 CLI 或处理运行时依赖。</p>
+<p>对现有产品，建议<strong>首阶段保留已经内置的锐捷 Harness 作为独立本地执行能力</strong>，托管任务不经过它转发；仅因云端不可达，也不自动由它复制执行云端任务。后续若数据显示独立本地任务很少，再考虑标准安装包精简、按需安装本地执行模块；公司离线分发包仍可以提供完整模块。</p>
+<p>这同时回答了“本地该不该封装引擎”：需要独立本地执行时应封装，但云端任务能操作本机，本身并不构成必须启动本地引擎的理由。</p>
+<p>首版明确保留两个工作区归属：托管任务由云端工作区保存；独立本地任务由本地工作区保存。界面可以统一展示入口，但须标记归属。本地记录若以后向云端同步，先只展示带时间标记的摘要，不自动合并长期记忆，不改变任务负责人。独立于云工作区不代表无需联网：本地引擎调用远端模型时仍依赖模型服务可达。</p>
+<p>建议用户只看到与决策有关的选项：使用哪台电脑、哪些资料可以提供给任务、什么动作需要批准。引擎名与模型版本放在管理和诊断界面，不占据日常任务入口。</p>
+<h3>5.2 Harness 与 Codex 是同层候选，App Server 不是另一种云平台</h3>
+<p>Codex CLI 本身也是一种 Agent 运行时，可以承担这里所说的 Harness 职责。<code>codex exec</code> 适合非交互执行，SDK 用于程序化集成，App Server 面向更丰富的会话和交互控制；它们都不能自动替产品实现账号体系、持久任务调度、电脑资源分配和结果交付。</p>
+<p><strong>已有源码实际接法：</strong> 锐捷走本机 Host 的 HTTP/WebSocket 接口；Codex driver 走 App Server。二者都有电脑工具适配基础。不要把 Codex 的“Server”名称理解成已经具备公司级任务托管后台。[E1]</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="比较与决策表"><table>
+<thead>
+<tr>
+<th>决策维度</th>
+<th>锐捷 Harness</th>
+<th>Codex 路径</th>
+<th>对本项目的判断</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>现有产品接入</td>
+<td>已有公司登录、内置分发、工具和模型选择接入</td>
+<td>已有 App Server driver 与工具适配</td>
+<td>二者都不是从零接入；锐捷更接近当前封装基础</td>
+</tr>
+<tr>
+<td>公司账号与模型政策</td>
+<td>已有 OAuth 刷新实现；服务器无人值守与撤销处理仍要验</td>
+<td>当前适配走 ChatGPT 登录，且清除 API key 环境变量；企业接法仍需建设或验证</td>
+<td>属于硬门槛，优先于某个演示任务的效果</td>
+</tr>
+<tr>
+<td>云端运行形态</td>
+<td>已有无窗口 Host；Bot 内置产物覆盖 Windows/macOS</td>
+<td>可作为服务器执行器候选，需固定所用版本与接口</td>
+<td>应比较实际可交付产物，不比较名字</td>
+</tr>
+<tr>
+<td>能力切换</td>
+<td>当前 Bot driver 声明会话内换模能力</td>
+<td>当前 Bot driver 将会话内换模标为不支持</td>
+<td>是当前适配差异，不能推导 Codex 原生永远不支持</td>
+</tr>
+<tr>
+<td>电脑操作与恢复</td>
+<td>工具已接，但可靠性须按任务测</td>
+<td>同样须按任务测</td>
+<td>引擎、模型、工具和环境共同决定效果</td>
+</tr>
+<tr>
+<td>版本与维护</td>
+<td>要对齐源码、固定提交、桌面包与云端包</td>
+<td>要固定 CLI/协议版本并验证升级兼容</td>
+<td>“同叫一个版本”不能代替可追溯的构建清单</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>建议采用有否决条件的 Harness 优先策略。</strong> 理由是本项目已有公司接入和封装投入，并存在模型策略管理的适配基础；不是已经证明它比 Codex 更强。满足目标服务器部署、身份续期、工具控制、取消恢复、任务隔离这五项条件后，优先让本机和云端共用同一引擎体系，但可以使用不同发行形态。</p>
+<p>若 Harness 在目标平台或公司认证上有无法接受的障碍，或相同任务中稳定性持续不达标，再比较 Codex 的可交付方案。切换不应以“有一篇自动执行文档”为依据，也不应为了名义统一而长期承担明确的能力缺口。</p>
+<p>为避免“优先验证”变成无限期投入，阶段一开始前必须固定目标操作系统、认证方式、共同任务集、资源条件、双方可投入的验证期限和发布阻断项；到期提交继续使用、改候选或缩小承诺的结论。未达门槛时，不能以“再调一调”自动延长默认选型。具体期限由项目负责人按资源确认，本稿不虚构日期。</p>
+<p>引擎选定前的验证必须使用同一批任务、同等数据与权限。能使用相同模型时分别比较运行时差异；不能时，应明确比较的是两套完整方案，不能把模型差距归因给 Harness。费用比较包括失败重试、人工接管、环境运行与维护成本，不只比较 token 价格。</p>
+<p>还有一个实现风险不能省略：锐捷现有桌面无窗口 Host、底层一次性 headless 程序、JSON-RPC SDK 是三条不同接入路径。当前 SDK 文档存在逐任务取消与结果归属的限制，不能假设把桌面包换成 SDK 就完成轻量云化。当前 Bot 固定的 Harness 提交与本机另一份 Harness 源码也不一致，尚未确认差异；应以最终发行产物验收，而非凭相同的版本号推断能力。[E1]</p>
+</section><section id="journeys"><h2>6. 六条用户旅程：让选择落实到真实行为</h2>
+<p>以下为设计用的用户故事，不是假装已访谈到的案例。它们同时用于发现架构遗漏和组织验收。</p>
+<h3 id="journey-1">J1 每天上班前，报告已经准备好</h3>
+<p><strong>目标：</strong> 员工设定“工作日 8:30 汇总指定网站动态，生成报告放到工作区”。</p>
+<p><strong>旅程：</strong> 用户说明目标 → Bot 确认来源、时区、工作日范围和交付位置 → 工作区保存计划并返回托管凭据 → 用户关机 → 到点创建本次执行记录 → 获取资料并生成报告 → 用户次日打开产品看到结果和来源。</p>
+<p><strong>关键判断：</strong> 定时器属于工作区，执行器只承担本次任务；“8:30”默认是开始执行时间，如用户要求 8:30 前交付，产品需区分截止时间并估计提前启动。每次执行使用当次计划版本，不能让后来编辑覆盖历史。</p>
+<p><strong>异常与验收：</strong> 网站不可访问时给出失败或部分结果；身份过期显示需要重新连接；错过时间按任务约定补跑或跳过。用户能区分“已保存计划”“已经开始”“结果已交付”，客户端关闭不取消已接收任务。</p>
+<h3 id="journey-2">J2 晚上用本机表格，第二天拿到分析</h3>
+<p><strong>目标：</strong> 用户说“结合桌面这份 Excel 和网上资料，明早给我分析”。</p>
+<p><strong>旅程：</strong> 产品定位具体文件 → 告知后台执行需要可持续访问的输入 → 用户允许保存这一版到获准工作区，或选择等待本机在线读取 → 生成任务 → 在云环境加工 → 交付报告并注明使用的文件版本。</p>
+<p><strong>关键判断：</strong> 关机连续性首先取决于依赖是否已经准备好。若文件已按授权复制且任务没有后续本机依赖，本机即可关机；若必须实时读本机最新版，产品应显示依赖和等待期限。</p>
+<p><strong>异常与验收：</strong> 同名文件变化不能悄悄替换输入；传输未完成不得宣称“现在可以关机”；禁止上传的资料，应使用获准的本地或公司内处理路径，无法满足则明确说明。不能靠两套 AI 相互聊天解决文件不可达。</p>
+<h3 id="journey-3">J3 在公司业务系统里更新记录，用户仍能掌控办公电脑</h3>
+<p><strong>目标：</strong> 用户要求从内网应用取数，核对后更新一条记录。</p>
+<p><strong>旅程：</strong> 优先检查是否有获准的应用接口 → 必须使用桌面时绑定到指定办公设备 → 展示读取、截图和修改范围 → 用户授权 → 执行前取得该桌面的使用权 → 读取核对 → 按规则批准业务修改 → 回传业务回执。</p>
+<p><strong>关键判断：</strong> 云端助手可以负责整个任务，本机连接负责执行和返回结果，不必再启动一个本地模型。但如果要求截图和数据不得离开某个范围，必须选择满足该要求的运行环境与模型服务。</p>
+<p><strong>异常与验收：</strong> 锁屏、设备离线、权限撤销、用户接管时暂停相应动作。桌面停止按钮必须在本机生效，不依赖云端及时响应。网络恢复后先确认上次修改是否已经生效，不能直接重做。</p>
+<h3 id="journey-4">J4 长任务运行时，用户继续交谈并改变要求</h3>
+<p><strong>目标：</strong> Bot 正在整理多个文件，用户问进度，并要求先完成其中一个。</p>
+<p><strong>旅程：</strong> 查询读取任务记录 → 产品说明真实进度和阻碍 → 将新要求关联到原任务 → 记录任务版本变化 → 在安全步骤边界调整计划 → 用户可另开不相关任务。</p>
+<p><strong>关键判断：</strong> 一个助手可有多个任务会话。询问状态不应抢走正在执行的桌面；不同任务共用同一桌面时排队，不能同时移动鼠标。新要求是修改原任务还是创建新任务，必须在产品状态中明确。</p>
+<p><strong>异常与验收：</strong> 引擎不能即时接受变更时，显示“变更待应用”，而不是假装已经切换。已经完成的外部动作不能仅靠修改计划撤销；需要新的明确处理动作。</p>
+<h3 id="journey-5">J5 云电脑更新或执行进程崩溃，保留约定并给出恢复结论</h3>
+<p><strong>目标：</strong> 管理员更新执行环境，员工不希望日程、历史和产物丢失。</p>
+<p><strong>旅程：</strong> 停止向待更新环境派新任务 → 对当前任务判断完成、可暂停或需人工处理 → 保存已确认结果和恢复依据 → 更新环境 → 检查工具、身份和文件 → 对任务逐项恢复、重新执行安全步骤或报告无法恢复。</p>
+<p><strong>关键判断：</strong> 聊天历史、任务承诺与可重建桌面不共命运；但保留记录不等于能够无缝恢复任何执行。引擎原生会话恢复只是可用手段之一，业务状态仍要核对。</p>
+<p><strong>异常与验收：</strong> 如“点击提交”后进程消失，产品应先查业务结果。没有回执且无法查询时进入“结果待核实”，不得自动重发。验收包括整机恢复和桌面单独重建，两者承诺不同。</p>
+<h3 id="journey-6">J6 新电脑登录与独立本地任务，不制造两个同名任务负责人</h3>
+<p><strong>目标：</strong> 用户换电脑后继续查看托管任务，也偶尔只在当前电脑做即时处理。</p>
+<p><strong>旅程：</strong> 新设备登录同一工作区 → 获取任务与结果 → 本机能力重新绑定和授权 → 新建独立本地任务时明确标记执行位置与可持续条件。</p>
+<p><strong>关键判断：</strong> 云端任务属于云端工作区，不属于旧电脑；独立本地任务的权威记录保存在原本地工作区。新电脑不会仅凭同名 Bot 自动获得这份本地记录或接手任务。第一版不做透明接力，也不承诺本地与云端记忆自动合并。</p>
+<p><strong>异常与验收：</strong> 旧设备撤权后不能继续收到新动作；云端暂时不可达时，本机不能复制启动同一个托管任务。产品可缓存已见信息并显示更新时间，未收到云端确认的新请求保持“待提交”。</p>
+</section><section id="benchmark"><h2>7. 从 Grok Bot 能推导什么，不能推导什么</h2>
+<p>Grok Bot 可用于验证用户体验方向，不能替我们决定所有内部实现。</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="比较与决策表"><table>
+<thead>
+<tr>
+<th>公开行为或说明</th>
+<th>有依据的启发</th>
+<th>不能据此断言</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>客户端关闭后，后台任务与例行任务继续</td>
+<td>托管任务不应依赖桌面客户端存活</td>
+<td>它一定有某种特定调度器，或每个用户一台独立调度服务器</td>
+</tr>
+<tr>
+<td>对话保存在云电脑之外</td>
+<td>用户历史与可重建环境分开管理有价值</td>
+<td>模型推理一定在电脑之外；电脑停机时仍能正常完成对话</td>
+</tr>
+<tr>
+<td>云电脑更新涉及保留数据、移除部分软件与暂停工作</td>
+<td>更新是工作环境变更，需要解释影响与恢复</td>
+<td>后台服务也必须由用户手动更新</td>
+</tr>
+<tr>
+<td>没有面向用户的模型选择器，供应组合可变化</td>
+<td>产品可以封装能力策略，承担模型选择</td>
+<td>它只用一个模型，或已采用我们设计的阶段路由</td>
+</tr>
+<tr>
+<td>经桌面应用执行本机命令、读文件和传输文件</td>
+<td>云端任务与本机工具可通过授权连接结合</td>
+<td>所有版本都能完整控制本机图形桌面</td>
+</tr>
+</tbody>
+</table></div>
+<p>本次重新核查还发现：官方恢复说明指出，电脑重连期间 Bot 可能无法完成任务。因此，“历史在电脑外”与“全部推理独立于电脑运行”不能画等号。[G1]</p>
+<p>对闭源部分，本文采用三个<strong>架构假设</strong>：任务约定需要持久保存；操作环境应允许替换；同一产品身份可以对应不同执行过程。这些是假设如何实现目标体验，不是对 Grok Bot 内部代码的还原。</p>
+<p>我们的取舍也可以不同：若公司更需要受控内网、固定应用与私有模型，执行工作区可以部署在公司环境。对标的是任务交付体验，不是照搬某个地域、供应商或云电脑规格。</p>
+</section><section id="delivery"><h2>8. 结合当前源码：已有基础、实质缺口与研发工作包</h2>
+<h3>8.1 现状不是一张白纸，但也不是完整托管产品</h3>
+<div class="table-scroll" tabindex="0" role="region" aria-label="比较与决策表"><table>
+<thead>
+<tr>
+<th>当前基础</th>
+<th>这次实际核查的含义</th>
+<th>下一步缺口</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RoutineManager 持久保存计划与执行记录，并有排队、等待、错过等状态</td>
+<td>已有任务调度产品逻辑；由所在进程的计时器推进</td>
+<td>目标环境常驻、任务归属、恢复核对、按业务配置迟到处理 [S1]</td>
+</tr>
+<tr>
+<td>自托管、远程工作区、设备配对</td>
+<td>可复用连接到常驻工作区的路径</td>
+<td>公司发行部署、默认引导、完整上线验收 [S2]</td>
+</tr>
+<tr>
+<td>独立任务、会话记录、记忆、Bot 间委派</td>
+<td>已有一个 Bot 多任务的结构与协作基础</td>
+<td>跨环境责任和上下文交接不能视为已完成 [S4]</td>
+</tr>
+<tr>
+<td>本机 CUA、电脑工具、桌面使用队列</td>
+<td>已有本机操作与同一桌面排队基础</td>
+<td>云工作区安全调用用户设备、断线和撤权规则 [S3]</td>
+</tr>
+<tr>
+<td>Harness、Codex 两套 driver</td>
+<td>有可以继续利用的执行适配位置</td>
+<td>公司政策、部署产物、统一取消与恢复契约 [E1]</td>
+</tr>
+<tr>
+<td>Cloudflare control-plane</td>
+<td>已有账号、安装实例与远程入口管理</td>
+<td>它明确不保存 Bot、聊天和执行内容，不能直接当作任务托管平台 [S5]</td>
+</tr>
+</tbody>
+</table></div>
+<p>两个缺口会直接影响承诺。第一，现有 <code>runOn=cloud</code> 会选择 BoxAgent，普通 VPS 路径则是挂载远程电脑工具；“切执行地点”目前与“切引擎”存在耦合。第二，RoutineManager 在进程重启后会把运行中或等待中的记录标为失败，尚不等同于持续恢复执行。[S1][S6]</p>
+<p>因此，第一版需要整理的是用户目标、任务归属、执行策略与目标设备之间的关系；不能只是把原界面的“云端”开关换个名字。</p>
+<h3>8.2 工作包粒度：可以继续形成 spec，但不预先锁死实现</h3>
+<p>以下每一项都定义可交付行为和失败边界。研发可据此细化接口、数据迁移和测试；本稿不直接指定数据库产品或消息队列品牌。</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="比较与决策表"><table>
+<thead>
+<tr>
+<th>工作包</th>
+<th>必须做出的行为</th>
+<th>关键边界与验收</th>
+<th>依赖 / 对应旅程</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>E1 工作区与任务归属</td>
+<td>一个任务有稳定编号、所属工作区、用户、当前执行归属和版本；收到持久接收凭据后才显示托管成功</td>
+<td>重复提交不产生重复业务任务；断线时清楚区分未提交与已接收；本地和云端不同时担任权威</td>
+<td>基础；J1、J6</td>
+</tr>
+<tr>
+<td>E2 持久计划与执行记录</td>
+<td>区分计划、每次运行、每次尝试；保存时区、触发时间、截止要求、输入和迟到策略</td>
+<td>同一计划不无限积压；重启不改历史；编辑只影响明确范围内的未来运行</td>
+<td>E1；J1、J5</td>
+</tr>
+<tr>
+<td>E3 执行调度与运行时适配</td>
+<td>按任务能力、数据范围和目标环境分配引擎；统一开始、进度、等待、取消和结束</td>
+<td>旧执行者失联后禁止与新执行者并行造成重复动作；更换引擎不改变任务身份</td>
+<td>E1；J1、J4、J5</td>
+</tr>
+<tr>
+<td>E4 环境与输入管理</td>
+<td>管理执行环境状态、版本、可用工具和输入文件版本；运行前检查依赖</td>
+<td>文件传输完成才标记准备好；重建环境不清除任务数据；身份过期进入明确等待</td>
+<td>E2、E3；J2、J5</td>
+</tr>
+<tr>
+<td>E5 本机连接与授权</td>
+<td>设备主动连接；绑定、授权、目标范围、桌面占用、停止、撤权和结果回传</td>
+<td>远程页面不能绕过现有本地隔离；本机离线、锁屏、人工接管行为清楚；失效动作不回放</td>
+<td>E1、E3；J3、J6</td>
+</tr>
+<tr>
+<td>E6 任务上下文与能力策略</td>
+<td>保持 Bot 身份，按任务保存输入、进展、约束和产物；按有限规则选择能力</td>
+<td>模型切换不放宽权限；不搬运无法验证的内部状态；升级有次数和成本边界</td>
+<td>E3；J2、J4</td>
+</tr>
+<tr>
+<td>E7 结果交付与用户干预</td>
+<td>汇总任务卡、产物、失败原因和行动入口；变更、暂停、恢复关联具体任务</td>
+<td>对外发送与生成草稿分开；成功以可核对结果为准；待核实结果不能显示成功</td>
+<td>E1—E6；全部</td>
+</tr>
+<tr>
+<td>E8 发行与运营</td>
+<td>形成客户端、本机连接、引擎、执行环境的兼容清单及升级恢复办法</td>
+<td>新机可用、服务器重启、凭据续期、版本回退、用户隔离和用量归属均可验</td>
+<td>E3—E7；J5、J6</td>
+</tr>
+</tbody>
+</table></div>
+<p>跨工作包还有一条共同要求：<strong>“停止请求已发出”不等于“外部动作已经停止”。</strong> 用户界面需要区分正在停止、已停止和结果待核实；任何引擎都必须遵守这一语义。</p>
+</section><section id="gates"><h2>9. 建设顺序、验证指标与改变方向的条件</h2>
+<h3>9.1 按风险递进，不按技术模块堆进度</h3>
+<p><strong>阶段一：验证值得托付的工作与可交付引擎。</strong> 选定少量真实任务，至少覆盖定时资料整理、本机文件参与、一次有明确业务回执的操作。记录当前人工耗时、允许的数据范围、可接受延迟和人工介入。并行验证 Harness 的目标平台产物与公司身份；Codex 使用同一任务集作备选对照。</p>
+<p>进入下一阶段的条件是：这些任务存在重复使用价值，且至少一套完整执行方案满足部署、身份、权限和结果要求。若主要需求是用户在场的即时桌面操作，应提高本机路线的优先级，而不是继续扩大云端投入。</p>
+<p><strong>阶段二：交付一个完整托管闭环。</strong> 在受控工作区里覆盖 E1—E4、E7 的必要部分，交付 J1，并覆盖 J2 的“已授权输入副本”路径。沿现有远程工作区与 RoutineManager 演进，不先造全公司多租户调度平台。</p>
+<p>验收不能只看一次关机成功，还要验证重启、身份过期、环境不可用、重复请求、错过时点以及结果可访问。可接受的故障恢复时间和数据恢复范围在发布前明确；未建设高可用就不承诺不停机。</p>
+<p><strong>阶段三：补齐本机和持续干预体验。</strong> 完成 E5、E6 及相关 E7，交付 J3、J4、J6。先选择一个办公操作链，测真实锁屏、断网、用户接管与撤权；不要用“工具已经注册”替代产品验收。</p>
+<p><strong>阶段四：扩大规模并优化成本。</strong> 根据真实使用量决定多用户管理、弹性执行、桌面休眠、专长模型和安装包精简。E8 的基本版本与隔离要求须从首版开始，规模化能力则在前述体验成立后扩展。</p>
+<h3>9.2 衡量交付，而不是衡量调用次数</h3>
+<div class="table-scroll" tabindex="0" role="region" aria-label="比较与决策表"><table>
+<thead>
+<tr>
+<th>指标</th>
+<th>建议口径</th>
+<th>用于判断</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>有效交付率</td>
+<td>满足用户验收条件的运行数 / 已到期且应执行的运行数</td>
+<td>助手是否真正值得托付；失败、环境问题不能随意从分母剔除</td>
+</tr>
+<tr>
+<td>无人干预完成率</td>
+<td>无需用户救场且交付有效的运行数 / 已执行运行数</td>
+<td>自动化是否减少实际负担</td>
+</tr>
+<tr>
+<td>按约交付率</td>
+<td>在约定交付时间内成功的运行数 / 有交付时间约定的运行数</td>
+<td>调度、排队与能力是否匹配</td>
+</tr>
+<tr>
+<td>恢复正确性</td>
+<td>中断后正确继续、明确终止或进入待核实的情况；单列重复副作用</td>
+<td>是否为了“看起来恢复了”制造业务错误</td>
+</tr>
+<tr>
+<td>单次有效交付成本</td>
+<td>模型、执行环境、存储网络、必要人工介入与运维摊销 / 有效交付数</td>
+<td>选引擎、模型和资源策略的依据</td>
+</tr>
+<tr>
+<td>持续采用</td>
+<td>用户是否反复托管同类任务、是否减少手工重做</td>
+<td>产品价值是否超过一次演示</td>
+</tr>
+</tbody>
+</table></div>
+<p>试验阈值应在运行前由产品与研发约定，不能看到结果后调整及格线。本稿不虚构通过率、预算或交付周期。重大越权和重复业务提交属于发布阻断项，不能被平均成功率冲淡。</p>
+<h3>9.3 哪些观察会改变建议</h3>
+<ul>
+<li>若多数高价值任务必须持续占用用户的办公桌面，且用户不接受数据进入托管工作区，应转向以本机执行为主、云端只托管约定和提醒的产品；这时需要明确重新设计本地执行者与后台的协作。</li>
+<li>若一台专用远程机足以承载稳定需求，用户接受维护停机，就不急于拆出独立计算集群；仍保留任务数据与可重建环境的分离。</li>
+<li>若 Harness 的云端交付成本、身份限制或质量持续不满足要求，就启用 Codex 或其他合格实现；不要为维护品牌一致性损失产品质量。</li>
+<li>若模型策略切换没有带来更高有效交付率或更低总成本，就先采用较简单的固定策略，不把动态路由当作必须展示的卖点。</li>
+</ul>
+<p><strong>建议本轮批准的是产品原则和验证路径，不是未经验证的全量云迁移。</strong> 下一次评审应带回真实任务结果、两套引擎的完整交付差异，以及首批用户对本机与托管边界的反馈，再决定默认形态和扩大投入。</p>
+</section><section id="sources"><h2>依据与阅读边界</h2>
+<p>本稿依据 2026-09-21 读取的本地工作树；HEAD 为 <code>ecac4d337e414c0daffce7b409a4a70ad71c33c9</code>，包含既有未提交修改。源码存在某个入口不等于该能力已在目标服务器或所有安装包验收。本次只做研究与文档，未执行部署、构建或模型任务。</p>
+<ul>
+<li><strong>[S1] 调度与重启：</strong> <a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/routines.ts">routines.ts</a> 第 51、79、109、838、908、1393、1431 行。具有持久状态；进程重启将运行中与等待中记录标失败；计时驱动和 12 小时迟到策略仍是当前实现。</li>
+<li><strong>[S2] 常驻工作区：</strong> <a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/docs/self-hosting.md">自托管说明</a>、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/deploy/docker-compose.yml">部署配置</a>、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/electron/environments.cjs">环境连接</a>、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/electron/desktop-companion-client.mjs">桌面 Companion</a>。现有 compose 镜像指向上游，不能直接当作公司发行版本。</li>
+<li><strong>[S3] 本机与操作排队：</strong> <a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/electron/capabilities.cjs">capabilities.cjs</a> 第 151 行、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/electron/local-origin.cjs">local-origin.cjs</a> 第 33 行、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/computer-turn-queue.ts">computer-turn-queue.ts</a> 第 17 行、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/index.ts">index.ts</a> 第 5195 行。现有进程内排队不是分布式设备执行租约。</li>
+<li><strong>[S4] 任务与协作：</strong> <a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/store.ts">store.ts</a> 第 292、308、692 行、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/contracts.ts">contracts.ts</a> 第 183、268 行、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/delegations.ts">delegations.ts</a>、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/memory-store.ts">memory-store.ts</a>。现有委派不能等同于跨工作区自动接力。</li>
+<li><strong>[S5] 公司管理基础：</strong> <a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/cloudflare/control-plane/README.md">control-plane README</a> 开头明确其账号、安装实例与入口职责，以及不存 Bot、聊天和执行内容的范围。</li>
+<li><strong>[S6] 现有云路径：</strong> <a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/index.ts">index.ts</a> 第 4902、4938、5165、5284 行、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/drivers/boxagent.ts">boxagent.ts</a> 开头与第 48 行。BoxAgent 与远程电脑工具挂载是不同路径。</li>
+<li><strong>[E1] 引擎证据：</strong> <a href="#evidence-runtime">运行时选型核查</a>。区分 Bot 固定发行提交、当前 Harness 源码和当前适配器能力，不把它们合并成一个“已支持”。</li>
+<li><strong>[G1] 对标证据：</strong> <a href="#evidence-product">Grok Bot 产品证据</a>。含本次实际访问结果、第一方 URL、短引文及无法确认的内部设计。</li>
+<li><strong>源码复核清单：</strong> <a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/docs/research/product-architecture-source-baseline-2026-09-21.json">关键文件指纹</a>。只用于说明证据版本，不代表运行验证。</li>
+</ul>
+</section></article>
+<div class="endnote">以下为随评审稿附带的核验资料。产品事实、源码事实、设计建议和未验证事项分别说明。</div><details class="evidence" id="evidence-product"><summary>对标证据：Grok Bot 的公开承诺与闭源边界</summary><div class="evidence-body"><h3>Grok Bot 产品承诺与架构边界：本轮第一方核查</h3>
+<p>核查日期：2026-09-21。用途：为产品方向与下一步架构决策提供证据，不推测闭源进程布局。本轮只新增此笔记，未修改代码、配置或运行应用。</p>
+<h2>核查范围与可信度</h2>
+<p>已读仓库 <code>AGENTS.md</code>；本任务不涉及服务或会话变更验收。2026-09-20 的研究仅作寻址线索，下列产品事实均在本轮重新获取官方正文。请求使用 Windows <code>curl.exe</code> 8.21.0 / Schannel，保留正常 TLS 证书校验，六个 Grok Bot 页面与一个 AWS 对照页面均成功返回，curl exit code 为 0。最初 Python urllib 的请求因本地 CA 链缺失失败；后续使用系统信任库成功，未使用 <code>-k</code>、<code>--insecure</code> 或禁用校验。</p>
+<p>这些资料证明厂商当前公开承诺，不等于独立产品实测，也不保证用户安装的旧版本均有同样功能。页面未提供逐版本历史，因此正文不将当前文档回填为旧版本事实。</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="比较与决策表"><table>
+<thead>
+<tr>
+<th>编号</th>
+<th>本次已获取的官方资料</th>
+<th>核查用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>G1</td>
+<td><a href="https://cursor.com/docs/grok-bot">Grok Bot 总览</a></td>
+<td>产品定位、关机继续、共享电脑、Bot 记忆</td>
+</tr>
+<tr>
+<td>G2</td>
+<td><a href="https://cursor.com/docs/grok-bot/work">Work with Grok Bot</a></td>
+<td>会话干预、工作区、插件、本机、例行任务</td>
+</tr>
+<tr>
+<td>G3</td>
+<td><a href="https://cursor.com/docs/grok-bot/settings">Settings</a></td>
+<td>模型选择、客户端与电脑分别更新、通知</td>
+</tr>
+<tr>
+<td>G4</td>
+<td><a href="https://cursor.com/docs/grok-bot/security">Security</a></td>
+<td>身份、模型、持久数据、休眠、审批、本机范围</td>
+</tr>
+<tr>
+<td>G5</td>
+<td><a href="https://cursor.com/help/grok-bot/routines">Routines</a></td>
+<td>定时语义、运行记录、Webhook 与服务端 routine 模式</td>
+</tr>
+<tr>
+<td>G6</td>
+<td><a href="https://cursor.com/help/grok-bot/computer-recovery">Grok Bot computer</a></td>
+<td>更新恢复语义、聊天位置、电脑故障影响</td>
+</tr>
+<tr>
+<td>A1</td>
+<td><a href="https://docs.aws.amazon.com/scheduler/latest/UserGuide/what-is-scheduler.html">Amazon EventBridge Scheduler</a></td>
+<td>仅作任务触发与执行目标分离的第一方工程对照</td>
+</tr>
+</tbody>
+</table></div>
+<h2>一、应对标的产品承诺</h2>
+<p>Grok Bot 的核心不是远程桌面或模型选择器，而是用户可以长期委托工作的 Bot：有名字、职责、对话、逐步积累的上下文，并能在真实工具中完成任务。G1 原文：</p>
+<blockquote>
+<p>AI teammates with names, jobs, and context that compounds over time.</p>
+</blockquote>
+<p>公开资料把交互、持续工作、状态积累和审批贯穿在同一个 Bot 身份中。对我们而言，“同一个助手”首先应是身份、任务和承诺连续，而不是保证所有步骤只调用同一个模型。这是产品解释，不是 Grok 内部实现事实。</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="比较与决策表"><table>
+<thead>
+<tr>
+<th>用户关心的承诺</th>
+<th>本轮确认的官方行为</th>
+<th>不应扩张成的结论</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>笔记本关闭后继续工作</td>
+<td>G1 明确背景 turn 与 routine 不随关闭 app、笔记本或手机停止；G5 再次确认云端例行任务</td>
+<td>任何依赖本机文件、内网或界面的步骤都能在关机后完成</td>
+</tr>
+<tr>
+<td>隔天仍是同一个助手</td>
+<td>G1/G2：Bot 保存稳定偏好、事实与工作摘要；同一 Bot 可从桌面和 iOS 访问</td>
+<td>所有历史消息会无限装入每次模型上下文；记忆永远正确</td>
+</tr>
+<tr>
+<td>有可延续的工作环境</td>
+<td>G1/G2：账号内 Bot 共享持久云电脑文件、浏览器与登录；各 Bot 有自己的屏幕</td>
+<td>每个 Bot 都有隔离操作系统；屏幕是安全隔离边界</td>
+</tr>
+<tr>
+<td>随时干预工作</td>
+<td>G2：用户直接消息优先于后台工作，可改变当前 turn 方向；停止不撤销已完成动作</td>
+<td>打断可以回滚外部已发送消息或已修改数据</td>
+</tr>
+<tr>
+<td>自动化能被检查</td>
+<td>G5：routine 有名称、指令、何时运行、启停和运行历史；测试会执行真实工作</td>
+<td>保存等于立即运行；已受理等于任务已完成</td>
+</tr>
+<tr>
+<td>不让用户选模型</td>
+<td>G3/G4：Cursor 管理模型选择，界面没有模型选择器</td>
+<td>内部始终只有一个模型，或必定是某个固定厂商</td>
+</tr>
+</tbody>
+</table></div>
+<p>G1 关机承诺短引文：</p>
+<blockquote>
+<p>Closing the app, your laptop, or your phone doesn't stop a background turn or a routine.</p>
+</blockquote>
+<p>G2 对结果的要求也值得对标：链接、文件、可核查的来源、已做与待批准动作、未解决的问题都出现在交付中。这里的差异化价值是可委托且可检查的工作，不只是聊天质量。</p>
+<h2>二、“后台托管任务”和“直接放在远程电脑”有哪些已知与未知</h2>
+<h3>已知事实</h3>
+<ol>
+<li><strong>会话不与云电脑同生共死。</strong> G6 明文：<code>Conversation history is stored outside the computer</code>。更新、恢复、重建电脑不直接删除聊天。G2 同样说明对话在电脑之外。</li>
+<li><strong>连接器凭据不放在工作电脑。</strong> G2/G4：OAuth token 保存在 Cursor connector backend，Bot 调用工具而不获得 token。G4 原文：<code>tokens are never stored on the computer</code>。</li>
+<li><strong>电脑是可休眠、可替换的工作环境。</strong> G4：<code>Idle computers hibernate automatically.</code>；过时系统镜像会重建且保留成员文件。G6 描述已同步数据的持久副本与恢复。</li>
+<li><strong>任务有独立于聊天口头承诺的触发记录。</strong> G5 定义下一次匹配时刻、启停、测试、运行历史、Webhook 受理状态等明确行为。</li>
+<li><strong>公开文档确实提到服务端 routine 模式。</strong> G5 的 “this Bot keeps its routines on the server” 表示该 Bot 的 routine 存在 Cursor servers，此时面板不可编辑名称、指令、时间，也不能从面板启停/删除/测试，需在聊天里让 Bot 修改；面板仍可看触发摘要和运行历史。</li>
+<li><strong>公开文档出现控制服务，但未披露任务内部拓扑。</strong> G4 将部分管理动作称为 <code>Grok Bot control-plane actions</code>，并说明生产 control plane 有每日加密备份。这支持管理状态与工作电脑具有不同职责，不能据此确认具体 Scheduler、Worker 或数据库布局。</li>
+</ol>
+<h3>决策可用的推断</h3>
+<ul>
+<li>“任务是否被可靠接收、未来何时触发、当前完成到哪、交付物在哪里”与“本次在哪台电脑执行”应在产品合同中分开。云电脑重建时前者应仍可查询；无需规定第一期一定拆为不同机器或微服务。</li>
+<li>单台远程电脑常驻调度器可以达到本机关机仍执行。其局限不是“不算云”，而是如果计划、运行状态与执行盘共同故障，任务的恢复和解释能力受同一故障影响。外部持久状态、备份与恢复机制补上后，仍可成为合理的早期部署。</li>
+<li>只有需要浏览器、桌面、文件环境的步骤才必然需要电脑。API 类工作可设计为无需唤醒完整电脑；这是我们的成本与可靠性选项，不能写成 Grok 已证实做法。</li>
+</ul>
+<h3>重要反证与未知</h3>
+<p>G6 原文：</p>
+<blockquote>
+<p>A bot cannot finish a turn while the computer says Reconnecting or Couldn't Reach Grok Bot's Computer.</p>
+</blockquote>
+<p>因此，<strong>“聊天保存在电脑外”不能证明 Grok 的推理、对话响应或 Agent 循环能脱离云电脑继续运行。</strong> 它的实际产品仍可能把完成 turn 的可用性与电脑紧密绑定。我们如果选择电脑故障时仍能解释状态、接受新委托，这是明确设计的产品能力，不应作为“复刻其架构”的既知事实。</p>
+<p>G5 的服务端 routine 提示只说明一种用户可见管理模式，不足以判断普通 routine 是否存在 VM 内 cron、后端集中 Scheduler 或双重机制。没有资料证明关机前后会在本地与云端热迁移 Agent。</p>
+<h2>三、模型与执行引擎：公开资料能裁定到哪</h2>
+<p>G4 原文：</p>
+<blockquote>
+<p>Cursor manages model selection. There is no customer-facing model picker, and the serving mix can change over time with no fixed vendor set guaranteed.</p>
+</blockquote>
+<p>G4 还说用量分析展示实际服务每次请求的模型，包括 failover，计费依实际服务模型。</p>
+<p><strong>事实：</strong> 产品封装了模型选择，并预留服务组合变化与失败切换。<strong>不能确认：</strong> 是否按任务难度、视觉需求、时延或成本动态路由；是否有“聊天模型＋执行模型”的固定双模型结构；是否使用 Codex、锐捷 Harness 或具体私有引擎。</p>
+<p>另一个容易混淆的事实：G4 明确 Auto Review 使用 <code>an independent review model</code>，覆盖 shell、插件、computer use、routine 写入和委托等风险动作。这只能证明存在独立审批评估模型，不能证明主任务由两个聊天 Agent 协同。</p>
+<p>对我们的决策启示：应先定义一个 Bot 身份和统一任务记录，再允许后台换用模型能力。是否要两个长期独立的聊天 Agent，应由离线、隐私或本地自治需求证明；不应因为同时操作云电脑和宿主机就自动增设一个本地聊天模型。</p>
+<h2>四、本机控制的真实范围与边界</h2>
+<p>G4 对本机的直接描述：</p>
+<blockquote>
+<p>run commands, read files, and move files between the cloud computer and the local machine.</p>
+</blockquote>
+<p>G2/G3/G4 一致说明：通过桌面 app 执行，本机与云电脑分开授权，默认逐命令批准，设置只适用于当前桌面；本机控制与云电脑内 Auto Review 并非同一控制。</p>
+<p>这些资料证明本机命令和文件能力。<strong>没有足够证据把它扩写成任意宿主机 GUI、锁屏或登录界面的全面控制。</strong> 若我们的产品承诺宿主机 GUI 自动化，应单独纳入能力建设与验收。</p>
+<p>G4 允许成员把云电脑流量经桌面转发，使用桌面的网络和 IP。因而依赖本机转发才能访问的公司内网会受设备在线状态影响，这是架构推断，不是本轮断网实测。</p>
+<p>云任务与本机执行并不冲突，但必须在用户旅程中明确：本机离线时，哪些步骤可以继续、哪些等待、何时超时、是否需要重新审批。不能以统一聊天界面掩盖执行目标差异。</p>
+<h2>五、为什么云电脑仍需要“更新”</h2>
+<p>G3 区分客户端更新与 Agent Computer 更新。G6 给出清晰的环境生命周期：</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="比较与决策表"><table>
+<thead>
+<tr>
+<th>操作</th>
+<th>已公开行为</th>
+<th>用户需要知道的影响</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Update</td>
+<td>移至最新电脑版本，可现在或稍后执行；保留已同步 Bot、文件、登录</td>
+<td>安装的软件包被移除；无法暂停的 turn 可能被丢弃</td>
+</tr>
+<tr>
+<td>Recover</td>
+<td>重建电脑并重新连接；保留 Bot、文件、登录</td>
+<td>安装的软件包被移除</td>
+</tr>
+<tr>
+<td>Reset</td>
+<td>恢复上次快照并建立最新版本电脑</td>
+<td>运行工作中断；快照后未同步 Bot/文件可能丢失；安装的软件包被移除</td>
+</tr>
+</tbody>
+</table></div>
+<p>G6 的 <code>Backup not ready</code> 表示等待安全备份，<code>Agent busy</code> 表示 Bot 未能及时暂停所以此次未更新。这不是要求用户维护厂商所有后端服务，而是让有状态工作环境的重建遵守数据和任务边界。</p>
+<p>产品设计启示：更新应回答“何时中断、保留哪些状态、移除什么、如何恢复”。不应只显示一个含糊的“后台更新中”。如我们希望安装依赖长期稳定，可引入声明式软件环境重建，但这是我们的新增设计。</p>
+<h2>六、定时任务已公开的精确语义，可直接转成需求讨论</h2>
+<ul>
+<li>G5：时区取设置中的 <code>Timezone</code>；可以自动检测或固定选择。工作日为周一至周五。</li>
+<li>G5：保存不立即运行。例如 08:05 保存每天 08:00，不补当天 08:00，等下一次匹配时刻。</li>
+<li>G5：routine 不启用就不触发；测试立即执行真实任务，可能修改文件或调用连接工具。</li>
+<li>G5：每 Bot 最多 50 个 routine，界面保留最近 20 次运行记录。这些是对标产品的限制，不应直接照搬为我们应有的容量。</li>
+<li>G5：Webhook 的 200 表示已接受调用并开始一次运行，<strong>不表示指令已完成</strong>；结果需看运行历史或会话。</li>
+<li>G5：高频触发消耗预算；应先缩小频率和事件匹配范围，再考虑提高预算。保存但不触发不消耗运行用量。</li>
+<li>G2：长期未使用后，产品可能询问是否继续 routine，未回复则暂停。因此“云端常驻”不是“所有自动化永久无条件运行”。</li>
+</ul>
+<p>没有公开确认的边界包括：运行重叠策略、服务中断补跑窗口、夏令时重复时刻处理、重试幂等保证、任务截止时间与最长期待。这些需要我们的产品主动决定，不能写成已经从 Grok 抄得的规则。</p>
+<h2>七、一个有用的对照：集中触发不等于集中执行</h2>
+<p>A1 将 EventBridge Scheduler 定义为集中管理调度的服务，目标可以是 SQS、SNS、Lambda 等；提供一次性与周期调度、重试次数、失败触发保留时间。</p>
+<p>原文：</p>
+<blockquote>
+<p>EventBridge Scheduler provides at-least-once event delivery to targets</p>
+</blockquote>
+<p>这说明“可靠地在时间到达时发起工作”与“目标把业务任务完成”是两个不同责任。它也说明重试投递可能产生重复，不能把调度受理当成外部业务副作用只执行一次的保证。</p>
+<p><strong>仅作为设计参照：</strong> 我们不因此需要采用 AWS，更不能断言 Grok 使用这套机制。对当前产品最有价值的是：调度记录、执行派发与完成结果应可区分；外部写操作重试前需去重或核对已完成效果。第一期仍可在一个服务部署中实现这些职责。</p>
+<h2>八、可供方案引用的判断</h2>
+<ol>
+<li>对标方向可表述为“一个可长期委托、跨设备交流、能够使用真实工具并留下可核查结果的助手”。这比“给用户一台装了模型的远程电脑”更完整。</li>
+<li>云端定时不必一开始建复杂平台。先保证客户端关闭后计划仍有人持有、到时有执行者、机器故障后状态可解释与恢复；物理合部署与否是次一级选择。</li>
+<li>同一个 Bot 不等于同一个模型。公开事实支持封装模型并变化服务组合，不支持猜测固定双模型结构。</li>
+<li>已知事实足以支持区分会话记录、连接器凭据和工作电脑；不足以还原 Grok 私有 Agent 循环位置、调度器拓扑及 Harness 品牌。</li>
+<li>本机控制必须作为明确授权的执行目标设计，不能由“云电脑可用”推导“宿主机自动可控”。</li>
+<li>方案应逐项写明：官方事实、我们的设计决定、需要用源码/试点验证的假设。闭源未知处允许有判断，但不能换成伪事实。</li>
+</ol>
+</div></details>
+<details class="evidence" id="evidence-runtime"><summary>源码证据：Harness 与 Codex 的接入差异和验收门槛</summary><div class="evidence-body"><h3>执行引擎选择：源码证据与决策门槛</h3>
+<p>核查日期：2026-09-21。范围：Bot 现有适配、锐捷 Harness 本地源码、封装链，以及 Codex 官方资料获取情况。本次仅静态读取，不运行模型，不读取凭据，不验证线上服务，也不把源码中的测试存在等同于测试通过。</p>
+<h2>可以据此做出的产品判断</h2>
+<p><strong>应先决定任务由谁持续负责，再决定用哪个执行引擎。锐捷 Harness 可以作为第一候选，但必须通过同一组云端产品验收；当前证据不足以宣布它或 Codex 已经具备完整的云端托管产品能力。</strong></p>
+<p>Codex CLI 本身也是 agent harness，包含模型调用、工具执行、会话和权限控制。这里比较的是“两种执行引擎及其接入方式”，不是“Harness 与一个聊天模型”。云端后台、云电脑和本机是部署位置及操作对象；它们不天然决定使用哪一种引擎。</p>
+<p>用户看到一个 Bot，内部可以存在多个任务会话和多个执行进程。是否统一，取决于任务归属、可见记录、权限和结果能否统一，不要求所有工作挤进一个长会话，也不要求用户手动选择模型。模型切换是产品内部的能力策略；当前没有证据支持承诺“自动换模必然更优”。</p>
+<h2>版本证据必须分开</h2>
+<div class="table-scroll" tabindex="0" role="region" aria-label="比较与决策表"><table>
+<thead>
+<tr>
+<th>对象</th>
+<th>本次实际读取的版本</th>
+<th>能证明什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>OpenMausBot 工作树</td>
+<td>package.json 为 0.1.84；HEAD <code>ecac4d337e414c0daffce7b409a4a70ad71c33c9</code>；存在大量未提交修改，含 Harness driver、打包脚本</td>
+<td>本文行号指当前工作树，不能假定均已发布</td>
+</tr>
+<tr>
+<td>Bot 声明的锐捷 Harness 封装版本</td>
+<td><code>2.1.10</code>，commit <code>f48fe5cb09e37c1bcb4ed2c19f75ce5e1bf8aeae</code>，capability <code>openmaus-server-v1</code></td>
+<td>这是打包及运行时校验要求，见 <a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/shared/ruijie-harness-release.ts#L2">release 定义</a></td>
+</tr>
+<tr>
+<td>当前锐捷 Harness 源码</td>
+<td>外层 HEAD <code>a7c71c4cadaad2db218d126146973e38649a6f43</code>；package 仍为 <code>2.1.10</code></td>
+<td>与 Bot pin 不同，不能以相同版本号认定同一能力集合</td>
+</tr>
+<tr>
+<td>当前 DeepSeek Harness 子模块</td>
+<td><code>141eb6fef83422698aef7a981029e843e8161534</code>，<code>0.1.0-rc.8</code></td>
+<td>底层能力探索的证据，不直接代表 Bot 封装能力</td>
+</tr>
+</tbody>
+</table></div>
+<p>本地 Git 对象库无法读取 <code>f48fe5c…</code>，<code>git diff</code> 返回 bad object，因此未能核实两个外层 commit 的具体差异。不能断言差异无关紧要，也不能断言它导致某项故障。源码构建要求 HEAD 精确匹配、子模块正确初始化、版本匹配且不带意外修改，见 <a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/scripts/build-ruijie-harness.mjs#L66">构建校验</a>。在重新确认发行 commit 与产物清单前，以下“锐捷底层具备”均不应写成“现有安装包已交付”。</p>
+<h2>事实矩阵：已接入与可开发的潜力</h2>
+<div class="table-scroll" tabindex="0" role="region" aria-label="比较与决策表"><table>
+<thead>
+<tr>
+<th>决策问题</th>
+<th>锐捷 Harness 当前 Bot 适配</th>
+<th>Codex 当前 Bot 适配</th>
+<th>产品含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>引擎怎样启动</td>
+<td>本机进程默认 <code>--openmaus-server</code>；locator 只接受 loopback endpoint；HTTP 请求与 WebSocket 事件</td>
+<td>通过 stdio JSON-RPC 调用 <code>codex app-server</code>；当前每个 turn 启动进程，再恢复或新建原生 thread</td>
+<td>两者当前都是 Bot 后台旁的执行引擎接入，均不是现成的远程调度系统</td>
+</tr>
+<tr>
+<td>无窗口运行</td>
+<td>桌面包装提供无 Renderer、BrowserWindow、tray 的运行分支</td>
+<td>app-server 子进程通过管道工作</td>
+<td>无窗口只解决运行形态，不证明重启恢复、云端续期或租户隔离</td>
+</tr>
+<tr>
+<td>模型选择</td>
+<td><code>session.selectModel</code>；适配器标记 <code>in-session</code>；读取模型目录及合法推理级别</td>
+<td>适配器标记 <code>unsupported</code>；恢复后若模型或 provider 不符则新建 thread</td>
+<td>锐捷已接入会话内选择；Codex 的这一限制属于本项目当前适配，不能扩大为 Codex 原生不支持</td>
+</tr>
+<tr>
+<td>工具与电脑操作</td>
+<td>MCP：所选电脑、宿主机电脑、连接应用、浏览器、自定义工具；用 preset 组装</td>
+<td>同类 MCP 工具；另声明 phone 能力</td>
+<td>两者均有工具基础。真正能操作用户电脑还依赖设备代理、在线状态、授权及运行环境</td>
+</tr>
+<tr>
+<td>用户授权</td>
+<td>转换 permission / question 事件，并回传实际 receipt</td>
+<td>app-server 的请求转换为统一请求卡片</td>
+<td>有统一入口不代表所有引擎原生授权语义相同；要验收实际授权结果</td>
+</tr>
+<tr>
+<td>停止</td>
+<td>请求 <code>session.cancel</code>，检查终止事件和 session 非运行状态后才结束占用</td>
+<td>当前调用 active turn 的 stop，并终止进程树</td>
+<td>用户点击停止后的副作用控制不能只看 UI 是否变为完成</td>
+</tr>
+<tr>
+<td>会话恢复</td>
+<td>无工具集成且 cursor 合法时直接复用；工具集成需重建 scoped preset/session 的场景，以可见历史 recoveryText 恢复</td>
+<td><code>thread/resume</code>，不适用时新建 thread</td>
+<td>可见对话恢复不是进程继续执行，也不是原环境和全部隐含状态无损迁移</td>
+</tr>
+<tr>
+<td>正在运行时追加指令</td>
+<td>当前 <code>queueing: false</code></td>
+<td>当前未声明 queueing</td>
+<td>底层支持不等于当前产品可以随时追加指令；默认需由产品排队或明确中止后重做</td>
+</tr>
+<tr>
+<td>认证</td>
+<td>企业 OAuth；Bot 通过专用管道传入认证，接收更新；底层有 refresh token 更新</td>
+<td>当前 driver 明确删去 <code>OPENAI_API_KEY</code>，检查 ChatGPT CLI 登录，报告 subscription</td>
+<td>不能把官方可能提供的其他认证方式算成当前实现，也不能直接承诺企业统一账单</td>
+</tr>
+<tr>
+<td>随包封装</td>
+<td>Bot 有 pin、payload 校验及 Windows/macOS sidecar 链</td>
+<td>driver 提供 <code>npm install -g @openai/codex</code> 安装声明；本次未找到与 Harness 同等的固定版本内置链</td>
+<td>Codex 作为候选需补产品封装和版本兼容门槛；不能把“用户可安装 CLI”当成“已封装好”</td>
+</tr>
+<tr>
+<td>Linux 云部署</td>
+<td>当前 sidecar build 明确只支持 win32 / darwin；底层有独立 CLI / SDK</td>
+<td>driver 声明 Linux 安装命令；实际云环境未跑验收</td>
+<td>同一台 Windows 云电脑先部署有可行基础；Linux 生产镜像属于新增交付工程</td>
+</tr>
+</tbody>
+</table></div>
+<p>关键源码定位：</p>
+<ul>
+<li>Bot 统一 Interface：<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/contracts.ts#L183">SendTurnInput</a>、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/contracts.ts#L268">ProviderAdapter</a>。包含模型、恢复游标、工具、工作目录、事件与授权，但没有远程任务租约、节点分配、执行交接等承诺。</li>
+<li>锐捷本地定位与启动：<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/drivers/ruijie-harness-local.ts#L204">loopback 校验</a>、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/drivers/ruijie-harness-local.ts#L301">默认启动参数</a>、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/drivers/ruijie-harness-local.ts#L519">认证专用管道</a>。</li>
+<li>锐捷工具与恢复：<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/drivers/ruijie-harness.ts#L246">工具组装</a>、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/drivers/ruijie-harness.ts#L357">RPC</a>、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/drivers/ruijie-harness.ts#L843">能力声明</a>、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/drivers/ruijie-harness.ts#L872">session 选择和换模</a>、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/drivers/ruijie-harness.ts#L969">history replay</a>、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/drivers/ruijie-harness.ts#L1005">确认停止</a>。</li>
+<li>Codex：<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/drivers/codex.ts#L489">安装声明及认证环境</a>、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/drivers/codex.ts#L578">app-server 启动</a>、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/drivers/codex.ts#L688">进程停止</a>、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/drivers/codex.ts#L1044">初始化与恢复</a>、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/drivers/codex.ts#L1085">模型一致性检查</a>、<a href="file:///D:/ChatGPT/Bot/downloads/OpenMausBot-source/server/drivers/codex.ts#L1261">能力声明</a>。</li>
+</ul>
+<h2>锐捷底层潜力与硬约束</h2>
+<p>以下路径均位于 <code>D:/ChatGPT/Bot/downloads/ruijie-harness-source</code>，是本次实际 checkout 的证据。</p>
+<ol>
+<li><strong>已有两种不同的无界面形态，不能混为一个已完成方案。</strong> 桌面外壳的 <code>--openmaus-server</code> 分支保留 Host、OAuth proxy 和 bridge，仍由 Electron 主进程承载，见 <code>dsh-plugin-desktop/src/main.ts:727</code>。底层 <code>dsh --profile headless</code> 创建新 agent，运行一次任务、flush session、输出结果并退出，无 HTTP 监听端口，见 <code>deepseek-harness/packages/bundle/headless/README.md:5</code>、<code>src/index.ts:96</code>。后者不能直接替代当前 HTTP/事件 driver。</li>
+<li><strong>另有 stdio JSON-RPC SDK，但当前协议不是当前 Bot driver 的等价替换。</strong> <code>deepseek-harness/packages/sdk/server/src/server.ts:192</code> 分发 initialize、session/prompt、shutdown；README <code>:44</code> 明示没有 per-session close 或 prompt-cancel，没有每个 prompt 的结果归属，自动 provider mounting 也有条件限制。若选择此路径，应先补足产品需要的取消、结果归属和授权通道，不能为了“云端轻量化”直接移植。</li>
+<li><strong>认证续期已有实现，长期可用仍需实际场景验证。</strong> <code>dsh-plugin-desktop/src/ruijie-auth.ts:409</code> 至 <code>:448</code> 实现 access token 过期/拒绝后的刷新、refresh token 轮换与保存；<code>main.ts:464</code> 在后台模式禁用交互登录，<code>ruijie-auth.ts:634</code> 无可恢复认证时明确失败。<code>ruijie-auth-store.ts:27</code>、<code>:52</code> 依赖 OS 加密服务。Bot 的认证管道是一条现成接入路径，但云端无人值守凭据托管、撤销后的用户可见等待状态和服务账号适用性没有完成验证。</li>
+<li><strong>持久化会话不等于持久化执行。</strong> 底层 <code>deepseek-harness/packages/core/agent/src/index.ts:418</code> 提供 resume persisted session；<code>packages/session/session-persistence-jsonl/src/index.ts:188</code> 提供 log load。此处不能推出进程崩溃后在原工具步骤自动继续，更不能推出外部操作不会重复。任务执行事实、结果核对和重试政策仍应由产品负责。</li>
+<li><strong>打包“同版本”不足以建立交付信心。</strong> 需要可复核的 commit、子模块 pin、平台、产物 hash、兼容协议能力，以及隔离环境验收记录。当前 build 支持 Windows/macOS，源码中 Linux 路径发现逻辑不代表 Linux sidecar 已经交付。</li>
+</ol>
+<h2>Codex 官方事实核查边界</h2>
+<p>已依照 OpenAI Docs 技能优先查官方资料；本环境未暴露官方文档搜索或网页搜索工具。分别尝试直接请求以下官方主题页，使用 PowerShell 正常 TLS 和 <code>curl.exe --location --max-time 25 --fail</code> 正常 TLS，收到 SSL connection / connection reset，未获得可引用正文：</p>
+<ul>
+<li><a href="https://developers.openai.com/codex/app-server/">App Server</a></li>
+<li><a href="https://developers.openai.com/codex/noninteractive/">Non-interactive mode</a></li>
+<li><a href="https://developers.openai.com/codex/sdk/">SDK</a></li>
+</ul>
+<p>因此本次不把这三个链接当作“已阅读的官方佐证”，不声明当前协议的全部稳定性、原生换模能力或最新可用字段。Bot <code>codex.ts:1046</code> 为命名权限 profile 开启 <code>experimentalApi</code>，只能证明此适配用了相关实验字段，<strong>不能据此称整个 app-server 仍是实验性接口</strong>。</p>
+<p>当前项目可直接证明的是：它实际选用了 app-server 双向会话协议，而非一次性 <code>exec</code>；它已做事件、授权和会话映射。设计上，一次性执行入口、程序 SDK、双向会话服务器回答的是不同接入需要；即使换成 SDK，任务权威状态、节点存活和重复操作防护也不会自动出现。后续选型应以实际拟封装的 Codex 版本生成/核对协议 schema，并补官方页面实证。此文不把 SDK 内部是否调用 exec 等未核实事实用于评分。</p>
+<h2>可替换切面：产品真正应该拥有的东西</h2>
+<p>建议保留已经有两种 Adapter 的 <code>ProviderAdapter</code> seam，收敛为一个深 Module 的 Interface：接受明确任务输入，给出可追踪事件，受控执行工具，回传授权结果，确认停止，产出结果。不要把某一引擎的 session id 或队列含义直接上升为产品任务定义。</p>
+<p>产品应另外拥有：</p>
+<ul>
+<li><strong>任务身份与责任</strong>：产品 task id、创建者、目标、时区和触发规则、状态、版本、取消意图及结果。引擎重启或换型时这些不变。</li>
+<li><strong>执行尝试</strong>：每次 attempt 的目标环境、引擎与配置版本、模型策略、权限范围、起止事实、产物、失败类型。它引用原生 session/thread，原生 id 不是任务 id。</li>
+<li><strong>设备能力</strong>：设备是否在线、哪些工具可用、当前用户是否接管、权限授予和撤销。在云端执行主会话也能通过此能力操作本机，不需要另设一个本地聊天总管。</li>
+<li><strong>恢复政策</strong>：哪些步骤可重试，哪些必须核对外部状态，哪些只能等待用户确认结果。在收据不明时保留“不确定”，不把重复执行伪装成恢复。</li>
+</ul>
+<p>首版可以把任务 Module、引擎和执行环境部署在同一台每用户云工作区内。逻辑分工有价值：未来能迁移执行节点，且任务状态不随进程消失；并不要求第一天拆成多个物理服务。选择哪个引擎不会消除这些职责。</p>
+<h2>可验收、可否决的选择规则</h2>
+<p>建议将锐捷 Harness 定为<strong>首轮验证候选</strong>：已有企业身份、模型目录、会话内选模和 Bot 封装工作，接续现有投资的理由充分。该建议可以被以下门槛推翻；不能以“自研可控”替代证据。</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="比较与决策表"><table>
+<thead>
+<tr>
+<th>门槛</th>
+<th>同一组验收情境</th>
+<th>未通过时的决策</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>封装与供应</td>
+<td>新建目标云工作区，从固定产物启动；无开发者机器依赖；记录完整版本和 hash</td>
+<td>无法重建或 pin 不一致，不进入默认交付</td>
+</tr>
+<tr>
+<td>长期授权</td>
+<td>覆盖 token 过期、轮换、主进程重启、会话撤销；撤销后任务进入明确等待状态</td>
+<td>不允许把长期任务托管能力对外承诺；补认证工程或改候选</td>
+</tr>
+<tr>
+<td>执行证据</td>
+<td>相同文件整理、信息检索、浏览器操作和业务应用场景；核验真实结果及产物</td>
+<td>文本回答不能替代操作，达不到验收的能力不开放</td>
+</tr>
+<tr>
+<td>任务恢复</td>
+<td>在“已接单未执行”“工具执行中”“外部已成功但结果未回传”三处故障注入</td>
+<td>丢任务或重复不可重复的操作为否决项，不用更大模型掩盖</td>
+</tr>
+<tr>
+<td>可确认停止</td>
+<td>工具慢返回、队列尚未启动、网络中断时点击停止；确认旧执行不再发起新操作</td>
+<td>停止事实不明时不能释放执行权或将任务标完成</td>
+</tr>
+<tr>
+<td>本机能力</td>
+<td>云端任务请求本机工具；断线、重新上线、用户接管、授权撤销均有确定行为</td>
+<td>不依赖新增本地聊天代理补洞；先补设备协议与状态</td>
+</tr>
+<tr>
+<td>模型封装</td>
+<td>默认一条确定模型策略；只有某类任务有稳定收益时才加入能力路由；切换后权限和结果归属保持一致</td>
+<td>不能完成切换并不自动否决整个引擎；先固定模型，隐藏不可兑现的切换</td>
+</tr>
+<tr>
+<td>可维护性</td>
+<td>固定版本升级后重复同样的关键场景；协议改变能被检查发现</td>
+<td>无法建立升级回归和回退路径，不作为长期唯一引擎</td>
+</tr>
+</tbody>
+</table></div>
+<p>Codex 应运行相同场景，另加两项补证：明确产品要采用的认证/计费方式并真实接入；建立固定 CLI 产物与 app-server 协议的封装、许可和升级维护记录。本次没有实测对比，不给出可靠性、成本、耗时或能力成功率分数。</p>
+<p>两者都通过硬门槛后，再比较代表性用户旅程的可核验完成率、等待用户次数、恢复成功率、每个成功任务实际资源消耗及升级维护成本。初期不为用户提供引擎选择器；保留替换 seam 是为产品迭代负责，不是把选型责任交给用户。</p>
+</div></details>
+<p class="endnote">本阅读版由同目录 Markdown 评审稿生成。只整理方案与依据，未改变应用实现。HTML 无需联网即可阅读；源码链接指向本机核查目录。</p><a class="mobile-top" href="#top">返回开头 ↑</a></main></div>
+<script>
+document.getElementById('print').addEventListener('click',()=>window.print());
+document.addEventListener('click',event=>{const a=event.target.closest('a[href^="#"]');if(!a)return;const target=document.getElementById(a.getAttribute('href').slice(1));if(target?.tagName==='DETAILS')target.open=true;});
+const observer=new IntersectionObserver(entries=>{for(const entry of entries){if(entry.isIntersecting){document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('active',a.getAttribute('href')==='#'+entry.target.id));}}},{rootMargin:'-5% 0px -70% 0px'});document.querySelectorAll('article section[id]').forEach(s=>observer.observe(s));
+</script></body></html>

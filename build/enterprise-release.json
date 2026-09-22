@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "version": "0.1.86",
+  "sourceSha": "454d2958d2e3b960a17cf9364e6a3fd059cf2248",
+  "repository": "AI-Applications-Team/OpenMausBot",
+  "workflowRun": "35589546915",
+  "distribution": "enterprise-internal-test",
+  "sandboxPreset": "absent",
+  "humanAcceptance": "not-run",
+  "defaultComputer": "local",
+  "signing": {
+    "windows": "unsigned",
+    "macos": "ad-hoc signed, not notarized"
+  },
+  "macLayout": "Separate arm64/x64 apps with matching pinned Harness, browser and Feishu runtimes"
+}

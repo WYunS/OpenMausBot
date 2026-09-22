@@ -1,0 +1,15 @@
+{
+  "artifact_files": [
+    "C:\\Users\\Yunsh\\Downloads\\锐捷Bot-产品形态与架构决策-20260921\\锐捷Bot-产品形态与架构决策（阅读版）.html",
+    "C:\\Users\\Yunsh\\Downloads\\锐捷Bot-产品形态与架构决策-20260921\\锐捷Bot-产品形态与架构决策（评审稿）.md"
+  ],
+  "source_files_rechecked": 13,
+  "source_changes": [],
+  "missing_evidence_links": [],
+  "html_copy_identical": true,
+  "main_characters": 16928,
+  "limitations": [
+    "Static source inspection, no engine workload or deployment testing",
+    "OpenAI official documentation refresh failed; current engine comparisons rely on project source with limits stated"
+  ]
+}

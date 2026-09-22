@@ -109,6 +109,7 @@ jobs:
         with:
           repository: AI-Applications-Team/ruijie-harness
           ref: f48fe5cb09e37c1bcb4ed2c19f75ce5e1bf8aeae
+          token: ${{ secrets.RUIJIE_HARNESS_READ_TOKEN }}
           path: ruijie-harness
           persist-credentials: false
           submodules: recursive
@@ -142,8 +143,8 @@ jobs:
 
       - name: Package both architectures
         env:
-          RUIJIE_HARNESS_BUNDLE_SOURCE_DARWIN_ARM64: ${{ github.workspace }}/ruijie-harness/dsh-plugin-desktop/dist/mac-universal/锐捷 Harness.app
-          RUIJIE_HARNESS_BUNDLE_SOURCE_DARWIN_X64: ${{ github.workspace }}/ruijie-harness/dsh-plugin-desktop/dist/mac-universal/锐捷 Harness.app
+          RUIJIE_HARNESS_BUNDLE_SOURCE_DARWIN_ARM64: ${{ github.workspace }}/ruijie-harness/dsh-plugin-desktop/dist/mac-arm64/锐捷 Harness.app
+          RUIJIE_HARNESS_BUNDLE_SOURCE_DARWIN_X64: ${{ github.workspace }}/ruijie-harness/dsh-plugin-desktop/dist/mac/锐捷 Harness.app
           RUIJIE_HARNESS_BUILD_COMMIT: f48fe5cb09e37c1bcb4ed2c19f75ce5e1bf8aeae
         run: pnpm package:mac
 
@@ -292,6 +293,7 @@ jobs:
         with:
           repository: AI-Applications-Team/ruijie-harness
           ref: f48fe5cb09e37c1bcb4ed2c19f75ce5e1bf8aeae
+          token: ${{ secrets.RUIJIE_HARNESS_READ_TOKEN }}
           path: ruijie-harness
           persist-credentials: false
           submodules: recursive

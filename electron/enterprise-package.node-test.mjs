@@ -15,8 +15,10 @@ test('enterprise test config preserves identity/resources, excludes credentials,
   assert.equal(config.afterPack,'./scripts/after-pack.mjs');
   const {owner,repo}=releaseRepository();
   assert.deepEqual(config.publish,[{provider:'github',owner,repo}]);
-  assert.equal(config.mac.identity,'-');assert.equal(config.mac.notarize,false);assert.equal(config.dmg.sign,false);
+  assert.equal(config.mac.identity,null);assert.equal(config.mac.notarize,false);assert.equal(config.dmg.sign,false);
   assert.deepEqual(config.win.target,[{target:'nsis',arch:['x64']}]);
+  assert.equal(config.nsis.oneClick,false,'Uninstall must retain its visible progress and completion pages');
+  assert.equal(config.nsis.include,'build/ruijie-installer.nsh');
   assert(config.extraResources.some(x=>x.to==='server'));
   assert(config.extraResources.some(x=>x.to==='enterprise-release.json'));
   for(const resources of [config.extraResources,config.mac.extraResources,config.win.extraResources,config.linux.extraResources])assert(!resources.some(x=>/sandbox|release-inputs|credentials/i.test(x.from+' '+x.to)));

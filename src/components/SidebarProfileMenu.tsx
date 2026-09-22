@@ -68,6 +68,8 @@ export function updatePhase(state: UpdaterState | null, upToDate: boolean): Upda
 
 export function updateLabel(phase: UpdatePhase, state: UpdaterState | null): string {
   switch (phase) {
+    case "manual":
+      return state?.message || t("sidebar.update.check");
     case "available":
       // an unknown version leaves a double space behind, in every language
       return t("sidebar.update.available", { version: state?.version ?? "" }).replace("  ", " ");

@@ -1,0 +1,32 @@
+[
+  {
+    "viewport": {
+      "width": 1440,
+      "height": 1050
+    },
+    "sections": 10,
+    "hasRawMermaid": false,
+    "overflow": false,
+    "unresolvedAnchors": [],
+    "emptyTableCells": 0,
+    "journeys": 6,
+    "evidenceOpens": true,
+    "errors": [],
+    "externalRequests": []
+  },
+  {
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "sections": 10,
+    "hasRawMermaid": false,
+    "overflow": false,
+    "unresolvedAnchors": [],
+    "emptyTableCells": 0,
+    "journeys": 6,
+    "evidenceOpens": true,
+    "errors": [],
+    "externalRequests": []
+  }
+]

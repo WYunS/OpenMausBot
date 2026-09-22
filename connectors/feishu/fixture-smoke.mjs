@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -253,6 +253,12 @@ try {
   evidence.actions.push({ operation: 'fake-Feishu-roundtrip', replies, threadId: saved.threadId });
   evidence.checks.push('fake Feishu pairing/connect creates a real task; delivery returns exact fake-engine reply once');
 
+  const oldSource = join(info.dataDir, 'previous-feishu-source');
+  symlinkSync(dirname(mcpPath), oldSource, process.platform === 'win32' ? 'junction' : 'dir');
+  await kernel.request('/api/mcp/servers', { method: 'POST', body: {
+    name: 'tuantuan-feishu', command: process.execPath, args: [join(oldSource, 'mcp.mjs')], enabled: false,
+    env: { TT_FEISHU_BRIDGE_URL: 'http://127.0.0.1:1', TT_FEISHU_BRIDGE_TOKEN: '0'.repeat(64) },
+  } });
   const enabled = await connector.invoke('enableTools', { botId: bot.id });
   assert.equal(enabled.error, undefined);
   assert.equal(enabled.toolsEnabled, true);
@@ -261,6 +267,10 @@ try {
   assert.equal(registered?.enabled, true);
   assert.equal(registered.command, process.execPath);
   assert.deepEqual(registered.args, [mcpPath]);
+  const migration = evidence.http.find((call) => call.path === mcpRoute && call.method === 'PUT');
+  assert.equal(migration?.status, 200);
+  assert.deepEqual(migration.request.args, [mcpPath]);
+  evidence.checks.push('old source alias migrates to the exact current bridge before probe and enable');
   assert.ok(bridgeEnv && Object.values(bridgeEnv).every((value) => typeof value === 'string' && value.length > 0));
   assert.match(bridgeEnv.TT_FEISHU_BRIDGE_URL, /^http:\/\/127\.0\.0\.1:\d+$/);
   assert.match(bridgeEnv.TT_FEISHU_BRIDGE_TOKEN, /^[a-f0-9]{64}$/);

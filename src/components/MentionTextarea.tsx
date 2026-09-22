@@ -14,6 +14,14 @@ export function MentionTextarea({ inputRef, peers, everyone = false, ...props }:
     const input = inputRef.current;
     const mirror = mirrorRef.current;
     if (!input || !mirror) return;
+    // The native input owns typography. A separately inherited letter-spacing
+    // makes its caret drift away from the painted glyphs, especially in long drafts.
+    const computed = getComputedStyle(input);
+    for (const key of ["fontFamily", "fontSize", "fontWeight", "fontStyle", "fontVariant",
+      "lineHeight", "letterSpacing", "wordSpacing", "textIndent", "textTransform",
+      "paddingLeft", "paddingRight", "paddingTop", "paddingBottom", "tabSize"] as const) {
+      mirror.style[key] = computed[key];
+    }
     mirror.style.width = `${input.clientWidth}px`;
     mirror.scrollTop = input.scrollTop;
     mirror.scrollLeft = input.scrollLeft;

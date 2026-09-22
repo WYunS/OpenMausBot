@@ -5,13 +5,13 @@
   "packageManager": "pnpm",
   "versionFiles": ["package.json"],
   "adapter": ".release/adapter.mjs",
-  "targets": ["windows-x64", "linux-x64", "macos-universal"],
+  "targets": ["windows-x64", "linux-x64", "macos-arm64", "macos-x64"],
   "signing": "testing",
   "allowPrerelease": true,
   "releaseNotes": [
     "Enterprise internal testing release built from this repository. No sandbox preset or credentials are embedded.",
     "New bots retain the source default: this computer. Existing user choices and data are preserved.",
-    "macOS delivery is one Universal DMG. Windows is an EXE installer. Linux includes AppImage and DEB.",
+    "macOS has separate Apple Silicon (arm64) and Intel (x64) DMGs, each with its matching pinned Harness. Windows is an EXE installer. Linux includes AppImage and DEB.",
     "Download updates from this enterprise Release page. No account token or automatic-update feed is shipped.",
     "Human account authorization, Keychain and persistent macOS TCC acceptance remain pending."
   ]

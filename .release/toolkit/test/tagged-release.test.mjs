@@ -7,7 +7,46 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const toolkit = fileURLToPath(new URL('../', import.meta.url));
-async function fixture(t, scenario = 'matching', packageVersion = '0.1.84') {
+test('desktop artifacts preserve source identity without remote writes', async t => {
+  const f = await fixture(t, 'missing', '0.1.84', ['windows-x64', 'linux-x64', 'macos-arm64', 'macos-x64']);
+  const prepared = f.run('prepare', { RELEASE_PLATFORMS: 'desktop', RELEASE_MODE: 'artifacts' });
+  assert.equal(prepared.status, 0, prepared.stdout + prepared.stderr);
+  const outputs = await readFile(path.join(f.root, 'outputs'), 'utf8');
+  assert(outputs.includes(`sha=${f.sha}\n`));
+  assert(outputs.includes('source_tagged=false\n'));
+  assert(outputs.includes('metadata_local=true\n'));
+  const matrix = JSON.parse(outputs.split('\n').find(line => line.startsWith('matrix=')).slice(7));
+  assert.deepEqual(matrix.include.map(job => job.target), ['windows-x64', 'macos-arm64', 'macos-x64']);
+  const built = f.run('build', { RELEASE_METADATA_LOCAL: 'true' });
+  assert.equal(built.status, 0, built.stdout + built.stderr);
+  const manifest = JSON.parse(await readFile(path.join(f.root, '.release-out/candidate/windows-x64.json'), 'utf8'));
+  const metadata = JSON.parse(await readFile(path.join(f.root, 'build/fixture.json'), 'utf8'));
+  assert.equal(metadata.sourceSha, f.sha);
+  assert.equal(manifest.sourceSha, f.sha);
+  await assert.rejects(readFile(path.join(f.root,'requests.jsonl')),/ENOENT/);
+});
+
+for(const scenario of ['mismatch','released'])test(`artifact-only repair of ${scenario} version does not read or mutate publication refs`,async t=>{
+  const f=await fixture(t,scenario);
+  const result=f.run('prepare',{RELEASE_MODE:'artifacts'});
+  assert.equal(result.status,0,result.stdout+result.stderr);
+  assert((await readFile(path.join(f.root,'outputs'),'utf8')).includes(`sha=${f.sha}\n`));
+  await assert.rejects(readFile(path.join(f.root,'requests.jsonl')),/ENOENT/);
+});
+
+test('macos dispatch emits two native runner jobs without changing the tagged source',async t=>{
+  const f=await fixture(t,'matching','0.1.84',['macos-arm64','macos-x64']);
+  const result=f.run('prepare',{RELEASE_PLATFORMS:'macos'});
+  assert.equal(result.status,0,result.stdout+result.stderr);
+  const outputs=await readFile(path.join(f.root,'outputs'),'utf8');
+  const line=outputs.split('\n').find(line=>line.startsWith('matrix='));
+  assert.deepEqual(JSON.parse(line.slice('matrix='.length)),{include:[
+    {target:'macos-arm64',os:'macos-15'},
+    {target:'macos-x64',os:'macos-15-intel'},
+  ]});
+  assert.equal(f.git('rev-parse','HEAD'),f.sha);
+});
+async function fixture(t, scenario = 'matching', packageVersion = '0.1.84', targets = ['windows-x64']) {
   const root = await realpath(await mkdtemp(path.join(tmpdir(), 'release-tag-fixture-')));
   t.after(async () => {
     assert.equal(await realpath(root), root);
@@ -19,7 +58,7 @@ async function fixture(t, scenario = 'matching', packageVersion = '0.1.84') {
   await writeFile(path.join(root, 'package.json'), JSON.stringify({ version: packageVersion }));
   await writeFile(path.join(root, '.release/config.json'), JSON.stringify({ schemaVersion: 1, name: 'Fixture',
     node: '24.20.0', packageManager: 'pnpm', versionFiles: ['package.json'], adapter: '.release/adapter.mjs',
-    targets: ['windows-x64'], signing: 'testing', allowPrerelease: true }));
+    targets, signing: 'testing', allowPrerelease: true }));
   await writeFile(path.join(root, '.release/adapter.mjs'), `
     import assert from 'node:assert/strict';
     import { readFile, writeFile } from 'node:fs/promises';
@@ -61,7 +100,7 @@ async function fixture(t, scenario = 'matching', packageVersion = '0.1.84') {
       cwd: root, encoding: 'utf8', windowsHide: true, timeout: 15_000,
       env: { ...process.env, GH_TOKEN: 'offline-fixture', GITHUB_REPOSITORY: 'fixture/repo',
         GITHUB_OUTPUT: path.join(root, 'outputs'), GITHUB_STEP_SUMMARY: '',
-        RELEASE_CONFIG: '.release/config.json', RELEASE_VERSION: '0.1.84', RELEASE_MODE: 'artifacts',
+        RELEASE_CONFIG: '.release/config.json', RELEASE_VERSION: '0.1.84', RELEASE_MODE: 'draft',
         RELEASE_PLATFORMS: 'all', RELEASE_TARGET: 'windows-x64', RELEASE_SOURCE_TAGGED: '',
         FIXTURE_SCENARIO: scenario, FIXTURE_SHA: sha, ...extra },
     });

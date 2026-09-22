@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "锐捷 Bot 下一步架构｜建议图，非已实现",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1110, 520]
+  },
+  "components": [
+    {"id":"chat-window","type":"frontend","label":"聊天窗口","sublabel":"已有 · 发需求 / 看结果","tag":"已有界面","pos":[40,60],"size":[210,86]},
+    {"id":"task-manager","type":"backend","label":"任务管家","sublabel":"已有定时调度 → 常驻部署","tag":"已有基础 → 迁到常驻环境","pos":[410,60],"size":[240,86]},
+    {"id":"task-records","type":"database","label":"任务记录","sublabel":"已有保存 → 补恢复验收","tag":"进度 · 结果 · 重启后可查","pos":[830,60],"size":[240,86]},
+    {"id":"model-provider","type":"external","label":"模型服务","sublabel":"理解需求 · 判断下一步","tag":"具体模型按任务测试","pos":[40,225],"size":[210,86]},
+    {"id":"agent-runner","type":"backend","label":"可替换的执行引擎","sublabel":"锐捷 Harness / Codex CLI","tag":"已有接法 → 云端适配待验","pos":[410,225],"size":[240,86]},
+    {"id":"cloud-computer","type":"cloud","label":"隔离云电脑","sublabel":"已有接入 → 常驻组合待验","tag":"浏览器 · 文件 · 应用","pos":[830,225],"size":[240,86]},
+    {"id":"device-connection","type":"security","label":"第 2 步｜本机授权连接","sublabel":"待补齐 · 配对 / 撤权 / 停止","tag":"连接与权限待补齐","pos":[410,405],"size":[240,86]},
+    {"id":"user-computer","type":"frontend","label":"用户本机","sublabel":"已有工具 · 关机不可操作","tag":"文件 · 程序 · 桌面操作","pos":[830,405],"size":[240,86]}
+  ],
+  "boundaries": [
+    {"kind":"region","label":"第 1 步｜长期在线环境：复用现有后台，先做关机验证","wraps":["task-manager","task-records","agent-runner","cloud-computer"],"pad":28}
+  ],
+  "connections": [
+    {"id":"submit-task","from":"chat-window","to":"task-manager","label":"提交任务","variant":"emphasis"},
+    {"id":"save-state","from":"task-manager","to":"task-records","label":"持久保存"},
+    {"id":"start-execution","from":"task-manager","to":"agent-runner","label":"到点启动","variant":"emphasis","labelAt":[530,185]},
+    {"id":"consult-model","from":"agent-runner","to":"model-provider","label":"请求判断"},
+    {"id":"operate-cloud","from":"agent-runner","to":"cloud-computer","label":"执行动作","variant":"emphasis"},
+    {"id":"request-local","from":"agent-runner","to":"device-connection","label":"本机任务","variant":"dashed","labelAt":[530,367]},
+    {"id":"operate-local","from":"device-connection","to":"user-computer","label":"授权后执行","variant":"security"}
+  ],
+  "cards": [
+    {"dot":"slate","title":"Alpha｜现在：本机在值班","items":["当前本地入口：后台与定时调度在本机。","有云电脑 ≠ 关机后仍有人发起任务。"]},
+    {"dot":"cyan","title":"Beta｜先迁后台，再接本机","items":["对标 Grok Bot：关机后云端任务继续。","主调用如图；进度与结果回传到窗口。"]},
+    {"dot":"amber","title":"Gamma｜封装取舍：两处分别选","items":["本地：保留锐捷 Harness，沿用公司接入。","云端：优先验证 Codex CLI，不预定胜负。"]}
+  ]
+}

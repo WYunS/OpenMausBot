@@ -23,6 +23,9 @@ import {
 } from "@/lib/drafts";
 import { BotAvatar } from "./Avatar";
 import { MentionTextarea } from "./MentionTextarea";
+import { ComposerComputerPicker } from "./ComposerComputerPicker";
+import { composerRuntimeNotice, composerRuntimeState } from "@/lib/composer-runtime-state";
+import { brand } from "@/lib/brand";
 import { ComposerAttachments, pathForFile } from "./ComposerAttachments";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
 import { FullAccessWarning } from "./FullAccessWarning";
@@ -103,7 +106,7 @@ export function Composer({
 }) {
   const bot = profile ? currentTaskBot(profile) : undefined;
   const { state, dispatch } = useStore();
-  const { capabilities } = useDesktopCapabilities();
+  const { capabilities, ready: desktopReady } = useDesktopCapabilities();
   const remoteClient = window.ogb?.remoteClient?.active === true;
   // Unified target: a 1:1 bot thread or a room. In a room the @ picker
   // offers members plus @everyone; explicit mentions override the room's
@@ -376,6 +379,9 @@ export function Composer({
   const approvalEngine = modeBot
     ? state.instances.find((instance) => instance.instanceId === modeBot.modelSelection.instanceId)
     : undefined;
+  const runtimeStatus = modeBot && !remoteClient
+    ? composerRuntimeState(Boolean(approvalEngine), state.instancesLoadState, desktopReady) : "ready";
+  const runtimeNotice = composerRuntimeNotice(runtimeStatus);
   const canApplyBotFullAccess = Boolean(modeBot && profile && !remoteClient && window.ogb?.approvals && capabilities.host.packaged &&
     approvalModeFor(profile) === "full" && approvalModeFor(modeBot) !== "full" &&
     approvalEngine?.driverKind === state.instances.find((instance) => instance.instanceId === profile.modelSelection.instanceId)?.driverKind);
@@ -461,7 +467,7 @@ export function Composer({
     }
   };
   const send = () => {
-    if (locked || attachmentPending) return;
+    if (locked || attachmentPending || runtimeStatus !== "ready") return;
     if (
       attachments.some((attachment) => attachment.kind === "image") &&
       !imageTargetsSupport(effectiveText, effectiveChannelMode)
@@ -791,7 +797,7 @@ export function Composer({
             data-composer-backdrop
             className="pointer-events-none absolute -left-5 -right-5 -bottom-3 top-1/2 bg-app"
           />
-        <div className="relative z-[1] rounded-3xl bg-composer px-2 py-1.5 ring-1 ring-composer-ring">
+        <div className="composer-surface relative z-[1] rounded-[22px] bg-composer px-2 py-1 ring-1 ring-composer-ring">
         {canApplyBotFullAccess && modeBot && !locked && (
           <button
             type="button"
@@ -805,7 +811,7 @@ export function Composer({
             Use bot’s Full access for this thread
           </button>
         )}
-        <div className="flex items-end gap-1">
+        <div className="composer-input-row flex items-end gap-1">
           <input
             ref={fileInput}
             type="file"
@@ -860,18 +866,22 @@ export function Composer({
                   {effectiveChannelMode === "goal" ? "/goal" : t("composer.goal.chip")}
                 </button>
               )}
-              {modeBot && approvalEngine && !remoteClient && (
+              {modeBot && !remoteClient && (
                 <ApprovalModeSelector
                   approvalMode={modeBot.approvalMode}
                   autoApprove={modeBot.autoApprove}
-                  providerName={approvalEngine.displayName}
-                  driverKind={approvalEngine.driverKind}
+                  providerName={approvalEngine?.displayName ?? "Bot"}
+                  driverKind={approvalEngine?.driverKind ?? ""}
                   onSelect={setApprovalMode}
-                  disabled={Boolean(modeBot.busy)}
+                  disabled={Boolean(modeBot.busy) || runtimeStatus !== "ready"}
+                  preparing={runtimeStatus === "loading"}
+                  disabledReason={runtimeNotice}
+                  compact
                   trustedModesAvailable={false}
                   trustedModesNotice={t("approvalMode.threadTrustedNotice")}
                 />
               )}
+              {bot && !group && !remoteClient && brand().name === "锐捷Bot" && <ComposerComputerPicker key={bot.id} bot={bot} />}
             </div>
           )}
           <MentionTextarea
@@ -969,9 +979,9 @@ export function Composer({
                   : t("composer.placeholder.bot", { name: bot?.name ?? "" })
           }
           aria-label={t("composer.placeholder.bot", { name: group ? group.name : (bot?.name ?? "") })}
-            className="block max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto bg-transparent px-1 py-1 text-[15px] leading-6 placeholder:text-ink-secondary focus:outline-none"
+            className="block max-h-[9rem] min-h-[22px] w-full resize-none overflow-y-auto bg-transparent px-1 py-1 text-ui-body placeholder:text-ink-secondary focus:outline-none"
           />
-          <div className="flex items-center gap-1">
+          <div className="composer-send-actions flex items-center gap-1">
           {/* Stop stays a stop. Stop-then-steer is named beside the queued
               message above, where its effect is visible before activation. */}
           {busy && !locked && (
@@ -1002,7 +1012,7 @@ export function Composer({
         {hasContent && !locked && (
           <button
             onClick={send}
-            disabled={attachmentPending}
+            disabled={attachmentPending || runtimeStatus !== "ready"}
             aria-label={
               busy && canSteer
                   ? t("composer.send.steer")
@@ -1010,13 +1020,13 @@ export function Composer({
                     ? t("composer.send.queue")
                     : t("composer.send.message")
             }
-            title={
+            title={runtimeNotice || (
               busy && canSteer
                   ? t("composer.send.steer")
                   : busy
                     ? t("composer.send.queueHint")
                     : t("chat.send")
-            }
+            )}
             className={cn(
               "flex size-8 shrink-0 items-center justify-center rounded-full text-white",
               busy && !canSteer

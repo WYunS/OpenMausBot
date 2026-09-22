@@ -1,6 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { access, readFile, readlink } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
 import { createInterface } from "node:readline";
@@ -16,6 +17,12 @@ const POLL_INTERVAL_MS = 250;
 export const BUNDLED_HARNESS_VERSION = HARNESS_RELEASE.version;
 const BUNDLED_MANIFEST = "manifest.json";
 const BUNDLED_BRIDGE_CAPABILITY = "openmaus-server-v1";
+// Electron's patched fs treats app.asar as a virtual directory. Integrity
+// checks need the physical archive bytes, including in utilityProcess servers.
+// Do not toggle process.noAsar: concurrent module and resource reads rely on it.
+const readIntegrityFile: typeof readFile = process.versions.electron
+  ? createRequire(import.meta.url)("original-fs").promises.readFile
+  : readFile;
 
 export interface RuijieHarnessBundleManifest {
   schemaVersion: 2;
@@ -473,7 +480,7 @@ function realDependencies(): RuijieHarnessLocatorDependencies {
     home: homedir(),
     pathExists: async (path) => access(path).then(() => true, () => false),
     readText: async (path) => readFile(path, "utf8"),
-    sha256: async (path) => createHash("sha256").update(await readFile(path)).digest("hex"),
+    sha256: async (path) => createHash("sha256").update(await readIntegrityFile(path)).digest("hex"),
     registeredExecutable: process.platform === "win32" ? windowsRegisteredExecutable : async () => undefined,
     readBridge: async (path) => {
       try {

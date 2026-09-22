@@ -607,6 +607,7 @@ export interface AppState {
   bots: Bot[];
   groups: Group[];
   instances: InstanceInfo[];
+  instancesLoadState?: "loading" | "ready" | "error";
   config: ConfigStatus | null;
   /** selected chat — a bot id OR a group id */
   selectedId: string;
@@ -789,6 +790,7 @@ export type Action =
   | { type: "deleteGroupTask"; groupId: string; threadId: string }
   | { type: "interruptGroup"; groupId: string; threadId?: string; onError?: () => void }
   | { type: "instances"; instances: InstanceInfo[] }
+  | { type: "instancesLoadFailed" }
   | { type: "instancesUpsert"; instances: InstanceInfo[] }
   | { type: "ruijieSnapshot"; snapshot: InstanceInfo["snapshot"] }
   | { type: "configStatus"; config: ConfigStatus }
@@ -1147,7 +1149,9 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, groups, selectedId };
     }
     case "instances":
-      return { ...state, instances: action.instances };
+      return { ...state, instances: action.instances, instancesLoadState: "ready" };
+    case "instancesLoadFailed":
+      return { ...state, instancesLoadState: "error" };
     case "instancesUpsert": {
       const updates = new Map(action.instances.map((instance) => [instance.instanceId, instance]));
       const existing = state.instances.map((instance) => updates.get(instance.instanceId) ?? instance);
@@ -1670,8 +1674,10 @@ export function reducer(state: AppState, action: Action): AppState {
     case "editMessage":
       return withMascotMotion(state, action.botId, "working");
     case "deleteTask":
+      return state;
     case "newGroupTask":
     case "switchGroupTask":
+      return { ...state, selectedId: action.groupId, activeView: "chat" };
     case "deleteGroupTask":
       return state;
     case "newTask":
@@ -1762,6 +1768,7 @@ export const initialState: AppState = {
   bots: [],
   groups: [],
   instances: [],
+  instancesLoadState: "loading",
   config: null,
   selectedId: "",
   activeView: "chat",
@@ -2649,15 +2656,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // Channel tasks mirror bot tasks, but hydrate the whole channel so
         // switching atomically replaces its transcript, folder and pin.
         case "newGroupTask":
-          api(`/api/groups/${action.groupId}/tasks`, { method: "POST", body: "{}" })
-            .then((r: any) => r?.group && dispatch({ type: "groupPatched", group: r.group }))
-            .catch(showError);
+        case "switchGroupTask": {
+          const key = `group:${action.groupId}`;
+          const revision = (navigation.get(key) ?? 0) + 1;
+          navigation.set(key, revision);
+          const path = action.type === "newGroupTask" ? `/api/groups/${action.groupId}/tasks`
+            : `/api/groups/${action.groupId}/tasks/${action.threadId}`;
+          api(path, { method: "POST", body: "{}" })
+            .then((r: { group?: Partial<Group> & { id: string } }) => {
+              if (r?.group && navigation.get(key) === revision) dispatch({ type: "groupPatched", group: r.group });
+            }).catch(showError);
           break;
-        case "switchGroupTask":
-          api(`/api/groups/${action.groupId}/tasks/${action.threadId}`, { method: "POST" })
-            .then((r: any) => r?.group && dispatch({ type: "groupPatched", group: r.group }))
-            .catch(showError);
-          break;
+        }
         case "renameGroupTask":
           api(`/api/groups/${action.groupId}/tasks/${action.threadId}`, {
             method: "PATCH",
@@ -2752,6 +2762,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (refresh.timer) return;
       if (error !== undefined) {
         if (part.key === "routines") rawDispatch({ type: "routinesLoadFailed" });
+        if (part.key === "instances") rawDispatch({ type: "instancesLoadFailed" });
         console.warn(`snapshot: ${part.key} refresh failed; retrying`, error);
       }
       const delay = Math.min(30_000, 1_000 * 2 ** Math.min(refresh.attempt, 5));

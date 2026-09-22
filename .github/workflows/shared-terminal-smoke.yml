@@ -1,0 +1,25 @@
+name: Desktop source checks
+on:
+  workflow_dispatch:
+  push:
+    branches: ['0.1.86']
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  windows:
+    name: Selective desktop and release integration
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.20.0'
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm typecheck
+      - name: Build provenance and release integration
+        run: node --test .release/repository.test.mjs .release/promote-artifacts.test.mjs .release/toolkit/test/core.test.mjs .release/toolkit/test/tagged-release.test.mjs electron/enterprise-package.node-test.mjs electron/desktop-runtime-layout.node-test.mjs electron/ruijie-package-config.node-test.mjs scripts/enterprise-macos-sign.test.mjs scripts/smoke-harness-bundle.test.mjs scripts/cloudflared-cleanup.node-test.mjs
+      - name: Product and native resource regressions
+        run: corepack pnpm exec vitest run scripts/build-ruijie-harness.test.mjs scripts/prepare-ruijie-harness.test.mjs scripts/cua-mac-arches.test.mjs server/drivers/ruijie-harness-local.test.ts server/config-reload-policy.test.ts src/lib/cn.test.ts src/lib/memory-editor.test.ts src/lib/composer-runtime-state.test.ts electron/updater.test.mjs src/components/UpdateBanner.test.ts

@@ -18,8 +18,8 @@
   /* Match the native textarea's direction independently for each paragraph. */
   unicode-bidi: plaintext;
   padding: 4px;
-  font-size: 15px;
-  line-height: 24px;
+  font-size: 14px;
+  line-height: 22px;
   white-space: pre-wrap;
   overflow-wrap: break-word;
   color: var(--color-ink);
@@ -67,6 +67,22 @@
   --animate-msg-in: msg-in 0.18s cubic-bezier(0.22, 1, 0.36, 1);
   --animate-shimmer: shimmer 2s linear infinite;
   --animate-status-pulse: status-pulse 1.6s steps(2, jump-none) infinite;
+
+  /* A compact desktop type scale. Product UI should use these four steps
+     instead of accumulating one-off half-pixel sizes. */
+  --text-ui-caption: 11px;
+  --text-ui-caption--line-height: 14px;
+  --text-ui-caption--letter-spacing: 0.07px;
+  --text-ui-small: 12px;
+  --text-ui-small--line-height: 16px;
+  --text-ui-base: 13px;
+  --text-ui-base--line-height: 18px;
+  --text-ui-base--letter-spacing: -0.08px;
+  --text-ui-body: 14px;
+  --text-ui-body--line-height: 22px;
+  --text-ui-body--letter-spacing: -0.15px;
+  --color-hover: color-mix(in srgb, var(--color-ink) 7%, transparent);
+  --color-selected: color-mix(in srgb, var(--color-ink) 12%, transparent);
 
   /* Defaults = Midnight. Kept here so the app is never unstyled. */
   --color-app: #070707;
@@ -582,7 +598,9 @@ html[data-product="ruijie"] body {
    compact 14px text rhythm with much less vertical padding than the original
    15px/relaxed OpenMausBot bubble. */
 html[data-product="ruijie"] .chat-bubble {
-  padding: 7px 14px;
+  max-width: min(40rem, 84%);
+  padding: 8px 12px;
+  border-radius: 14px;
   font-size: 14px;
   font-weight: 400;
   line-height: 22px;
@@ -590,6 +608,49 @@ html[data-product="ruijie"] .chat-bubble {
 
 html[data-product="ruijie"] .chat-bubble .chat-md > * + * {
   margin-top: 6px;
+}
+
+/* Compact, skin-aware answer bubbles; retain readable long-form content. */
+html[data-product="ruijie"] .chat-bubble.chat-answer {
+  max-width: min(42rem, 88%);
+  padding: 8px 12px;
+  border-radius: 14px;
+  background: var(--color-card);
+}
+
+html[data-product="ruijie"] .chat-answer .chat-md > * + * {
+  margin-top: 10px;
+}
+
+html[data-product="ruijie"] .chat-answer .chat-md strong {
+  font-weight: 600;
+}
+
+html[data-product="ruijie"] .chat-answer .chat-md a {
+  text-underline-offset: 3px;
+}
+
+/* A narrow window uses an explicit drawer instead of crushing the transcript.
+   Wide desktops keep the 280 + 320 split; user drag widths remain remembered. */
+@media (max-width: 1099px) {
+  .ruijie-computer-panel {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 40;
+    max-width: calc(100% - 24px) !important;
+    box-shadow: -8px 0 24px #0003;
+  }
+}
+
+html[data-product="ruijie"] .lucide { stroke-width: 1.75; }
+
+.composer-surface { container: composer / inline-size; }
+@container composer (max-width: 480px) {
+  .composer-input-row { flex-wrap: wrap; }
+  .composer-input-row > .mention-editor { order: -1; flex: 1 0 100%; }
+  .composer-input-row > .composer-send-actions { margin-left: auto; }
 }
 
 /* Windows draws only its caption buttons over this empty drag strip. The
@@ -631,16 +692,16 @@ body::before {
 }
 
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-scrollbar);
-  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-ink) 18%, transparent);
+  border-radius: 999px;
 }
 /* the thumb was inert — it never acknowledged the pointer */
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-raised-hover);
+  background: color-mix(in srgb, var(--color-ink) 30%, transparent);
 }
 ::-webkit-scrollbar-track {
   background: transparent;

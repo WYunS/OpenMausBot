@@ -16,6 +16,14 @@ function render(state: UpdaterState) {
 }
 
 describe("UpdateBanner", () => {
+  it("offers the release page for manual builds without claiming a downloadable update", () => {
+    const html = render({ status: "manual", installMode: "manual" });
+    expect(html).toContain("Open release page");
+    expect(html).toContain("Install updates manually");
+    expect(html).not.toContain("Restart to update");
+    expect(html).not.toContain("Update failed");
+  });
+
   it("cannot restart or retry while macOS is preparing the downloaded bytes", () => {
     const html = render({ status: "preparing", version: "0.2.0", percent: 100 });
     expect(html).toContain("Preparing update…");

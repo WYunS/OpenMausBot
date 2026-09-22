@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, FilePen, Hand, Settings, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Check, FilePen, Hand, LoaderCircle, Settings, ShieldAlert, ShieldCheck } from "lucide-react";
 
 import { approvalModeFor, hasNativeAutoReview, supportsApprovalMode, type ApprovalMode } from "../../shared/approval-mode";
 import { cn } from "@/lib/cn";
@@ -86,6 +86,9 @@ export function ApprovalModeSelector({
   menuDirection = "up",
   wide = false,
   disabled = false,
+  preparing = false,
+  disabledReason,
+  compact = false,
   trustedModesAvailable = true,
   trustedModesNotice,
 }: {
@@ -98,6 +101,9 @@ export function ApprovalModeSelector({
   menuDirection?: "up" | "down";
   wide?: boolean;
   disabled?: boolean;
+  preparing?: boolean;
+  disabledReason?: string;
+  compact?: boolean;
   trustedModesAvailable?: boolean;
   trustedModesNotice?: string;
 }) {
@@ -143,16 +149,19 @@ export function ApprovalModeSelector({
         aria-expanded={open}
         aria-label={t("approvalMode.triggerAria", { mode: current.label, provider: providerName })}
         disabled={disabled}
-        title={disabled ? t("approvalMode.busy") : undefined}
+        aria-busy={preparing || undefined}
+        title={disabledReason || (disabled ? t("approvalMode.busy") : undefined)}
         onClick={() => setOpen((value) => !value)}
         className={cn(
           "flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-hairline/20 bg-transparent px-3 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink",
           wide && "h-10 w-full justify-between rounded-lg border-hairline/40 bg-inset px-3.5 text-ink",
-          disabled && "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-ink-secondary",
+          compact && !wide && "shrink-0 px-2",
+          disabled && "cursor-not-allowed hover:bg-transparent hover:text-ink-secondary",
+          disabled && !preparing && "opacity-45",
         )}
       >
         <span className="flex min-w-0 items-center gap-2">
-          <CurrentIcon size={14} className="shrink-0 opacity-70" />
+          {preparing ? <LoaderCircle size={14} className="shrink-0 animate-spin opacity-70" /> : <CurrentIcon size={14} className="shrink-0 opacity-70" />}
           <span className="truncate">{wide ? current.label : current.chip}</span>
         </span>
         {wide && <span aria-hidden className="text-[11px] text-ink-secondary">⌄</span>}
@@ -163,7 +172,7 @@ export function ApprovalModeSelector({
           role="menu"
           aria-label={t("approvalMode.menuAria", { provider: providerName })}
           className={cn(
-            "absolute z-40 w-[340px] overflow-hidden rounded-2xl border border-hairline/40 bg-raised shadow-2xl",
+            "absolute z-40 w-[340px] overflow-hidden rounded-xl border border-hairline/50 bg-menu shadow-lg shadow-black/25",
             menuDirection === "up" ? "bottom-full mb-2" : "top-full mt-2",
             align === "right" ? "right-0" : "left-0",
             wide && "w-full min-w-[340px]",

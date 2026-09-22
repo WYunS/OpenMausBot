@@ -10,6 +10,8 @@ const PRESENTATION_ONLY_KEYS = new Set([
   "localVm",
   "features",
   "browserProfiles",
+  "threads",
+  "onboarding",
 ]);
 
 export function providerReloadRequired(patch: Record<string, unknown>): boolean {

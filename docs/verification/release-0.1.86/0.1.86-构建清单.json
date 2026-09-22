@@ -1,0 +1,81 @@
+{
+  "sourceSha": "1648996ffded608efe73627cd8fa8aa0ac171efa",
+  "version": "0.1.86",
+  "toolkitSha": "b2c4ba9e3c7966ba8ea31b0bb92c6b6906c46ceb",
+  "run": "35589546915",
+  "platforms": [
+    {
+      "schemaVersion": 1,
+      "sourceSha": "1648996ffded608efe73627cd8fa8aa0ac171efa",
+      "version": "0.1.86",
+      "toolkitSha": "b2c4ba9e3c7966ba8ea31b0bb92c6b6906c46ceb",
+      "target": "linux-x64",
+      "automatedVerification": "passed",
+      "signing": "unsigned",
+      "humanAcceptance": "not performed by release-kit",
+      "assets": [
+        {
+          "name": "RuijieBot-0.1.86-x86_64.AppImage",
+          "size": 272707626,
+          "sha256": "d7fcb0a06088700cd9fe57f5f1ac5c9a0a95d0e9f562bbd48a37404d21ec1ca6"
+        },
+        {
+          "name": "RuijieBot-0.1.86-amd64.deb",
+          "size": 231032024,
+          "sha256": "a2cedb920913cf79f3fa2ffcf9785871840f1b4232a342cc173ecb7037c27898"
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "sourceSha": "1648996ffded608efe73627cd8fa8aa0ac171efa",
+      "version": "0.1.86",
+      "toolkitSha": "b2c4ba9e3c7966ba8ea31b0bb92c6b6906c46ceb",
+      "target": "macos-arm64",
+      "automatedVerification": "passed",
+      "signing": "ad-hoc signed, not notarized",
+      "humanAcceptance": "not performed by release-kit",
+      "assets": [
+        {
+          "name": "RuijieBot-0.1.86-mac-arm64.dmg",
+          "size": 947176675,
+          "sha256": "999055271753e205fdbc1078d08ff8d2ba29ead89c8f4dde0412b193b3405994"
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "sourceSha": "1648996ffded608efe73627cd8fa8aa0ac171efa",
+      "version": "0.1.86",
+      "toolkitSha": "b2c4ba9e3c7966ba8ea31b0bb92c6b6906c46ceb",
+      "target": "macos-x64",
+      "automatedVerification": "passed",
+      "signing": "ad-hoc signed, not notarized",
+      "humanAcceptance": "not performed by release-kit",
+      "assets": [
+        {
+          "name": "RuijieBot-0.1.86-mac-x64.dmg",
+          "size": 884777893,
+          "sha256": "e966de419450b21729a94a753312b439cdda71816333e4e4948dc625c11b86d7"
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "sourceSha": "1648996ffded608efe73627cd8fa8aa0ac171efa",
+      "version": "0.1.86",
+      "toolkitSha": "b2c4ba9e3c7966ba8ea31b0bb92c6b6906c46ceb",
+      "target": "windows-x64",
+      "automatedVerification": "passed",
+      "signing": "unsigned",
+      "humanAcceptance": "not performed by release-kit",
+      "assets": [
+        {
+          "name": "RuijieBot-0.1.86-setup.exe",
+          "size": 523565202,
+          "sha256": "9d3619cf6a49f61a8ee4e903dbec65c5ee0e7b9da8732ba8eca8d0bdec127fa5"
+        }
+      ]
+    }
+  ]
+}

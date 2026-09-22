@@ -6,7 +6,7 @@
 // signing). In dev it's a no-op so the browser/dev shell is unaffected.
 // electron-updater is vendored (electron/vendor/electron-updater.cjs) because
 // the packaged app ships no node_modules.
-import { app, clipboard, ipcMain } from "electron";
+import { app, clipboard, ipcMain, shell } from "electron";
 import localOriginModule from "./local-origin.cjs";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -94,6 +94,33 @@ export function startUpdater() {
   if (!app.isPackaged) {
     updaterCoordinator = null;
     setState({ status: "idle" });
+    return;
+  }
+  const releaseMetadata = join(process.resourcesPath ?? "", "enterprise-release.json");
+  if (existsSync(releaseMetadata)) {
+    try {
+      const metadata = JSON.parse(readFileSync(releaseMetadata, "utf8"));
+      if (metadata.distribution !== "enterprise-internal-test" || !["AI-Applications-Team/OpenMausBot", "WYunS/OpenMausBot"].includes(metadata.repository)) {
+        throw new Error("Invalid enterprise update metadata");
+      }
+      const url = `https://github.com/${metadata.repository}/releases`;
+      const showManualUpdate = () => setState({
+        status: "manual", installMode: "manual",
+        message: "Install updates manually from your organization's GitHub release page.",
+      });
+      const openReleasePage = async () => {
+        try { await shell.openExternal(url); }
+        catch {
+          setState({ status: "error", installMode: "manual", message: `Could not open ${url}. Open this release page in your browser to update.` });
+        }
+      };
+      updaterCoordinator = { check: showManualUpdate, download: openReleasePage, install: openReleasePage };
+      setState({ status: "idle", installMode: "manual", message: undefined });
+    } catch (error) {
+      updaterCoordinator = null;
+      setState({ status: "error", message: "Enterprise update configuration is invalid. Contact the release administrator." });
+      console.error("[updater] Invalid enterprise update metadata", error instanceof SyntaxError ? "invalid JSON" : error.message);
+    }
     return;
   }
   try {

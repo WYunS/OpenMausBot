@@ -1,12 +1,10 @@
 name: Docker image
 
 on:
-  # release.yml dispatches this on the tag it just published: a tag created
-  # with the workflow token never fires push events on its own.
+  # Desktop tags do not authorize the separate container distribution.
   workflow_dispatch:
   push:
     branches: [main]
-    tags: ["v*"]
     paths:
       - Dockerfile
       - .dockerignore
@@ -28,8 +26,6 @@ permissions:
 
 jobs:
   build-and-smoke:
-    # Enterprise source tags are bookmarks; packaging is explicitly dispatched.
-    if: github.event_name != 'push' || github.repository == 'milind-soni/OpenMausBot'
     name: build image + boot smoke
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -129,10 +125,9 @@ jobs:
   publish:
     name: publish to GHCR
     needs: build-and-smoke
-    # Release dispatches on its published tag because GITHUB_TOKEN-created
-    # tags do not start another workflow. All branch runs are smoke-only;
-    # syncing downstream main is not permission to publish a container image.
-    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    # Explicitly dispatch on a tag when a container publication is requested.
+    # All branch and pull-request runs remain smoke-only.
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read

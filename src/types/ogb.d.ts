@@ -260,6 +260,7 @@ export interface LinuxLocalControlStatus {
 
 export interface UpdaterState {
   status:
+    | "manual"
     | "idle"
     | "checking"
     | "available"
@@ -281,7 +282,7 @@ export interface UpdaterState {
    * "handoff" copies the install command and opens a terminal so the user
    * can finish — Ubuntu .deb (and rpm/pacman) builds use this.
    */
-  installMode?: "restart" | "handoff";
+  installMode?: "restart" | "handoff" | "manual";
   /** hand-off only: the install command, already on the clipboard */
   command?: string;
   /** hand-off only: whether a terminal was opened to paste it into */

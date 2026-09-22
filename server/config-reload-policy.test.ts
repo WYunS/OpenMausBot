@@ -10,4 +10,10 @@ describe("provider config reload policy", () => {
   it("does not reload providers for presentation-only settings", () => {
     expect(providerReloadRequired({ language: "zh", features: { browser: true } })).toBe(false);
   });
+
+  it("keeps active turns when thread capacity changes but still reloads credentials", () => {
+    expect(providerReloadRequired({ threads: { maxConcurrentPerBot: 5 } })).toBe(false);
+    expect(providerReloadRequired({ threads: { maxConcurrentPerBot: 5 }, profile: { email: "fixture@example.test" } })).toBe(true);
+    expect(providerReloadRequired({ openaiCompat: { apiKey: "fixture" } })).toBe(true);
+  });
 });

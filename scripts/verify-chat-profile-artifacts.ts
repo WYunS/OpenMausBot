@@ -12,6 +12,7 @@ const fixture = await launchVerificationServer(process.env, undefined, undefined
 const evidence = resolve(".omb-scratch/verify-evidence/chat-profile-artifacts");
 mkdirSync(evidence, { recursive: true });
 let ui: Awaited<ReturnType<typeof mountPreview>> | undefined;
+let settingsUi: Awaited<ReturnType<typeof mountPreview>> | undefined;
 try {
   const api = fixtureApi(fixture.info.url);
   await api("PATCH", "/api/config", { language: "en" });
@@ -39,7 +40,8 @@ try {
     { expectSystemIncludes: ["负责寻找公开照片并附上来源。"], reply: "职责已持久保存，继续帮你找公开照片。" },
   ] } };
   writeFileSync(join(fixture.info.dataDir, "room-plan.json"), JSON.stringify(plan));
-  const config = { ...fixture.info, previewUrl: new URL("/", ui.previewUrl).href, botId: bot.id, evidence };
+  settingsUi = await mountPreview(fixture, { entry: "/src/testing/bot-settings.tsx", route: "/__settings.html", title: "Isolated memory recovery" });
+  const config = { ...fixture.info, previewUrl: new URL("/", ui.previewUrl).href, settingsPreviewUrl: settingsUi.previewUrl, botId: bot.id, evidence };
   const configPath = join(fixture.info.dataDir, "artifact-ui.json");
   writeFileSync(configPath, JSON.stringify(config));
   console.log(JSON.stringify(config));
@@ -61,4 +63,4 @@ try {
   writeFileSync(join(evidence, "workflow.json"), JSON.stringify({ ok: true, fixture: fixture.info, bot: { name: final.name, title: final.title, description: final.description }, history, messages: final.messages }, null, 2));
   copyFileSync(join(fixture.info.dataDir, "room-plan.json.evidence.jsonl"), join(evidence, "mcp-evidence.jsonl"));
   console.log(JSON.stringify({ ok: true, evidence, log: fixture.info.logPath }));
-} finally { await ui?.close(); await fixture.close(); }
+} finally { await settingsUi?.close(); await ui?.close(); await fixture.close(); }

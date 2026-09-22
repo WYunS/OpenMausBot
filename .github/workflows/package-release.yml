@@ -4,24 +4,24 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（例如 v0.1.84；按标签打包时可留空）'
+        description: '版本号；留空读取源码 package.json，指定新版本时自动准备对应版本提交'
         type: string
         required: false
       source_ref:
-        description: '源码分支、标签或提交（例如 v0.1.84）'
+        description: '源码分支、标签或提交；留空使用本次选择的 workflow 分支'
         type: string
-        default: main
-        required: true
+        default: ''
+        required: false
       platforms:
-        description: '构建平台：all / macos / windows / linux'
+        description: 'all = Windows x64 + Mac arm64 + Mac Intel + Linux x64（AppImage、DEB）'
         type: choice
-        options: [all, macos, windows, linux]
+        options: [all, desktop, windows, macos, macos-arm64, macos-x64, linux]
         default: all
       mode:
-        description: '交付方式：draft 草稿 / artifacts 仅产物 / prerelease 内部测试发布'
+        description: 'release 全部通过后自动发布 Latest；prerelease 预发布；draft 草稿；artifacts 仅产物'
         type: choice
-        options: [prerelease, draft, artifacts]
-        default: prerelease
+        options: [release, prerelease, draft, artifacts]
+        default: release
 permissions:
   contents: read
 concurrency:
@@ -29,7 +29,8 @@ concurrency:
   cancel-in-progress: false
 env:
   RELEASE_VERSION: ${{ inputs.version }}
-  RELEASE_MODE: ${{ inputs.mode }}
+  # The toolkit assembles a verified draft; the final step publishes it explicitly.
+  RELEASE_MODE: ${{ inputs.mode == 'artifacts' && 'artifacts' || 'draft' }}
   RELEASE_CONFIG: .release/config.json
   RELEASE_PLATFORMS: ${{ inputs.platforms }}
   CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -47,19 +48,52 @@ jobs:
       matrix: ${{ steps.prepare.outputs.matrix }}
       build: ${{ steps.prepare.outputs.build }}
       source_tagged: ${{ steps.prepare.outputs.source_tagged }}
+      metadata_local: ${{ steps.prepare.outputs.metadata_local }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ inputs.source_ref }}
+          ref: ${{ inputs.source_ref || github.ref }}
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '24.20.0'
+      - name: Check publication credentials and prevent duplicate versions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ inputs.mode == 'artifacts' && github.token || secrets.RUIJIE_RELEASE_TOKEN || (github.repository == 'WYunS/OpenMausBot' && github.token) }}
+          HARNESS_READ_TOKEN: ${{ secrets.RUIJIE_HARNESS_READ_TOKEN }}
+          DELIVERY_MODE: ${{ inputs.mode }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFile } from 'node:fs/promises';
+          import { version } from './.release/toolkit/lib/core.mjs';
+          import { api } from './.release/toolkit/lib/github.mjs';
+          import { releaseRepository } from './.release/repository.mjs';
+          const { repository } = releaseRepository();
+          assert(process.env.GH_TOKEN, 'Company releases require RUIJIE_RELEASE_TOKEN with Contents and Workflows read/write. WYunS/OpenMausBot may use its job-scoped GITHUB_TOKEN. Never use the read-only Harness token for publishing.');
+          if (repository === 'AI-Applications-Team/OpenMausBot' && process.env.RELEASE_PLATFORMS !== 'linux') {
+            assert(process.env.HARNESS_READ_TOKEN, 'Configure RUIJIE_HARNESS_READ_TOKEN with read access to the pinned private Harness source.');
+          }
+          const pkg = JSON.parse(await readFile('package.json', 'utf8'));
+          const tag = `v${version(process.env.RELEASE_VERSION || pkg.version)}`;
+          // Artifact-only repair builds may reuse a displayed version: they never
+          // write tags/Releases, and their candidate manifests bind the actual SHA.
+          // Publication still rejects existing releases, including hidden drafts.
+          for (let page = 1; process.env.DELIVERY_MODE !== 'artifacts'; page++) {
+            assert(page <= 20, 'Too many release pages; inspect the repository before retrying');
+            const releases = await api(`/repos/${repository}/releases?per_page=100&page=${page}`);
+            assert(!releases.some(release => release.tag_name === tag), `${tag} already has a Release or draft. Existing versions are not overwritten; use a new version or recover the original draft.`);
+            if (releases.length < 100) break;
+          }
+          if (process.env.DELIVERY_MODE === 'release') assert(!tag.includes('-'), 'Use prerelease mode for a prerelease version');
+          console.log(`Preflight ready: ${tag}; ${process.env.RELEASE_PLATFORMS}; ${process.env.DELIVERY_MODE}`);
+          NODE
       - name: Check requirements and pin one versioned source commit
         id: prepare
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ inputs.mode == 'artifacts' && github.token || secrets.RUIJIE_RELEASE_TOKEN || (github.repository == 'WYunS/OpenMausBot' && github.token) }}
         run: node .release/toolkit/bin/release.mjs prepare
       - name: Preserve preflight report
         if: always()
@@ -74,6 +108,7 @@ jobs:
     if: needs.prepare.outputs.build == 'true'
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
@@ -81,6 +116,8 @@ jobs:
       RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
       RELEASE_TARGET: ${{ matrix.target }}
       RELEASE_SOURCE_TAGGED: ${{ needs.prepare.outputs.source_tagged }}
+      # Regenerate metadata with the actual prepared SHA, including version overrides.
+      RELEASE_METADATA_LOCAL: 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -93,12 +130,23 @@ jobs:
           node-version: ${{ needs.prepare.outputs.node }}
       - name: Enable pinned package manager
         run: corepack enable
+      - name: Check private Harness checkout permission
+        if: runner.os != 'Linux' && github.repository == 'AI-Applications-Team/OpenMausBot'
+        shell: bash
+        env:
+          HARNESS_READ_TOKEN: ${{ secrets.RUIJIE_HARNESS_READ_TOKEN }}
+        run: |
+          if [ -z "$HARNESS_READ_TOKEN" ]; then
+            echo '::error::Set RUIJIE_HARNESS_READ_TOKEN with read-only Contents access to AI-Applications-Team/ruijie-harness. GITHUB_TOKEN cannot read another private repository.'
+            exit 1
+          fi
       - name: Checkout reviewed Harness sidecar source
         if: runner.os != 'Linux'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ github.repository == 'WYunS/OpenMausBot' && 'WYunS/ruijie-harness' || 'AI-Applications-Team/ruijie-harness' }}
           ref: f48fe5cb09e37c1bcb4ed2c19f75ce5e1bf8aeae
+          token: ${{ github.repository == 'WYunS/OpenMausBot' && github.token || secrets.RUIJIE_HARNESS_READ_TOKEN }}
           path: ruijie-harness
           persist-credentials: false
           submodules: recursive
@@ -109,9 +157,50 @@ jobs:
           sudo apt-get install -y xvfb dbus-x11 libfuse2 squashfs-tools libnss3 libatk-bridge2.0-0 libgtk-3-0 libasound2t64 libgbm1 libx11-xcb1 rpm at-spi2-core desktop-file-utils libxi6 libxkbcommon0 x11-utils xdotool
       - name: Install project dependencies
         run: node .release/toolkit/bin/release.mjs install
-      - name: Build and verify candidate structure
+      - name: Reproduce and verify Windows long-path install and scoped uninstall
+        if: runner.os == 'Windows'
+        run: node --test scripts/windows-installer-lifecycle.node-test.mjs
+      - name: Verify macOS installed-payload regression checks
+        if: runner.os == 'macOS'
+        run: node --test .release/verify-macos-install.test.mjs scripts/smoke-harness-bundle.test.mjs scripts/enterprise-macos-sign.test.mjs
+      - name: Restore verified Harness sidecar cache
         if: runner.os != 'Linux'
+        id: harness-cache
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: dist-native/ruijie-harness
+          key: ruijie-harness-thin-${{ matrix.target }}-f48fe5cb09e37c1bcb4ed2c19f75ce5e1bf8aeae-${{ hashFiles('scripts/build-ruijie-harness.mjs', 'scripts/prepare-ruijie-harness.mjs', 'shared/ruijie-harness-release.ts') }}
+      - name: Prepare and verify reviewed Harness sidecar
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          arch="${RELEASE_TARGET##*-}"
+          node scripts/build-ruijie-harness.mjs --source ruijie-harness --arch "$arch"
+      - name: Verify cached macOS sidecar signature and single CPU
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          arch="${RELEASE_TARGET#macos-}"
+          app="dist-native/ruijie-harness/darwin-$arch/runtime/锐捷 Harness.app"
+          codesign --verify --deep --strict "$app"
+          cpu="$arch"
+          if [ "$arch" = x64 ]; then cpu=x86_64; fi
+          test "$(lipo -archs "$app/Contents/MacOS/锐捷 Harness")" = "$cpu"
+      - name: Save verified Harness sidecar cache
+        if: runner.os != 'Linux' && steps.harness-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: dist-native/ruijie-harness
+          key: ${{ steps.harness-cache.outputs.cache-primary-key }}
+      - name: Build and verify Windows candidate structure
+        if: runner.os == 'Windows'
         run: node .release/toolkit/bin/release.mjs build
+      - name: Build and verify macOS candidate structure
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ulimit -n 10240
+          node .release/toolkit/bin/release.mjs build
       - name: Build Linux under isolated virtual display
         if: runner.os == 'Linux'
         run: dbus-run-session -- xvfb-run -a node .release/toolkit/bin/release.mjs build
@@ -145,53 +234,11 @@ jobs:
           path: .release-out/evidence/**
           if-no-files-found: warn
           retention-days: 14
-  intel:
-    name: Verify same Universal DMG on native Intel
-    needs: [prepare, build]
-    # Validate an available Mac artifact even if another platform failed,
-    # so independent platform failures do not hide Intel diagnostics.
-    if: ${{ !cancelled() && needs.prepare.result == 'success' && contains(needs.prepare.outputs.matrix, 'macos-universal') }}
-    runs-on: macos-15-intel
-    timeout-minutes: 60
-    env:
-      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
-      RELEASE_TARGET: macos-universal
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ needs.prepare.outputs.sha }}
-          persist-credentials: false
-          fetch-depth: 0
-          submodules: recursive
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: ${{ needs.prepare.outputs.node }}
-      - run: corepack enable
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: release-macos-universal-${{ github.run_id }}
-          path: .release-out/intel-input
-      - run: node .release/toolkit/bin/release.mjs install
-      - run: node .release/toolkit/bin/release.mjs verify-intel
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: intel-verification-${{ github.run_id }}
-          path: .release-out/intel-verification.json
-          if-no-files-found: error
-          retention-days: 30
-      - name: Preserve Intel diagnostics
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: evidence-intel-${{ github.run_id }}
-          path: .release-out/evidence/**
-          if-no-files-found: warn
-          retention-days: 14
   publish:
     env:
       RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
-    needs: [prepare, build, intel]
-    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.intel.result == 'success' || needs.intel.result == 'skipped') }}
+    needs: [prepare, build]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -208,16 +255,85 @@ jobs:
         with:
           pattern: release-*-*-${{ github.run_id }}
           path: .release-out/downloaded
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        if: needs.intel.result == 'success'
-        with:
-          name: intel-verification-${{ github.run_id }}
-          path: .release-out/intel
       - name: Verify hashes and assemble release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ inputs.mode == 'artifacts' && github.token || secrets.RUIJIE_RELEASE_TOKEN || (github.repository == 'WYunS/OpenMausBot' && github.token) }}
         run: node .release/toolkit/bin/release.mjs publish
+      - name: Publish verified Release automatically
+        if: inputs.mode == 'release' || inputs.mode == 'prerelease'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RUIJIE_RELEASE_TOKEN || (github.repository == 'WYunS/OpenMausBot' && github.token) }}
+          DELIVERY_MODE: ${{ inputs.mode }}
+          EXPECTED_SOURCE_SHA: ${{ needs.prepare.outputs.sha }}
+          EXPECTED_MATRIX: ${{ needs.prepare.outputs.matrix }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFile, appendFile } from 'node:fs/promises';
+          import { createHash } from 'node:crypto';
+          import { api, matchingSourceTag } from './.release/toolkit/lib/github.mjs';
+          import { releaseRepository } from './.release/repository.mjs';
+          const { repository } = releaseRepository();
+          const base = `/repos/${repository}`;
+          const manifest = JSON.parse(await readFile('.release-out/release/BUILD-MANIFEST.json', 'utf8'));
+          assert.equal(manifest.sourceSha, process.env.EXPECTED_SOURCE_SHA);
+          assert.equal(manifest.version, process.env.RELEASE_VERSION);
+          assert.equal(String(manifest.run), process.env.GITHUB_RUN_ID);
+          const expectedTargets = JSON.parse(process.env.EXPECTED_MATRIX).include.map(item => item.target).sort();
+          assert.deepEqual(manifest.platforms.map(item => item.target).sort(), expectedTargets, 'Missing or duplicate platform');
+          assert(manifest.platforms.every(item => item.automatedVerification === 'passed'), 'Every selected platform must pass');
+          const tag = `v${manifest.version}`;
+          let release;
+          for (let page = 1; ; page++) {
+            assert(page <= 20, 'Release lookup exceeded limit');
+            const releases = await api(`${base}/releases?per_page=100&page=${page}`);
+            const matches = releases.filter(item => item.tag_name === tag);
+            assert(matches.length <= 1, 'Duplicate Release drafts');
+            if (matches.length) { release = matches[0]; break; }
+            assert(releases.length === 100, 'Verified Release draft not found');
+          }
+          assert(release.draft, 'Never overwrite a published Release');
+          assert.equal(release.target_commitish, manifest.sourceSha, 'Draft source differs');
+          const expectedAssets = manifest.platforms.flatMap(item => item.assets);
+          for (const name of ['BUILD-MANIFEST.json', 'SHA256SUMS.txt']) {
+            const bytes = await readFile(`.release-out/release/${name}`);
+            expectedAssets.push({ name, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
+          }
+          const uploaded = await api(`${base}/releases/${release.id}/assets?per_page=100`);
+          assert.deepEqual(uploaded.map(item => item.name).sort(), expectedAssets.map(item => item.name).sort(), 'Incomplete or unexpected Release assets');
+          for (const expected of expectedAssets) {
+            const actual = uploaded.find(item => item.name === expected.name);
+            assert.equal(actual.state, 'uploaded');
+            assert.equal(actual.size, expected.size, `Size differs: ${expected.name}`);
+            assert.equal(actual.digest, `sha256:${expected.sha256}`, `Hash differs: ${expected.name}`);
+          }
+          await matchingSourceTag(base, tag, manifest.sourceSha);
+          const prerelease = process.env.DELIVERY_MODE === 'prerelease';
+          const names = {'windows-x64':'Windows 64 位','macos-arm64':'Mac M 系列','macos-x64':'Mac Intel','linux-x64':'Linux x64（AppImage / DEB）'};
+          const body = [
+            `锐捷Bot ${manifest.version}`, '',
+            ...manifest.platforms.map(item => `- ${names[item.target] || item.target}: ${item.assets.map(asset => asset.name).join('、')}`), '',
+            '本次所有选定平台均通过自动验证；文件哈希与构建来源见 SHA256SUMS.txt、BUILD-MANIFEST.json。',
+            'Windows 未签名；Mac 为 ad-hoc 临时签名、未公证。真实账号、权限与覆盖升级验收单独进行。', '',
+            `Source: ${manifest.sourceSha}`,
+            `Build: https://github.com/${repository}/actions/runs/${manifest.run}`
+          ].join('\n');
+          // Explicitly retain tag/source: editing a draft must not publish its temporary tag.
+          const published = await api(`${base}/releases/${release.id}`, { method: 'PATCH', body: {
+            tag_name: tag, target_commitish: manifest.sourceSha, name: `RuijieBot ${tag}`, body,
+            draft: false, prerelease, make_latest: prerelease ? 'false' : 'true'
+          }});
+          assert.equal(published.tag_name, tag);
+          assert.equal(published.draft, false);
+          assert.equal(published.prerelease, prerelease);
+          assert(await matchingSourceTag(base, tag, manifest.sourceSha), 'Published tag is missing');
+          if (!prerelease) assert.equal((await api(`${base}/releases/latest`)).id, release.id);
+          await appendFile(process.env.GITHUB_STEP_SUMMARY, `Published [${tag}](${published.html_url}); ${expectedTargets.length} platforms, ${expectedAssets.length} verified assets.\n`);
+          console.log(published.html_url);
+          NODE
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
         with:
           name: release-manifest-${{ github.run_id }}
           path: .release-out/release/*

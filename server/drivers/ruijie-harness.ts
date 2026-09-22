@@ -28,6 +28,8 @@ import { newEventId, newId } from "../contracts.ts";
 import { computerProxyEnv } from "../container-computer.ts";
 import { mutatingComputerTool } from "../computer-tools.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
+import { mcpServerNameError } from "../mcp-registry.ts";
+import { gateServer, resultBudget } from "../mcp-gate-config.ts";
 import { withoutHarnessWebSearch } from "./ruijie-harness-preset.ts";
 import { parseHarnessQuestions, validateQuestionAnswers, legacyQuestionAnswer, questionChoices, type AskQuestion } from "../../shared/ask-question.ts";
 import { harnessDenial, harnessDenialMessage, type HarnessDenial } from "../../shared/harness-failure.ts";
@@ -94,6 +96,8 @@ interface PendingTurn {
   requiresComputerMutation: boolean;
   computerToolSucceeded: boolean;
   computerRetryCount: number;
+  computerServerName?: string;
+  customToolsMounted: boolean;
   toolNames: Map<string, string>;
   usageByStep: Map<number, { input: number; output: number; cachedInput?: number }>;
 }
@@ -149,6 +153,7 @@ interface PendingRequest {
 interface HarnessSession {
   id: string;
   integrationKey: string;
+  computerServerName?: string;
 }
 
 type DriverEvent = RuntimeEvent extends infer Event
@@ -236,7 +241,7 @@ async function resolveDshHome(config: RuijieHarnessConfig): Promise<string> {
 }
 
 type StdioIntegration = { command: string; args: string[]; env: Record<string, string> };
-type NamedStdioIntegration = { name: "agents" | "computer" | "composio" | "browser"; integration: StdioIntegration };
+type NamedStdioIntegration = { name: "agents" | "computer" | "composio" | "browser" | `custom-${string}`; integration: StdioIntegration };
 
 function computerIntegration(turn: SendTurnInput): StdioIntegration | undefined {
   if (turn.integrations?.localComputer) {
@@ -254,7 +259,20 @@ function computerIntegration(turn: SendTurnInput): StdioIntegration | undefined 
 }
 
 function stdioIntegrations(turn: SendTurnInput, computer: StdioIntegration | undefined): NamedStdioIntegration[] {
+  const custom = Object.entries(turn.integrations?.custom ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([name, spec]): NamedStdioIntegration => {
+    const error = mcpServerNameError(name);
+    if (error) throw new Error(`Cannot mount custom MCP server: ${error}`);
+    const server: StdioIntegration = spec;
+    return {
+      name: `custom-${name}`,
+      integration: gateServer({
+        name, server, threadId: turn.threadId, budget: resultBudget(),
+        nodeEnv: { ELECTRON_RUN_AS_NODE: "1" },
+      }) ?? server,
+    };
+  });
   return [
+    ...custom,
     ...(turn.integrations?.agents
       ? [{ name: "agents" as const, integration: turn.integrations.agents }]
       : []),
@@ -306,7 +324,7 @@ function mcpPresetContent(base: string, integrations: NamedStdioIntegration[], k
     // computer control is part of the requested work, so either missing bridge
     // must stop the turn. Connected apps and the browser are optional: their
     // transient outage must not prevent an otherwise ordinary conversation.
-    `    failOnStartupError: ${name === "agents" || name === "computer" ? "true" : "false"}\n`
+    `    failOnStartupError: ${name === "agents" || name === "computer" || name.startsWith("custom-") ? "true" : "false"}\n`
   ).join("");
   const aliases = browser ? `- id: openmaus-browser-tools-${key}\n` +
     `  name: ${JSON.stringify(SPAWNED_PROXIES.harnessBrowserTools)}\n` +
@@ -749,6 +767,9 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
         if (
           toolSucceeded &&
           mountedComputerTool(toolName) &&
+          (!pending.customToolsMounted || Boolean(pending.computerServerName && (
+            toolName?.startsWith(`${pending.computerServerName}__`) || toolName?.startsWith(`mcp__${pending.computerServerName}__`)
+          ))) &&
           (!pending.requiresComputerMutation || mutatingComputerTool(toolName))
         ) pending.computerToolSucceeded = true;
         emit({ type: "item.completed", threadId, turnId: pending.turnId, itemId, itemType: "tool", ok: toolSucceeded });
@@ -828,6 +849,7 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
         effortLevels: ["none", "low", "medium", "high", "xhigh", "max"],
         queueing: false,
         agentsMcp: true,
+        customMcp: true,
         computerMcp: true,
         localComputerMcp: true,
         composioMcp: true,
@@ -850,6 +872,7 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
         let session = sessions.get(turn.threadId);
         if (session && session.integrationKey !== integrationKey) session = undefined;
         let sessionId = session?.id;
+        let computerServerName = session?.computerServerName;
         if (!sessionId && integrationKey === "none" && typeof turn.resumeCursor === "string" && turn.resumeCursor.startsWith("session-")) {
           sessionId = turn.resumeCursor;
         }
@@ -866,11 +889,12 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
             // user work or model usage.
             let lastError: unknown;
             for (let attempt = 0; attempt < 2 && !sessionId; attempt += 1) {
+              const mountKey = sessionIntegrationKey(integrationKey, turn.threadId, newId());
               const agentPreset = await ensureIntegrationPreset(
                 endpoint,
                 input.config,
                 integrations,
-                sessionIntegrationKey(integrationKey, turn.threadId, newId()),
+                mountKey,
               );
               try {
                 const created = await rpc<{ sessionId: string }>(endpoint, "session.create", {
@@ -878,6 +902,7 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
                   agentPreset,
                 });
                 sessionId = created.sessionId;
+                computerServerName = computer ? mcpServerName("computer", mountKey) : undefined;
               } catch (error) {
                 lastError = error;
               }
@@ -885,7 +910,7 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
             if (!sessionId) throw lastError;
           }
         }
-        sessions.set(turn.threadId, { id: sessionId, integrationKey });
+        sessions.set(turn.threadId, { id: sessionId, integrationKey, computerServerName });
         const selected = decodeModel(turn.model);
         const selectedId = `${selected.provider}::${selected.model}`;
         const reasoningEffort = compatibleHarnessEffort(
@@ -918,6 +943,8 @@ export const RuijieHarnessDriver: ProviderDriver<RuijieHarnessConfig> = {
           requiresComputerMutation: Boolean(computer) && computerMutationRequested(turn.text),
           computerToolSucceeded: false,
           computerRetryCount: 0,
+          computerServerName,
+          customToolsMounted: integrations.some(integration => integration.name.startsWith("custom-")),
           toolNames: new Map(),
           usageByStep: new Map(),
         };

@@ -7,6 +7,7 @@ import { DATA_DIR } from "./config.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { redactSecretsInText } from "./redact.ts";
+import { schemaIssue } from "./schema.ts";
 import type { GroupGoalRunStatus } from "../shared/group-goal-run.ts";
 import type { RoutineRequestOperation } from "../shared/routine-request.ts";
 import { normalizeCronSchedule, nextCronRuns, type RoutineCronSchedule } from "../shared/routine-schedule.ts";
@@ -222,6 +223,110 @@ const webhookRunReceiptSchema = z.object({
 type WebhookRunReceipt = z.infer<typeof webhookRunReceiptSchema>;
 const WEBHOOK_RETRY_WINDOW_MS = 7 * 24 * 60 * 60_000;
 const MAX_WEBHOOK_RECEIPTS = 20_000;
+
+const storedRoutineFileSchema = z.object({
+  version: z.literal(1).optional(),
+  routines: z.array(z.unknown()).optional(),
+  runs: z.array(z.unknown()).optional(),
+  routineRequestReceipts: z.array(z.unknown()).default([]),
+  webhookRunReceipts: z.array(z.unknown()).default([]),
+}).refine((disk) => disk.routines !== undefined || disk.runs !== undefined, "Missing scheduler collections")
+  .transform((disk) => ({ ...disk, routines: disk.routines ?? [], runs: disk.runs ?? [] }));
+
+const storedRoutineMetadata = {
+  target: z.enum(["bot", "room-goal"]).optional(),
+  groupId: z.unknown().optional(),
+  runOn: z.enum(["maus", "cloud"]).default("maus"),
+  timeoutMinutes: z.unknown().optional(),
+  attachments: z.unknown().optional(),
+  sourceThreadId: z.unknown().optional(),
+  resultsThreadId: z.unknown().optional(),
+};
+
+function hasStoredTarget(record: { target?: RoutineTarget; groupId?: unknown }): boolean {
+  return record.target !== "room-goal" || (typeof record.groupId === "string" && record.groupId.trim().length > 0);
+}
+
+const storedRoutineSchema = z.looseObject({
+  ...storedRoutineMetadata,
+  id: z.string().min(1),
+  name: z.string(),
+  prompt: z.string(),
+  botId: z.string().min(1),
+  enabled: z.boolean(),
+  schedule: z.unknown(),
+  durationMinutes: z.number().finite().default(30),
+  continuity: z.boolean().optional(),
+  nextRunAt: z.number().finite().nullable().default(null),
+  createdAt: z.number().finite(),
+  updatedAt: z.number().finite(),
+}).refine(hasStoredTarget, { path: ["groupId"], message: "Room-goal record requires a group ID" });
+
+const storedRoutineRunSchema = z.looseObject({
+  ...storedRoutineMetadata,
+  id: z.string().min(1),
+  routineId: z.string().min(1),
+  routineName: z.string(),
+  prompt: z.string().optional(),
+  durationMinutes: z.number().finite().optional(),
+  goalStatus: z.unknown().optional(),
+  botId: z.string().min(1),
+  scheduledFor: z.number().finite(),
+  status: z.enum(["queued", "running", "waiting", "completed", "failed", "cancelled", "missed"]),
+  manual: z.boolean().default(false),
+  deferredAt: z.number().finite().optional(),
+  deferredNoticeAt: z.number().finite().optional(),
+  triggerSource: z.enum(["schedule", "manual", "webhook"]).optional(),
+  webhookId: z.string().optional(),
+  deliveryId: z.string().optional(),
+  threadId: z.string().optional(),
+  startedAt: z.number().finite().optional(),
+  finishedAt: z.number().finite().optional(),
+  output: z.string().optional(),
+  attention: z.string().optional(),
+  error: z.string().optional(),
+  cost: z.number().finite().nullable().optional(),
+  denials: z.array(z.string()).optional(),
+  createdAt: z.number().finite(),
+  seenAt: z.number().finite().optional(),
+}).refine(hasStoredTarget, { path: ["groupId"], message: "Room-goal record requires a group ID" });
+
+const storedRoutineRequestReceiptSchema = z.object({
+  requestId: z.string(),
+  messageId: z.string(),
+  botId: z.string(),
+  threadId: z.string(),
+  action: z.custom<RoutineRequestOperation["action"]>(isRoutineRequestAction),
+  fingerprintVersion: z.literal(1),
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  resultId: z.string(),
+  appliedAt: z.number().finite(),
+});
+
+function storedRecords<T>(
+  values: readonly unknown[],
+  schema: z.ZodType<T>,
+  collection: string,
+  problems: string[],
+): T[] {
+  return values.flatMap((value, index) => {
+    const parsed = schema.safeParse(value);
+    if (parsed.success) return [parsed.data];
+    problems.push(`${collection}[${index}]: ${schemaIssue(parsed.error, "invalid record")}`);
+    return [];
+  });
+}
+
+function routineStorageError(file: string, cause: unknown): Error {
+  const reason = cause instanceof SyntaxError ? "invalid JSON"
+    : cause instanceof z.ZodError ? schemaIssue(cause, "invalid storage shape")
+    : cause instanceof Error ? cause.message : "unknown storage error";
+  // Parser causes can contain fragments of private routine text.
+  const options = cause instanceof SyntaxError || cause instanceof z.ZodError ? undefined : { cause };
+  const error = new Error(`Cannot load routines from ${file}: ${reason}. The original store was not overwritten.`, options);
+  console.error(error.message);
+  return error;
+}
 
 export type RoutineRequestOwner = Pick<RoutineRequestReceipt, "requestId" | "messageId" | "botId" | "threadId">;
 
@@ -732,65 +837,62 @@ export class RoutineManager {
     this.options = options;
     this.file = options.file ?? join(DATA_DIR, "routines.json");
     this.now = options.now ?? Date.now;
+    let contents: Buffer;
     try {
-      const disk = JSON.parse(readFileSync(this.file, "utf8")) as Partial<RoutineFile>;
-      this.routines = Array.isArray(disk.routines)
-        ? disk.routines.flatMap((routine) => {
-            const schedule = loadSchedule(routine.schedule, this.now());
-            if (!schedule) return [];
-            const target = loadTarget(routine.target);
-            const loaded: Routine = {
-              ...routine,
-              schedule,
-              target,
-              groupId: loadGroupId(routine.groupId, target),
-              runOn: routine.runOn ?? "maus",
-              timeoutMinutes: loadTimeoutMinutes(routine.timeoutMinutes),
-              attachments: loadAttachments(routine.attachments),
-              sourceThreadId: persistedSourceThreadId.parse(routine.sourceThreadId),
-              resultsThreadId: persistedSourceThreadId.parse(routine.resultsThreadId),
-            };
-            if (loaded.timeoutMinutes === undefined) delete loaded.timeoutMinutes;
-            return [loaded];
-          })
-        : [];
-      this.runs = Array.isArray(disk.runs)
-        ? disk.runs.map((run) => {
-            const target = loadTarget(run.target);
-            const loaded: RoutineRun = {
-              ...run,
-              target,
-              goalStatus: loadGoalStatus(run.goalStatus, target),
-              groupId: loadGroupId(run.groupId, target),
-              runOn: run.runOn ?? "maus",
-              timeoutMinutes: loadTimeoutMinutes(run.timeoutMinutes),
-              attachments: loadAttachments(run.attachments),
-              sourceThreadId: persistedSourceThreadId.parse(run.sourceThreadId),
-              resultsThreadId: persistedSourceThreadId.parse(run.resultsThreadId),
-            };
-            if (loaded.timeoutMinutes === undefined) delete loaded.timeoutMinutes;
-            return loaded;
-          })
-        : [];
-      this.routineRequestReceipts = Array.isArray(disk.routineRequestReceipts)
-        ? disk.routineRequestReceipts.filter((receipt): receipt is RoutineRequestReceipt =>
-            typeof receipt?.requestId === "string" &&
-            typeof receipt?.messageId === "string" &&
-            typeof receipt?.botId === "string" &&
-            typeof receipt?.threadId === "string" &&
-            isRoutineRequestAction(receipt?.action) &&
-            receipt?.fingerprintVersion === 1 &&
-            typeof receipt?.fingerprint === "string" && /^[a-f0-9]{64}$/.test(receipt.fingerprint) &&
-            typeof receipt?.resultId === "string" &&
-            Number.isFinite(receipt?.appliedAt)
-          )
-        : [];
-      this.webhookRunReceipts = Array.isArray(disk.webhookRunReceipts)
-        ? disk.webhookRunReceipts.flatMap((receipt) => {
-            const parsed = webhookRunReceiptSchema.safeParse(receipt);
-            return parsed.success ? [parsed.data] : [];
-          })
-        : [];
+      contents = readFileSync(this.file);
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+      throw routineStorageError(this.file, error);
+    }
+    try {
+      const disk = storedRoutineFileSchema.parse(JSON.parse(contents.toString("utf8")));
+      const problems: string[] = [];
+      this.routines = storedRecords(disk.routines, storedRoutineSchema, "routines", problems).flatMap((routine) => {
+        const schedule = loadSchedule(routine.schedule, this.now());
+        if (!schedule) {
+          problems.push("routines: invalid schedule");
+          return [];
+        }
+        const target = loadTarget(routine.target);
+        const loaded: Routine = {
+          ...routine,
+          schedule,
+          target,
+          groupId: loadGroupId(routine.groupId, target),
+          timeoutMinutes: loadTimeoutMinutes(routine.timeoutMinutes),
+          attachments: loadAttachments(routine.attachments),
+          sourceThreadId: persistedSourceThreadId.parse(routine.sourceThreadId),
+          resultsThreadId: persistedSourceThreadId.parse(routine.resultsThreadId),
+        };
+        if (loaded.timeoutMinutes === undefined) delete loaded.timeoutMinutes;
+        return [loaded];
+      });
+      this.runs = storedRecords(disk.runs, storedRoutineRunSchema, "runs", problems).map((run) => {
+        const target = loadTarget(run.target);
+        const loaded: RoutineRun = {
+          ...run,
+          target,
+          goalStatus: loadGoalStatus(run.goalStatus, target),
+          groupId: loadGroupId(run.groupId, target),
+          timeoutMinutes: loadTimeoutMinutes(run.timeoutMinutes),
+          attachments: loadAttachments(run.attachments),
+          sourceThreadId: persistedSourceThreadId.parse(run.sourceThreadId),
+          resultsThreadId: persistedSourceThreadId.parse(run.resultsThreadId),
+        };
+        if (loaded.timeoutMinutes === undefined) delete loaded.timeoutMinutes;
+        return loaded;
+      });
+      this.routineRequestReceipts = storedRecords(
+        disk.routineRequestReceipts, storedRoutineRequestReceiptSchema, "routineRequestReceipts", problems,
+      );
+      this.webhookRunReceipts = storedRecords(
+        disk.webhookRunReceipts, webhookRunReceiptSchema, "webhookRunReceipts", problems,
+      );
+      if (problems.length) {
+        const backup = `${this.file}.recovery-${randomUUID()}.json`;
+        writeFileAtomic(backup, contents, { mode: 0o600 });
+        console.error(`routine: recovered valid work, skipped ${problems.length} invalid stored entries; original data preserved at ${backup}. ${problems.slice(0, 5).join("; ")}`);
+      }
       // Upgrade old run logs before history pruning can discard their IDs.
       const known = new Set(this.webhookRunReceipts.map((r) => JSON.stringify([r.webhookId, r.deliveryId])));
       for (const run of this.runs) {
@@ -800,11 +902,8 @@ export class RoutineManager {
         this.webhookRunReceipts.push({ webhookId: run.webhookId, deliveryId: run.deliveryId, runId: run.id, acceptedAt: run.createdAt });
         known.add(key);
       }
-    } catch {
-      this.routines = [];
-      this.runs = [];
-      this.routineRequestReceipts = [];
-      this.webhookRunReceipts = [];
+    } catch (error) {
+      throw routineStorageError(this.file, error);
     }
     // A local process cannot still own these turns after a full restart.
     const recovered: RoutineRun[] = [];

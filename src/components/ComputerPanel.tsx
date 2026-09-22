@@ -146,7 +146,7 @@ const PANEL_MIN_WIDTH = 360;
 const PANEL_MAX_WIDTH = 960;
 const PANEL_DEFAULT_WIDTH = 400;
 const STREAMLINED_PANEL_MIN_WIDTH = 280;
-const STREAMLINED_PANEL_DEFAULT_WIDTH = 296;
+const STREAMLINED_PANEL_DEFAULT_WIDTH = 320;
 
 function readPanelWidth(streamlined = false): number {
   const key = streamlined ? STREAMLINED_PANEL_WIDTH_KEY : PANEL_WIDTH_KEY;
@@ -274,8 +274,8 @@ export function ComputerPanel({
   }, [bot.id, bot.computer, cloudBackend, flushBotPatches]);
   const [boxState, setBoxState] = useState<string | null>(null);
   const [polledFrame, setPolledFrame] = useState<{ png: string; mime: string } | null>(null);
-  const [, setPreviewError] = useState<Error | null>(null);
-  const [previewRetry] = useState(0);
+  const [previewError, setPreviewError] = useState<Error | null>(null);
+  const [previewRetry, setPreviewRetry] = useState(0);
   const [ruijieFrame, setRuijieFrame] = useState<{ png: string; mime: string } | null>(null);
   const [vmFrame, setVmFrame] = useState<string | null>(null);
   // The Local VM's interactive noVNC viewer (passworded, autoconnect). The
@@ -1172,23 +1172,24 @@ export function ComputerPanel({
   } satisfies Record<Exclude<Phase, "ready" | "local" | "vm">, string>;
 
   if (streamlined) {
-    const connected = Boolean(frameSrc);
+    const previewProblem = Boolean(errorText || previewError || phase === "error");
+    const connected = Boolean(frameSrc) && !previewProblem;
     const canOpen = previewOpensDesktop || cloudDesktopReady || (phase === "vm" && Boolean(vmViewerUrl));
-    const waiting = !ruijieDisconnected && ["checking", "starting", "ready", "vm", "local"].includes(phase) && !connected;
+    const waiting = !ruijieDisconnected && !previewProblem && ["checking", "starting", "ready", "vm", "local"].includes(phase) && !connected;
     const compactStatus = ruijieDisconnected
       ? "已断开连接"
       : connected
       ? "已连接"
       : waiting
         ? "正在连接…"
-        : errorText || phase === "error"
+        : previewProblem
           ? "电脑暂时无法连接"
           : "暂无可用电脑";
 
     return (
       <aside
-        className="animate-panel-in relative flex h-full shrink-0 flex-col border-l border-hairline/40 bg-panel"
-        style={{ width: panelWidth }}
+        className="ruijie-computer-panel animate-panel-in relative flex h-full shrink-0 flex-col border-l border-hairline/40 bg-panel"
+        style={{ width: panelWidth, maxWidth: "max(280px, calc(100% - 680px))" }}
       >
         <div
           role="separator"
@@ -1201,7 +1202,11 @@ export function ComputerPanel({
           className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize hover:bg-accent/40"
         />
 
-        <div className="flex h-12 shrink-0 items-center justify-end px-3">
+        <div className="flex h-12 shrink-0 items-center justify-between gap-2 px-3">
+          <div className="flex min-w-0 items-center gap-2 text-ui-small font-medium text-ink-secondary">
+            <Monitor size={14} className="shrink-0" />
+            <span className="truncate">{bot.name} 的电脑</span>
+          </div>
           <button
             type="button"
             onClick={closeComputerPanel}
@@ -1213,7 +1218,7 @@ export function ComputerPanel({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6">
-          <div className="relative flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl border border-hairline/30 bg-gradient-to-br from-control via-card to-inset shadow-[0_14px_36px_rgba(0,0,0,0.2)]">
+          <div className="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-lg border border-hairline/30 bg-inset">
             {frameSrc ? (
               <img
                 src={frameSrc}
@@ -1239,9 +1244,9 @@ export function ComputerPanel({
             )}
           </div>
 
-          <div className="mt-3 text-center">
-            <div className="text-[12px] font-medium text-ink-secondary">{bot.name} 的电脑</div>
-            <div className={cn("mt-0.5 text-[10.5px]", connected ? "text-emerald-400/80" : "text-ink-secondary/65")}>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+            <div role="status" className="flex items-center gap-1.5 text-ui-caption text-ink-secondary">
+              <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", connected ? "bg-emerald-400" : "bg-ink-secondary/40")} />
               {compactStatus}
             </div>
             {cloudBackend === "ruijie-sandbox" && bot.computer === "cloud" && phase === "ready" && (
@@ -1249,33 +1254,38 @@ export function ComputerPanel({
                 type="button"
                 onClick={() => ruijieDisconnected ? setRuijieDisconnected(false) : void disconnectRuijie()}
                 disabled={pending === "disconnect"}
-                className="mt-2 rounded-lg border border-hairline/50 bg-control px-3 py-1.5 text-[11px] text-ink transition-colors hover:bg-raised-hover disabled:cursor-wait disabled:opacity-60"
+                className="rounded-md border border-hairline/50 bg-control px-2 py-1 text-ui-caption text-ink transition-colors hover:bg-raised-hover disabled:cursor-wait disabled:opacity-60"
               >
                 {pending === "disconnect" ? "正在断开…" : ruijieDisconnected ? "重新连接" : "断开连接"}
               </button>
             )}
           </div>
 
-          <section className="mt-7" aria-label="例行任务">
+          {previewProblem && <div role="alert" className="mt-2 text-ui-small text-danger">
+            {errorText || panelErrorText(previewError) || "电脑暂时无法连接"}
+            <button type="button" className="ml-2 underline" onClick={() => { setError(null); setPreviewError(null); setRetry(n => n + 1); setPreviewRetry(n => n + 1); }}>重试</button>
+          </div>}
+
+          <section className="mt-4 border-t border-hairline/30 pt-3" aria-label="例行任务">
             <div className="flex items-center justify-between">
-              <h2 className="text-[15px] font-semibold tracking-tight text-ink">例行任务</h2>
+              <h2 className="text-ui-small font-medium text-ink-secondary">例行任务</h2>
               <button
                 type="button"
                 onClick={() => dispatch({ type: "showRoutines", section: "schedule", view: "list", botId: bot.id })}
                 aria-label="添加例行任务"
                 className="rounded-lg p-1.5 text-ink-secondary transition-colors hover:bg-control hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               >
-                <Plus size={18} />
+                <Plus size={16} />
               </button>
             </div>
 
-            <div className="mt-3 space-y-1">
+            <div className="mt-1 space-y-1">
               {botRoutines.length ? botRoutines.map((routine) => (
                 <button
                   key={routine.id}
                   type="button"
                   onClick={() => dispatch({ type: "showRoutines", section: "schedule", view: "list", botId: bot.id, routineId: routine.id })}
-                  className="group flex w-full items-start gap-3 rounded-xl px-2 py-3 text-left transition-colors hover:bg-control/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  className="group flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-control/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 >
                   <CalendarClock size={18} className={cn("mt-0.5 shrink-0", routine.enabled ? "text-accent" : "text-ink-secondary/55")} />
                   <span className="min-w-0 flex-1">
@@ -1293,7 +1303,7 @@ export function ComputerPanel({
                 <button
                   type="button"
                   onClick={() => dispatch({ type: "showRoutines", section: "schedule", view: "list", botId: bot.id })}
-                  className="w-full rounded-xl border border-dashed border-hairline/40 px-3 py-4 text-left text-[11.5px] text-ink-secondary transition-colors hover:border-hairline hover:bg-control/30 hover:text-ink"
+                  className="w-full rounded-md px-2 py-2 text-left text-ui-small text-ink-secondary transition-colors hover:bg-control/40 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 >
                   暂无例行任务，点击添加
                 </button>

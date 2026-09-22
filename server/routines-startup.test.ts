@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { closeSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
@@ -8,7 +8,7 @@ import { launchVerificationServer, runControlOmb } from "../scripts/control-omb.
 import { RoutineManager, type RoutineRun } from "./routines.ts";
 import { waitForExit } from "./testing/cleanup.ts";
 
-it("recovers queued/due work without resurrecting an interrupted routine after restart", async () => {
+it("recovers valid queued/due work beside damaged records without resurrecting an interrupted routine", async () => {
   const fixture = await launchVerificationServer();
   const { url, dataDir, logPath } = fixture.info;
   let restarted: ChildProcess | undefined;
@@ -78,7 +78,10 @@ it("recovers queued/due work without resurrecting an interrupted routine after r
       scheduledFor: dueAt - 60_000, createdAt: dueAt - 60_000, startedAt: dueAt - 60_000,
       finishedAt: dueAt - 60_000, manual: true, status: "completed", threadId: reusedBot.threadId,
     });
-    writeFileSync(file, JSON.stringify(disk));
+    disk.routines.push(null);
+    disk.runs.push(null);
+    const damagedStore = JSON.stringify(disk);
+    writeFileSync(file, damagedStore);
     writeFileSync(join(dataDir, "delegations.json"), JSON.stringify({
       [interruptedBot.threadId]: [{
         id: "orphan-handoff", sourceBotId: interruptedBot.id, toBotId: orphanPeer.id,
@@ -131,6 +134,16 @@ it("recovers queued/due work without resurrecting an interrupted routine after r
     const restoredCron = (await api("GET", "/api/routines")).routines.find((routine: { id: string }) => routine.id === cron.id);
     expect(restoredCron.schedule).toEqual(cron.schedule);
     expect(restoredCron.nextRunAt).toBeGreaterThan(Date.now());
+    const recoveryFiles = readdirSync(dataDir).filter((name) => name.startsWith("routines.json.recovery-"));
+    expect(recoveryFiles).toHaveLength(1);
+    expect(readFileSync(join(dataDir, recoveryFiles[0]!), "utf8")).toBe(damagedStore);
+    const { routine: later } = await api("POST", "/api/routines", {
+      name: "Saved after recovery", prompt: "Retain the earlier valid definitions",
+      botId: scheduledBot.id, enabled: false,
+      schedule: { type: "daily", time: "09:00", weekdays: [1] },
+    });
+    const recoveredDefinitions = (await api("GET", "/api/routines")).routines.map((routine: { id: string }) => routine.id);
+    expect(recoveredDefinitions).toEqual(expect.arrayContaining([scheduled.id, cron.id, manual.id, interrupted.id, later.id]));
     const recoveredPeer = (await api("GET", "/api/bots")).bots.find((bot: { id: string }) => bot.id === orphanPeer.id);
     expect(recoveredPeer.messages.some((message: { role: string }) => message.role === "user")).toBe(false);
     expect(Boolean(recoveredPeer.busy)).toBe(false);
@@ -147,7 +160,7 @@ it("recovers queued/due work without resurrecting an interrupted routine after r
     const wait = await runControlOmb(["wait", "--bot", scheduledBot.id, "--task", scheduledRun.threadId!, "--url", url]);
     const messages = await runControlOmb(["messages", "--bot", scheduledBot.id, "--task", scheduledRun.threadId!, "--url", url]);
     expect(wait).toMatchObject({ status: "settled" });
-    const evidence = { fixture: fixture.info, restartPid: restarted.pid, runs, wait, messages };
+    const evidence = { fixture: fixture.info, restartPid: restarted.pid, recoveryFiles, recoveredDefinitions, runs, wait, messages };
     writeFileSync(`${logPath}.routines-restart.json`, JSON.stringify(evidence, null, 2));
     console.log(JSON.stringify({ logPath, evidencePath: `${logPath}.routines-restart.json` }));
   } finally {

@@ -282,9 +282,9 @@ const Transcript = memo(function Transcript({
                 )}
                 <div
                   className={cn(
-                    "w-fit max-w-[min(42rem,78%)] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed",
+                    "chat-bubble w-fit max-w-[min(40rem,84%)] rounded-[14px] px-3 py-2 text-ui-body",
                     !user && m.id === emergingId && "turn-answer",
-                    user ? "chat-text whitespace-pre-wrap bg-bubble-user text-ink" : "bg-card text-ink",
+                    user ? "chat-text whitespace-pre-wrap bg-bubble-user text-ink" : "chat-answer bg-card text-ink",
                   )}
                   title={new Date(m.at).toLocaleString()}
                 >

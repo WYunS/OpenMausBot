@@ -33,6 +33,7 @@ jobs:
         with:
           repository: AI-Applications-Team/ruijie-harness
           ref: f48fe5cb09e37c1bcb4ed2c19f75ce5e1bf8aeae
+          token: ${{ secrets.RUIJIE_HARNESS_READ_TOKEN }}
           path: ruijie-harness
           persist-credentials: false
           submodules: recursive

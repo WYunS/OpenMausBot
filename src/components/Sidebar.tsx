@@ -225,7 +225,7 @@ export function GroupListItem({
       <StackedMauses members={members} density={density} />
       <div className={cn("min-w-0 flex-1", density === "icons" && "hidden")}>
         <div className="flex items-baseline justify-between gap-2">
-          <span className="truncate text-[14px] font-semibold text-ink">{group.name}</span>
+          <span className="truncate text-ui-base font-medium text-ink">{group.name}</span>
           {selected && last && !expanded && <span className="shrink-0 text-[10px] text-ink-secondary">{formatTime(last.at)}</span>}
           {expanded && group.unread && <span className="size-1.5 shrink-0 rounded-full bg-accent" aria-label={t("task.unreadMany")} />}
         </div>
@@ -1021,7 +1021,7 @@ export function BotListItem({
   useEffect(() => {
     if (iconOnly) setRenaming(false);
   }, [iconOnly]);
-  const avatarSize = iconOnly ? 44 : density === "compact" ? (showThreads ? 26 : 40) : (showThreads ? 32 : 56);
+  const avatarSize = iconOnly ? 36 : density === "compact" ? (showThreads ? 26 : 30) : (showThreads ? 28 : 32);
   // the visible branch, so a version switch changes the row with the chat
   const visible = visibleMessages(bot);
   const last = visible.at(-1);
@@ -1031,11 +1031,11 @@ export function BotListItem({
       ? "justify-center px-1 py-1.5"
       : density === "compact"
         ? cn(showThreads ? "gap-1.5 py-1" : "gap-2 py-1.5", showThreads ? "pl-6 pr-9 group-hover:pr-16 group-focus-within:pr-16 max-md:pr-16" : "pl-2 pr-9")
-        : cn(showThreads ? "gap-2 py-2" : "gap-3 py-2.5", showThreads ? "pl-6 pr-9 group-hover:pr-16 group-focus-within:pr-16 max-md:pr-16" : "pl-2 pr-9"),
+        : cn(showThreads ? "gap-2 py-1.5" : "gap-2.5 py-1.5", showThreads ? "pl-6 pr-9 group-hover:pr-16 group-focus-within:pr-16 max-md:pr-16" : "pl-2 pr-9"),
     // Chief of Staff is called out by the crown label below, not by tinting
     // the whole row — an accent border + fill read as "selected" even when
     // another bot was active.
-    selected ? "bg-raised/70" : "hover:bg-raised/40",
+    selected ? "bg-selected" : "hover:bg-hover",
   );
   const activityTasks = sidebarBotActivityTasks(bot, state.pendingQueued);
   const waiting = bot.activity === "waiting-on-you" || activityTasks.some((task) => task.activity === "waiting-on-you");
@@ -1078,7 +1078,7 @@ export function BotListItem({
       </span>
       <div className={cn("min-w-0 flex-1", iconOnly && "hidden")}>
         <div className="flex items-baseline justify-between gap-2">
-          <span className="flex min-w-0 grow items-center gap-1.5 truncate text-[14px] font-semibold text-ink">
+          <span className="flex min-w-0 grow items-center gap-1.5 truncate text-ui-base font-medium text-ink">
             {bot.pinned && <Pin size={12} className="shrink-0 text-ink-secondary" />}
             <RenameTitle
               key={iconOnly ? "icons" : "expanded"}
@@ -1094,7 +1094,7 @@ export function BotListItem({
               }}
               onEditingChange={setRenaming}
               className="truncate"
-              inputClassName="w-full rounded bg-inset px-1 py-0.5 text-[14px] font-semibold"
+              inputClassName="w-full rounded bg-inset px-1 py-0.5 text-ui-base font-medium"
             />
           </span>
           {selected && last && !renaming && !expanded && (
@@ -1118,7 +1118,7 @@ export function BotListItem({
               {t("sidebar.bot.deletingRow")}
             </span>
           ) : (
-            <span className="flex min-w-0 items-center gap-1.5 truncate text-[11px] text-ink-secondary">
+            <span className="flex min-w-0 items-center gap-1.5 truncate text-ui-small text-ink-secondary">
               {working ? (
                 // the same typing dots as the chat header; sized to the text's
                 // line box so the row does not jump when work starts or ends
@@ -1808,8 +1808,8 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       className={cn(
         "flex h-full shrink-0 flex-col border-r border-hairline/40 bg-panel transition-[width] duration-200",
         streamlined
-          ? density === "icons" ? "w-[68px]" : density === "compact" ? "w-[252px]" : "w-[272px]"
-          : density === "icons" ? "w-[80px]" : density === "compact" ? "w-[272px]" : "w-[320px]",
+          ? density === "icons" ? "w-[68px]" : density === "compact" ? "w-[252px]" : "w-[280px]"
+          : density === "icons" ? "w-[72px]" : density === "compact" ? "w-[264px]" : "w-[288px]",
         // Below md only: the sidebar leaves the flow and slides in over the chat.
         // Scoped with max-md: rather than cancelled with md: on purpose — Tailwind
         // v4 emits the native `translate` property, and any value other than
@@ -1824,7 +1824,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
     >
       {/* macOS owns inset traffic lights; Linux/Windows use native chrome. */}
       <div
-        className={cn("flex min-h-[56px] shrink-0 items-center pt-3.5 pb-1", density === "icons" ? "flex-col gap-1 px-2" : "justify-between px-4")}
+        className={cn("flex shrink-0 items-center", streamlined ? "min-h-12 py-1" : "min-h-[56px] pt-3.5 pb-1", density === "icons" ? "flex-col gap-1 px-2" : "justify-between px-3")}
         style={windowDragStyle}
       >
         {macInset ? (
@@ -1961,7 +1961,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       </div>
 
       {/* Search */}
-      <div className={cn("pt-1 pb-3", density === "icons" ? "hidden" : "px-3")}>
+      <div className={cn("pt-1 pb-2", density === "icons" ? "hidden" : "px-3")}>
         <div className="flex items-center gap-2 rounded-md border border-hairline/40 bg-inset/40 px-2.5 py-1.5 focus-within:border-accent/50">
           <Search size={14} className="text-ink-secondary" />
           <input

@@ -1,0 +1,37 @@
+diff --git a/templates/nsis/include/extractAppPackage.nsh b/templates/nsis/include/extractAppPackage.nsh
+index f5470bf52e923dc47266cea4684c76ef78ced451..67f7bcd82fa4a534116dd05c66fc3ced8e0e0026 100644
+--- a/templates/nsis/include/extractAppPackage.nsh
++++ b/templates/nsis/include/extractAppPackage.nsh
+@@ -90,6 +90,26 @@
+ !macroend
+ 
+ !macro extractUsing7za FILE
++!ifdef RUIJIE_LONG_PATH_7ZA
++  # The NSIS plugin silently skips deep paths even when it exits successfully.
++  # Extract the same verified payload directly with the pinned standalone tool.
++  Push $R0
++  Push $R1
++  File /oname=$PLUGINSDIR\ruijie-7za.exe "${RUIJIE_LONG_PATH_7ZA}"
++  DetailPrint "Extracting application files (long paths supported)..."
++  nsExec::ExecToStack '"$PLUGINSDIR\ruijie-7za.exe" x "${FILE}" "-o$OUTDIR" -y -bso0 -bsp0'
++  Pop $R0
++  Pop $R1
++  ${If} $R0 != "0"
++    DetailPrint "Application extraction failed: $R0 $R1"
++    IfSilent +2
++      MessageBox MB_OK|MB_ICONSTOP "Application extraction failed ($R0). Installation did not complete."
++    SetErrorLevel 2
++    Quit
++  ${EndIf}
++  Pop $R1
++  Pop $R0
++!else
+   Push $OUTDIR
+   CreateDirectory "$PLUGINSDIR\7z-out"
+   ClearErrors
+@@ -135,4 +155,5 @@
+     Goto LoopExtract7za
+ 
+   DoneExtract7za:
++!endif
+ !macroend

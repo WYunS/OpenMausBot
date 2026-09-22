@@ -29,11 +29,24 @@ export function validateConfig(config) {
   for (const file of [...config.versionFiles, config.adapter]) inside(process.cwd(), file);
   assert(Array.isArray(config.targets) && config.targets.length > 0, 'No targets');
   assert(new Set(config.targets).size === config.targets.length, 'Duplicate targets');
-  for (const t of config.targets) assert(['windows-x64', 'linux-x64', 'macos-universal'].includes(t), `Unknown target ${t}`);
+  for (const t of config.targets) assert(['windows-x64', 'linux-x64', 'macos-universal', 'macos-arm64', 'macos-x64'].includes(t), `Unknown target ${t}`);
   assert(config.signing === 'testing', 'This release-kit version implements testing signing only; formal signing needs a validated adapter');
   return config;
 }
 export const sha256 = data => createHash('sha256').update(data).digest('hex');
+export function selectTargets(targets, selection = 'all') {
+  const selected = selection === 'all' ? [...targets] : targets.filter(target =>
+    selection === 'desktop' ? target === 'windows-x64' || target.startsWith('macos-')
+      : selection === 'macos' ? target.startsWith('macos-')
+      : target === ({windows:'windows-x64',linux:'linux-x64'}[selection] ?? selection));
+  assert(selected.length > 0, `Unsupported platform selection: ${selection}`);
+  return selected;
+}
+export function runnerForTarget(target) {
+  const runner = {'windows-x64':'windows-2025','linux-x64':'ubuntu-24.04','macos-universal':'macos-15','macos-arm64':'macos-15','macos-x64':'macos-15-intel'}[target];
+  assert(runner, `Unsupported runner target: ${target}`);
+  return runner;
+}
 export function preparedFiles(root, entries, versionFiles) {
   assert(Array.isArray(entries), 'Prepared metadata must be an array');
   const seen = new Set(versionFiles.map(file => file.toLowerCase()));
@@ -75,13 +88,17 @@ export async function stageFiles(root, output, files, metadata) {
   return manifest;
 }
 export async function collectRelease(root, expected) {
-  const dirs = (await readdir(root, { withFileTypes: true })).filter(e => e.isDirectory());
+  // download-artifact extracts one match directly into root, but multiple
+  // matches into artifact-name subdirectories. Accept both without merging
+  // directories (which could silently overwrite duplicate platform manifests).
+  const dirs = [root, ...(await readdir(root, { withFileTypes: true }))
+    .filter(e => e.isDirectory()).map(e => path.join(root, e.name))];
   const manifests = [];
   for (const dir of dirs) {
-    for (const file of await readdir(path.join(root, dir.name))) {
-      if (/^(windows-x64|linux-x64|macos-universal)\.json$/.test(file)) {
-        const manifest = JSON.parse(await readFile(path.join(root, dir.name, file), 'utf8'));
-        manifests.push({ ...manifest, dir: path.join(root, dir.name) });
+    for (const file of await readdir(dir)) {
+      if (/^(windows-x64|linux-x64|macos-universal|macos-arm64|macos-x64)\.json$/.test(file)) {
+        const manifest = JSON.parse(await readFile(await regular(dir, file), 'utf8'));
+        manifests.push({ ...manifest, dir });
       }
     }
   }

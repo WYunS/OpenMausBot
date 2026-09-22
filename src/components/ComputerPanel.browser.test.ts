@@ -7,9 +7,12 @@ import { browserAvailable, type FeatureFlagConfig } from "@/lib/feature-flags";
 const fixture = vi.hoisted(() => {
   vi.stubGlobal("window", {});
   vi.stubGlobal("document", { visibilityState: "visible" });
-  vi.stubGlobal("localStorage", { getItem: () => "browser" });
-  return { config: {} as FeatureFlagConfig };
+  vi.stubGlobal("localStorage", { getItem: (key: string) => key === "ruijie-computer-panel-width" ? fixture.savedWidth : "browser" });
+  return { config: {} as FeatureFlagConfig, streamlined: false, savedWidth: null as string | null };
 });
+// The browser-install controls belong to the full product, not the compact
+// Ruijie computer preview. Exercise both brands explicitly.
+vi.mock("@/lib/brand", () => ({ brand: () => ({ name: fixture.streamlined ? "锐捷Bot" : "OpenMausBot" }) }));
 vi.mock("@/state/store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/state/store")>(),
   useStore: () => ({
@@ -56,5 +59,28 @@ describe("Browser panel installation access", () => {
     expect(installing).toContain("Installing…");
     expect(installing).toContain('disabled=""');
     expect(installing).not.toContain("has its own browser");
+  });
+});
+
+describe("Ruijie compact computer panel", () => {
+  it("keeps the simple 320px panel, bounded width, resize, close and routine actions", () => {
+    fixture.streamlined = true;
+    try {
+      const html = render({});
+      expect(html).toContain('style="width:320px;max-width:');
+      expect(html).toContain('aria-label="Resize panel"');
+      expect(html).toContain('aria-label="Close"');
+      expect(html).toContain('aria-label="添加例行任务"');
+      expect(html).toContain('role="status"');
+      expect(html).toContain("aspect-video");
+      expect(html).not.toContain("border-dashed");
+      fixture.savedWidth = "420";
+      expect(render({})).toContain('style="width:420px;max-width:');
+      fixture.savedWidth = "240";
+      expect(render({})).toContain('style="width:320px;max-width:');
+    } finally {
+      fixture.streamlined = false;
+      fixture.savedWidth = null;
+    }
   });
 });

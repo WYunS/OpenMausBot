@@ -1,327 +1,218 @@
-# 锐捷Bot：macOS Universal 打包指导
+# 锐捷Bot：macOS 分架构打包指导
 
-## 2026-09-15 发行基线：新建 Bot 默认使用“这台电脑”
+## 当前发布入口（2026-09-21）
 
-本版本不依赖锐捷沙箱，也不随源码或 DMG 携带沙箱预置。首次启动及以后每次新建 Bot，
-`computer` 都必须默认为 `local`；旧 Bot 的既有选择保持不变。
+统一 workflow 默认 all + release，包含两个原生 Mac 任务以及 Windows、Linux；单测 Mac 可选 macos + artifacts。
+公司新流程仍在 0.1.86 分支；不要自动改选 main。Windows 修复不改变 Harness 2.1.10 或独立 Universal 发布。
+最新入口、权限、候选/正式发布区别见 [现行流程](../.release/README.md)。
+历史 v0.1.85 两份 DMG 已完成原生构建和自动检查；这不代表下文真人验收已完成。
 
-- `pnpm package:mac` 不要求 `build:sandbox` 或 `release-inputs/ruijie-sandbox.json`。
-- 源码、构建日志和产物不得包含账号、Token、Cookie、Keychain 内容、飞书凭据、模型密钥或 VPN 配置。
-- “这台电脑”依赖包内 CUA，并受 macOS 屏幕录制与辅助功能权限控制；必须按第三份指南验证同一签名身份、
-  首次授权、退出重开和覆盖升级，不得用 Windows 结果代替。
-- 沙箱功能仍可由用户以后主动配置，但不是默认电脑，也不是本版打包或放行条件。
 
-2026-09-14 的“私密沙箱预置为必需项”已退出本发行基线；以下旧流程不得执行。
+更新：2026-09-21。本篇替代旧 Bot Universal 实施清单，不保留可照抄执行的旧合包步骤。
+本轮交付 Apple Silicon、Intel 两份 DMG；仅 Bot 内置 Harness 随之分架构。
+独立下载的 Harness Universal 版本及其源码/发行流程不修改。
 
-<!-- 已废止的私密沙箱交付流程（仅保留历史背景）
+先完成 [通用指南的工作流更新清单](04-通用回归与发布门禁.md#1-维护者怎么更新公司工作流)。
+本地已准备的脚本不等于公司远端已同步，更不等于 Mac 最终 DMG 已构建、验签或真人通过。
+0.1.85 本轮已获授权更新工作流并执行原生 Mac 双包构建。实际通过状态以运行日志和最终 manifest 为准。
 
-## 2026-09-14 补充：默认云沙箱随私密源码交付
+## 0. 首次分架构发布的准备状态
 
-本次已增加跨平台的沙箱预置导入与打包流程，**不包含 Universal 原生资源改造**；下文 Universal 待实施边界不变。
-维护者交付的私密 `RuijieBot-source-<SHA>.tar.gz` 包含 `release-inputs/ruijie-sandbox.json`；
-公开 WYunS/main 不含密钥，仅从 GitHub clone 时须另收这一个私密文件，不能借打包者的 Keychain、SSO 或 cookie。
-归档不含 `.git`：解压后先 `git init && git add . && git commit -m "Import authorized source handoff"`；
-原始来源 SHA 见 `release-inputs/handoff.json`，此后按本机实际工作树生成新的验收记录。
+源码已准备 `macos-arm64` / `macos-x64` target、对应 runner 映射、thin App/DMG 包装、
+Harness 单架构覆盖配置、串行签名、包内依赖解析检查和分平台 manifest 收集。
+这些是首次双包发布的基础，不代表两种 CPU 的原生构建已实测。
 
-标准 `pnpm package:mac` 自动先运行 `pnpm build:sandbox`。缺失或非法输入立即阻断；
-手工构建前可执行 `node scripts/prepare-ruijie-sandbox-bootstrap.mjs`，或用
-`RUIJIE_SANDBOX_PRESET_FILE` 指向受控文件。禁止改用上游配置绕过预置和原有发布门禁。
-安装资源为 `.app/Contents/Resources/ruijie-sandbox/bootstrap.json`，首启使用当前用户 Keychain
-支持的 Electron safeStorage 保存凭据，manager URL 保存至 `~/.ruijiebot/config.json`；
-Windows 的 credentials.bin 不能复制来充当 Mac 的运行凭据。
+公司 `0.1.86` 分支工作流已接入固定 Harness 检出、分架构缓存/准备、单 CPU 校验、Mac 句柄限制和 metadata_local 输出。
+使用更新后的工作流分支，source_ref 固定本轮新提交 SHA；原 0.1.85 tag 不移动。
 
-新建 Bot 默认云端/锐捷沙箱；保留已有连接及主动清除意图，不覆盖其他账号或软件。
-预置限定 `attach_only: true`，只带 client_id/vnc_key/minio_url，不能夹带 models/custom_env 密钥；
-已有桌面消失时请管理员恢复，安装端不会自动重建或改变对面的环境。
-飞连/内网可达是前提；同一模板共享同一桌面，各安装实例之间无中央排队。
-配置、私密源码归档和含共享凭据的安装器仅交授权人员，不上传公开 GitHub/Release。
-本机 Windows 测试不代表 Mac Keychain、签名后运行或最终 DMG 已验收，必须执行第三份指南新增测试。
+挂载 DMG 的路径可能同时以 `/var` 和 `/private/var` 表示同一目录。
+Harness 导出 smoke 对 bundle 根目录与解析结果都使用 realpath 后检查包含关系；
+目录别名应通过，真正链接到包外或借用父目录依赖仍须失败。
 
-本地编译预览与安装版现在共用预置导入和加密凭据保存；同地址、缺凭据的旧配置可补齐，
-但已有自定义连接及显式清除标记不覆盖。Mac 仍须独立测连续重开、钥匙串持久化与真实画面，
-不能以 Windows 客户端通过替代 Mac 验收。
+共同准备：同一 Bot 0.1.85 源码 SHA、同一 toolkit tree SHA、Harness 2.1.10 固定提交、
+私库只读访问和相同依赖锁文件。分开准备：原生 runner、Node/Electron CPU、Harness/CUA/浏览器/飞书运行时、
+缓存键、暂存目录、签名审计、DMG、manifest 和真人验收记录。
+一次 `platforms=macos` 的未来矩阵可以同时生成两包；“分两包”不要求手工运行两次或维护两条源码分支。
+若分次构建，也必须固定同一最终构建 SHA，不能把不同候选提交的产物拼到一起。
 
--->
 
-> 2026-09-11 文档状态：**Universal 交付规范，尚未实施或验收**。
-> 当前代码基线为 `d7cd142712c11f44a7a13d9e75c8d31ad9799891`，仍按 arm64/x64 分架构打包。
-> 本次只保留文档修改，源码、构建配置和 Actions 没有合入 Universal 改造，也没有打包。
-> 已有 Mac 飞书基础适配与分架构运行时不等于 Universal 已可用；签名后运行、真实授权和 TCC 仍待验。
+## 1. 先确定目标、原生机器和交付路径
 
-交付目标是 **一个 Universal DMG，同时支持 Apple Silicon（M 系列）和 Intel**。
-目标是同一个 `.app` 内含双架构 Electron/Helper，原生侧车带齐两套并按运行架构选用。
-Bot 版本以 package.json 为准；本指南不是 Harness 打包指南，
-不要照搬 Harness 版本号、Yarn 或 `cn.com.ruijie.dsh.desktop` 身份。
-先读本目录签名策略，最终交付按 `03-macOS真人验收测试指导.md` 验收。
+| 项目 | Apple Silicon | Intel |
+| --- | --- | --- |
+| Actions platforms 单选 | `macos-arm64` | `macos-x64` |
+| 企业矩阵 target | `macos-arm64` | `macos-x64` |
+| 运行时/staging target | `darwin-arm64` | `darwin-x64` |
+| 原生 runner | `macos-15` | `macos-15-intel` |
+| Node / Electron process.arch | `arm64` | `x64` |
+| lipo 主程序期望 | `arm64` | `x86_64` |
+| 构建中 App | `release/mac-arm64/OpenMausBot.app` | `release/mac/OpenMausBot.app` |
+| 最终安装器 | `RuijieBot-<版本>-mac-arm64.dmg` | `RuijieBot-<版本>-mac-x64.dmg` |
 
-## 0. 当前状态与执行边界
+`platforms=macos` 在同一次运行构建并验证两份。
+两包共用 Bot 版本与 prepare 输出的最终构建 SHA，但包字节、大小和 SHA-256 本来就应分别记录，
+不再要求相同 DMG 哈希。不要使用 `release/mac-universal` 或 `Resources/native/darwin-...` 的旧目标布局。
 
-当前 `electron-builder.yml` 的 DMG/ZIP 目标仍为 `arch: [arm64, x64]`；
-锐捷配置继承这个目标。直接运行现有 `pnpm package:mac` 不会得到合格的 Universal 包。
-资源当前在平面 `Resources` 目录按架构复制，hooks 与 Release 资产规则也仍按分架构工作。
-把文件名改成 universal、只加构建器参数或把两份 DMG 压在一起，均不满足本指南。
+Mac 需要对应 CPU 的 Node、Xcode Command Line Tools 和 Swift 工具链；
+Node 当前固定 24.20.0，Bot pnpm 当前固定 10.33.0，以本次源码配置为准。
+M 系列用 x64 Node/Rosetta 跑通不能替代 Intel runner/实机验收。
+Windows 不能代替 Mac 的 codesign、DMG 挂载、Keychain 和 TCC 验证。
 
-后续执行者须先取得源码/流程实施授权，完成第 2.1 节并通过无安装器预检；
-再取得候选构建授权，才执行下文打包命令。文档任务到文字核对为止，不能自动升级为实施、
-运行 Actions、构建、提交、推送或发布。正式分发还须独立完成最终 DMG 的真人验收。
-先读 [通用回归与发布门禁](04-通用回归与发布门禁.md)，其中“待实施”要求不能当成已生效门禁。
+## 2. 维护者须一起同步的 Mac 配套内容
 
-## 1. 源码与环境
+除通用清单之外，逐项核对以下连接关系，不是只给 YAML 改两个 target：
 
-公开仓库 <https://github.com/WYunS/OpenMausBot>，正式交付入口为它自己的 `main`。
-从该分支固定完整 SHA；Mac 与 Windows 一致，不使用作者仓库的 main 或旧修复分支替代。
-普通 main 推送不自动生成安装器；Release 仅保留手动入口，其上游发布/镜像步骤须另行审查。
-可在自己的任意可写路径检出，以下从仓库根目录执行：
+1. `.release/config.json` 包含 arm64/x64；toolkit 的平台选择、runner 映射、签名说明和 collector 支持新 target。
+2. `package-release.yml` 的 Mac 选项、矩阵、Harness `--arch`、缓存键、原生签名/CPU 验证均已更新。
+   新流程不依赖旧 Universal `intel` 复验 job；该 job 跳过正常，Intel 由自身 build/verify 负责。
+3. `.release/adapter.mjs` 按当前 CPU 准备 Harness、CUA、飞书；
+   使用 enterprise builder 生成单架构 App，然后调用 `scripts/package-enterprise-macos-thin.mjs`。
+4. `scripts/build-ruijie-harness.mjs` 支持两种 `--arch`；
+   使用 Bot 临时覆盖配置，保留 Harness 自己的打包运行时校验，再签名、验证并 staging。
+5. `scripts/enterprise-macos-sign.mjs` 支持平面资源布局及由内到外的串行签名，
+   保留固定 Harness/飞书字节，检查 Bot 和 Harness 主程序只有目标 CPU。
+6. 最终 DMG 必须只读挂载后重新验签/验资源，并在对应原生 runner 执行包内 smoke；
+   不是只检查构建目录中还没装进 DMG 的 App。
+
+旧 `scripts/package-enterprise-macos.mjs` 和历史 Universal 识别代码可为旧包保留，
+不作为本轮新构建入口。不修改独立 Harness 仓库的 Universal 配置，也不从中移除公开支持。
+
+## 3. 工作流参数和前置条件
+
+在获得运行授权后打开
+[公司“打包发布”](https://github.com/AI-Applications-Team/OpenMausBot/actions/workflows/package-release.yml)：
+
+- `Use workflow from` 选含新 YAML 的审核分支；`source_ref` 选含全部配套源码的同一审核版本。
+  不用旧 main/旧标签替代，尤其不要让新 YAML 检出缺新脚本的老源码。
+- `version` 留空读取源码，或使用负责人指定的未占用版本。
+  已存在同版本 Release、标签指向错误提交均应停止，不移动标签、不覆盖资产。
+- `platforms=macos` 生成两份；只验一种 CPU 可单选，但不能宣称另一种通过。
+- `mode=artifacts` 为默认值，只存测试产物，不发布 Release、不创建候选源码提交。
+  默认 `platforms=desktop` 还包括 Windows；只需要两份 Mac 时选 macos。
+
+公司 Harness 私库使用 `RUIJIE_HARNESS_READ_TOKEN` Contents 只读，固定提交并递归检出 submodule。
+不需要个人账号、沙箱配置、Apple Developer ID、公证密钥来生成此企业内测候选。
+组织必须允许所需 Actions/cache/artifact、原生 runner 和 YAML 所列 job 权限。
+
+不要改跑 `pnpm package:mac` 或旧 `release.yml` 来代替：
+它们仍带正式回执/旧发布路径，不与企业分包入口等价。
+临时本机复现也应参照同版本 adapter 的完整准备顺序，不省略 prepare 的版本元数据和构建指纹。
+
+## 4. 构建、缓存和包内布局
+
+内置 Harness pin：
+`2.1.10` / `f48fe5cb09e37c1bcb4ed2c19f75ce5e1bf8aeae`。
+第一次在干净 runner 上构建对应 CPU；后续可复用验证后的缓存。
+缓存键含 target、Harness SHA 与构建脚本摘要；命中后仍核对完整目录、pin、签名和单 CPU。
+不能把 Universal 缓存改目录名后冒充 thin。
+
+Harness 源码的 file: 锁元数据稳定化由脚本处理，禁止 registry 依赖漂移，结束时恢复锁文件。
+已提交的 vendor-sidebar 只验证，不重新生成；只允许明确列出的生成图标变动。
+不要因“dirty”直接删除他人改动，也不能放开任意源码变更。
+
+每个 App 的实际资源在 `Contents/Resources`，是**本架构平面目录**：
+
+```text
+Contents/Resources/
+  app.asar
+  app-update.yml
+  enterprise-release.json
+  ui/                         当前 Bot UI
+  server/                     当前 Bot 服务
+  companion/
+  cua-driver
+  cua-sdk/
+  cloudflared/cloudflared
+  browser-engine/             本架构完整浏览器及清单
+  tuantuan-feishu/            连接器代码
+  tuantuan-feishu-runtime/    本架构固定 CLI / Node
+  ruijie-harness/             本架构完整内置 Harness 及清单
+  OpenMausBot Speech.app/
+  licenses/
+```
+
+不要要求一份 App 同时带两棵 browser/Feishu/Harness，也不要检查不存在的
+`Resources/native/darwin-arm64` / `darwin-x64`。
+CUA 的单架构准备是本轮正常行为，不能沿用“partial 一律禁止”的 Universal 标准。
+小型 speech 等辅助程序可保留 Universal；它们必须兼容目标 CPU，
+但 Bot 和 Harness 主程序必须精确为单 CPU。
+
+UI/server/companion/updater 必须由当前源码构建；desktop-build 指纹与包内复制结果均要验证。
+修改指南/配置也可能使旧指纹失效；先完成交付内容再构建，不单独写 receipt 掩盖旧 dist。
+
+## 5. 签名标准：内部候选不等于正式公证
+
+本入口的实际顺序是：
+
+1. enterprise electron-builder 先生成 thin App，`identity:null`，不做外层并行签名。
+2. thin 包装脚本更新必要元数据、检查结构，然后串行签名：更深的 Helpers/Libraries 先于框架和主 App。
+3. Harness 在自己的 staging 前已签名/算摘要；飞书使用批准的固定制品。
+   Bot 最终签名步骤保留这些字节，不强行 lipo 或重签。
+4. 完整验证目标 CPU、固定资源摘要和外层/嵌套代码签名，再制作 DMG。
+5. 挂载最终 DMG，重新验签；adapter 再从挂载内容运行 Harness、飞书、浏览器及服务端 smoke。
+
+因此，仅 electron-builder 返回 0、只验一个主 exe、或只看到配置中 identity:null，都不是最终结果。
+最终准确状态为 **ad-hoc signed, not notarized**，不是完全未签名，也不是 Developer ID 正式发行。
+
+企业流程不要求所有固定供应商侧车与 Bot 同 Team ID。
+保持原字节时按固定摘要/供应商策略校验；若擅自重签会破坏 pin，不能靠删哈希断言解决。
+正式 Developer ID 重签/公证路径须另做签名前来源、签名后身份及许可验收，不在本指南里“自动降级”通过。
+
+`spctl` 或 stapler 拒绝未公证内测包不能直接判为本流程“忘了公证”；
+但 signatures 不完整、架构不符、资源被改仍必须失败。
+按组织策略由测试者确认首次打开；禁止把全局关闭 Gatekeeper、批量删除 quarantine、
+重置全局 TCC 当成标准安装步骤。
+
+[Mac 签名与 TCC 策略](macOS代码签名与TCC身份策略.md) 可用于责任进程/TCC 诊断；
+其中面向正式签名或旧 Universal 的要求不能套到本轮企业内测。
+本文不修改该独立策略文件，也不宣称已经完成正式签名改造。
+
+## 6. 最终 DMG 怎么验，什么不算通过
+
+自动脚本会在原生 runner 挂载并验证最终 DMG；人工复核必须使用
+交付给测试者的**同一文件及其 SHA-256**，不能从另一次本机重打的 App 取证。
+
+需补做只读基础诊断时，先从实际挂载位置选择 App，不把下面路径当成自动挂载结果：
 
 ```bash
-git clone --branch main https://github.com/WYunS/OpenMausBot.git OpenMausBot
-cd OpenMausBot
 set -euo pipefail
-REPO_ROOT="$(git rev-parse --show-toplevel)"
-cd "$REPO_ROOT"
-git status --short
-git rev-parse HEAD
-node --version
-corepack pnpm --version
-node -p 'require("./package.json").version'
-xcode-select -p
-```
-
-要求原生 macOS、Node 24.x、Corepack 管理的 pnpm 10.33.0、Xcode Command Line Tools。
-不要从 Windows 交叉打出 DMG 就声称 Mac 可用。安装 Swift speech helper 需要本机 Apple
-工具链，但 Electron、CUA、Chromium、cloudflared 使用锁定预编译文件，不从零编译。
-不要覆盖已有开发现场；新打包者优先用独立干净检出，保留可校验下载缓存。
-
-## 2. 发布配置和许可
-
-始终用 `--config electron-builder.ruijie.mjs`，更新源才是 `WYunS/OpenMausBot`。
-`pnpm package:mac` 已接入锐捷配置和现有单架构门禁，但尚未接入 Universal；
-先完成下节，再使用该入口。不要改用上游配置或删除 hook 来绕过失败。
-不要替换 appId；内部 App 仍叫 OpenMausBot.app，窗口叫锐捷Bot，DMG/ZIP 前缀为 RuijieBot。
-安装版服务数据使用当前 macOS 用户主目录的 `~/.ruijiebot`，源码开发版仍使用
-`~/.openmausbot`；不要把 Windows 的盘符或用户名写死到 Mac 构建中。
-`enterprise/` 是单独许可，构建时会纳入；生产使用/分发许可须由发布负责人核实。
-
-当前代码不会因“有 Harness 许可证”自动获得 Bot Enterprise 许可。不得移除许可证
-或绕过 feature gate；如要改为纯 OSS 发行，那是另一次明确的发行配置变更和验收。
-
-### 2.1 Universal 待实施清单（获授权后执行）
-
-按顺序落实下表；每行都有代码差异与测试证据后，才能标记该行完成。本次文档更新不勾选这些项目。
-
-| 改造对象 | 必须完成的改造 | 完成条件 |
-|---|---|---|
-| 锐捷构建配置 | DMG/ZIP 均改成 `arch: [universal]`，使用 ASAR 合并；产物名按第 5 节。优先限定在锐捷 Mac 配置，保留 Windows/Linux 行为 | 配置回归证明只选择一个 Universal 目标；Windows 安装器、品牌、数据身份和资源路径不变 |
-| 原生资源布局 | 两个合并输入都携带第 5 节规定的两棵相同 native 树；共同 JS、许可和 speech helper 保留公共位置 | 两树完整且来源可核验，不受本机架构或 partial 环境变量影响；共有 Mach-O 自身为 Universal |
-| 运行时选取 | 修改 CUA、浏览器、飞书、隧道及所有服务端/子进程资源读取入口，按 Electron 的 `process.arch` 选树；签名信任根仍指向真正 App | arm64、x64、Rosetta、缺文件/错架构和开发/安装隔离都有回归；不借 PATH/Homebrew 或下载兜底掩盖缺资源 |
-| 签名前 hooks | `check-ruijie-release-readiness.mjs` 联合验证两份 Mac receipt；`after-pack.mjs` 处理两个输入及最终 Universal 结果 | 缺任何架构凭据/资源、源码指纹或共用 JS 摘要不一致、哈希/许可失败均阻断；合并结果不再被当成未知架构 |
-| 合并及签名 | 根据锁定的 electron-builder 版本配置合并例外，保留固定哈希侧车；新增可复用的 afterSign/最终 App 架构与完整签名门禁 | 正式 Mac 缺 Developer ID 即失败，所有代码对象验签、同 Team；ad-hoc 单独标为内部候选，不放宽飞书校验 |
-| 检查脚本与更新 | 让 `smoke-browser-bundle.mjs` 等工具识别新布局；复核 `regenerate-mac-feed.mjs`、更新器和全部资产白名单 | 同一个 Universal ZIP 被两 CPU 选中；feed 拒绝夹杂旧分架构文件，大小/摘要对应最终字节 |
-| GitHub Actions | 修改 `.github/workflows/release.yml` 和 `sync-published-release.yml` 的 App 路径、签名、公证、ZIP、别名、上传/镜像核验；保留无安装器预检的原生矩阵 | Mac 只生成一份 DMG/ZIP；更新 owner 是 WYunS；上游仓库/镜像步骤先审查并按本产品需求处理，不误上传作者仓库 |
-
-合并例外只针对 `Contents/Resources/native/darwin-{arm64,x64}/**` 两棵树；
-使用 `mergeASARs` / `x64ArchFiles` 时必须按锁定构建器验证实际匹配范围和 hooks 时序。
-Electron/Helpers 必须真正包含 arm64、x86_64，不能扩大例外让单架构主程序混过检查。
-固定哈希的飞书 CLI/Node 等侧车保留各自原始字节，不为凑 Universal 强行 lipo。
-当前代码尚无 `scripts/verify-mac-universal.mjs`，也不支持 `darwin-universal` 验收 CLI 目标；
-如后续新增此类入口，应连同测试与文档一起提交，不能照不存在的命令声称检查通过。
-
-现有 `regenerate-mac-feed.mjs` 只按已有清单重算摘要，不会把分架构列表自动变成 Universal。
-现有 Release 还遍历 `release/mac-arm64` / `release/mac`，并带上游 owner/镜像假设；
-必须一并改造，不能只改打包目标就手动触发旧工作流。
-
-预检使用 `.github/workflows/verify-ruijie-prerelease.yml` 的
-`Ruijie pre-package verification (NO INSTALLERS)`，执行时记录固定 SHA 和实际 runner 架构。
-它已有 arm64/x64 原生检查，但不生成 App、安装器或发布凭据，也未替上述新增实现完成验证。
-补上新路径、双树/签名负例、更新选择回归后，在两种原生 runner 执行；飞书真实授权、
-签名后的运行与持久 TCC 仍留到专用 Mac 账户。Actions 绿灯不替代最终安装验收。
-
-## 3. 构建共用资源
-
-以下是获授权后的资源准备步骤，不是在文档任务中执行的命令；资源准备成功也不表示 Universal 已实现。
-
-```bash
-corepack pnpm install --frozen-lockfile
-corepack pnpm typecheck
-node --test electron/ruijie-package-config.node-test.mjs
-corepack pnpm test:packaged-server
-corepack pnpm package:prepare
-corepack pnpm build:speech
-corepack pnpm build:cua
-corepack pnpm build:feishu:mac
-```
-
-默认准备两种架构；pnpm 10 从 package.json 的 supportedArchitectures 安装对应原生包。
-`--current` / CUA 的 partial 模式只用于本机预检，不能用于 Universal 资源准备。
-打包前两份 `darwin-arm64` / `darwin-x64` 原生验收凭据必须绑定同一源码指纹与共用 JS 摘要。
-缺 `@trycua/cua-driver-darwin-*` 时检查包管理器/锁文件，不复制 Windows 的 `.node`。
-浏览器使用 Mac 的平台 pin；Windows `0.36.0-omb.2` 不能拷进 Mac。
-第 2.1 节改造后，`afterPack` 必须对两个合并输入和最终 Universal App 都核对两套资源的来源哈希、架构、manifest 与许可证。
-新增 `afterSign` 必须再检查完整签名和双架构；正式 Mac 路线要求缺证书即失败，不允许静默跳过签名。
-全新安装版 profile 必须默认显示内置浏览器；用户已明确关闭时仍保持关闭。
-设置窗口关闭按钮的尺寸与点击区域属于共用 UI 修复，Mac 构建不得换回旧版 `dist`。
-
-变更了 Bot UI/server/companion/updater 就重建这些 JS；不用重编译 Harness。
-只有 SHA、锁文件、平台/架构、配置和前序生成物全部可核对时才能复用构建断点。
-同一 DMG 的验收脚本修正可续验；产品或依赖变更则是新候选，不能继承旧 DMG 结论。
-
-## 4. 选择准确的签名路线
-
-以下候选命令仅在第 2.1 节实现、对应回归和原生预检已完成，且另获打包授权后执行。
-
-### A. 已有自己的 Developer ID（正式分发）
-
-发布人员在受保护构建环境中配置自己获授权的 Developer ID；不要复制上游作者证书
-或 Team ID。以下命令不会自动完成公证：
-
-```bash
-corepack pnpm exec electron-builder --config electron-builder.ruijie.mjs --mac --publish never
-```
-
-执行前确认修改后的默认目标是 Universal；当前未改造配置不满足这个前提。
-不追加 `--arm64` / `--x64` 改回分包。构建器内部生成 x64/arm64 临时输入，
-合并后交付一个 App；内部两次构建不代表交付两个 DMG。
-
-源码 mac.notarize=false：先验证 `.app` 和全部嵌套代码签名，再由发布人员通过自己的
-notarytool Keychain profile 提交 DMG/ZIP，等待 Accepted，staple `.app` 和 DMG。
-staple 后按第 2.1 节已改造并复核的流程重新生成 Universal ZIP、blockmap、latest-mac.yml，
-不能直接执行当前旧 release.yml 的双架构路径和上游/镜像发布步骤。最终哈希必须在所有字节变化结束后计算。
-
-### B. 无 Developer ID（内部测试候选）
-
-明确使用 ad-hoc，而不是把 identity=null 的完全未签名产物称为已签名：
-
-```bash
-CSC_IDENTITY_AUTO_DISCOVERY=false corepack pnpm exec electron-builder \
-  --config electron-builder.ruijie.mjs --mac --publish never \
-  -c.mac.identity=- -c.dmg.sign=false
-```
-
-该路线准确状态为 `ad-hoc signed, not notarized`，不是正式公证分发。
-待实现的签名门禁只能在显式内部 ad-hoc 路线下允许该签名类型，仍逐个验证 Mach-O 和主 App，
-报告必须标为“内部候选，不允许正式分发”；不能把缺证书自动降级成内部通过。
-飞书对重新签名字节的替代校验仍要求 Developer ID，同 Team 规则不为内部包放宽；
-ad-hoc 不能替代正式飞书签名后验收。无正式证书时先做无安装器预检，不伪造正式通过记录。
-必须逐个验签真实 Mach-O、外层 `.app`，并通过普通实体 Mac 的 TCC 验收。
-electron-builder 成功退出不证明签名闭包通过。若内嵌 CUA/浏览器缺签或权限循环，
-停止放行，记录问题，不把关闭 Gatekeeper/删除 quarantine/重置所有 TCC 当修复。
-内部包能否给员工安装由发布负责人决定，本指南不默认授权改变系统安全策略。
-
-### C. 屏幕录制反复授权不能只看“已签名”
-
-屏幕录制属于 TCC；公证/Gatekeeper 通过不等于系统已授予或持续识别该权限。
-先记录完整弹窗、macOS 版本、同版/升级、安装路径与实际责任进程，再按
-[签名策略第 5.1 节](macOS代码签名与TCC身份策略.md#51-屏幕录制重复授权的定向诊断) 排查。
-代码的 embedded CUA 失败后可尝试已有 standalone CuaDriver，两者授权身份不同；
-需记录实际模式，不能因机器早已安装并授权 CuaDriver 就算包内 CUA 通过。
-同版、同位置已允许后，每次截图/退出重开仍反复请求，或者拒绝后持续弹窗，都阻断交付。
-系统版本规定的周期性复核应按弹窗原文单列，不与每次操作的权限循环混为一谈。
-Developer ID 需核对签名闭包与稳定 requirement；ad-hoc 的跨版本身份不能视作同等保证。
-GitHub Actions 不保存用户持久 TCC 状态，最终必须按真人指南完成重复操作与覆盖升级测试。
-
-## 5. 产物及安装形态检查
-
-以下名称、路径和命令适用于第 2.1 节完成后的目标布局，不描述当前代码已生成的产物。
-
-最终 App：`release/mac-universal/OpenMausBot.app`。
-交付安装器：`RuijieBot-<版本>-mac-universal.dmg`；自动更新包：`RuijieBot-<版本>-mac-universal.zip`。
-稳定下载别名只有 `RuijieBot.dmg`，是同一个 DMG 的副本；ZIP 不要求普通用户另行下载。
-`latest-mac.yml` 只列该 Universal ZIP/DMG，两个 CPU 使用相同更新字节。
-不要留下旧架构 DMG/ZIP 混入上传列表；Windows ZIP 名称保持原样。
-
-包内公共代码位于 `Resources/{ui,server,companion,tuantuan-feishu}`；
-双原生树须固定为 `Resources/native/darwin-arm64` 和 `Resources/native/darwin-x64`，每树包含：
-`cua-driver`、`cua-sdk`、`cloudflared`、`browser-engine`、`tuantuan-feishu-runtime`。
-运行时须按 **Electron 的 process.arch** 选择；Rosetta 下选 x64，不按硬件型号或“哪个文件存在”猜测。
-共享 speech helper 和共享目录中的其他 Mach-O 必须自己就是 Universal。
-`x64ArchFiles` 例外仅覆盖上述两棵 native 树；它们在合并输入中保持相同字节，
-不对固定哈希的飞书 CLI/Node 强行 lipo，也不把例外扩大到 Electron/Helpers。
-
-```bash
-APP_PATH="$REPO_ROOT/release/mac-universal/OpenMausBot.app"
-RESOURCES="$APP_PATH/Contents/Resources"
-APP_EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Contents/Info.plist")
-lipo -verify_arch arm64 x86_64 "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE"
-lipo -verify_arch arm64 x86_64 "$RESOURCES/OpenMausBot Speech.app/Contents/MacOS/speech-helper"
-for arch in arm64 x64; do
-  NATIVE_ROOT="$RESOURCES/native/darwin-$arch"
-  expected_arch="$arch"
-  if [ "$arch" = x64 ]; then expected_arch=x86_64; fi
-  test -d "$NATIVE_ROOT/cua-sdk"
-  test -f "$NATIVE_ROOT/browser-engine/manifest.json"
-  test -f "$NATIVE_ROOT/tuantuan-feishu-runtime/manifest.json"
-  test "$(lipo -archs "$NATIVE_ROOT/cua-driver")" = "$expected_arch"
-  test "$(lipo -archs "$NATIVE_ROOT/cloudflared/cloudflared")" = "$expected_arch"
-  test "$(lipo -archs "$NATIVE_ROOT/browser-engine/agent-browser")" = "$expected_arch"
-done
+APP_PATH="/填写实际挂载位置/OpenMausBot.app"
+test -d "$APP_PATH/Contents"
+APP_ARCH="$(node -p process.arch)"
+case "$APP_ARCH" in
+  arm64) EXPECTED_CPU=arm64 ;;
+  x64) EXPECTED_CPU=x86_64 ;;
+  *) echo "需要对应架构的原生 Mac Node"; exit 1 ;;
+esac
+test "$(lipo -archs "$APP_PATH/Contents/MacOS/OpenMausBot")" = "$EXPECTED_CPU"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 codesign -dv --verbose=4 "$APP_PATH"
-codesign -dr - "$APP_PATH"
-cat "$RESOURCES/app-update.yml"
 ```
 
-这些原生命令是基础检查，不是完整放行器：还须按签名策略第 3 节枚举所有 Helper、Framework、
-CUA SDK 原生模块、Chromium、飞书 CLI/Node 和其他 Mach-O，检查架构、签名、Team 及许可。
-第 2.1 节应把完整检查接入自动门禁；不能只凭主程序和少数侧车抽查通过就放行。
+这只是辅助诊断；完整检查由 `verifyAdHocThin` 及 workflow 的最终 verify 执行，
+不可把四条命令当成整个验收器。不要调用不存在的 `verify-mac-universal.mjs`
+或给旧脚本添加它不支持的 `darwin-universal` 参数。
 
-浏览器检查也须先完成新资源布局适配，再运行以下已有脚本。`APP_ARCH` 从安装版/候选
-Electron 的实际运行记录填写；原生 M 系列为 arm64，原生 Intel 为 x64，Rosetta 单列。
-外部 Node 的架构必须与这次实测进程一致，不能按打包机器的 Node 推断用户应用架构：
+包内 `app-update.yml` 公司 owner 应为 `AI-Applications-Team`，无 token/publisherName。
+本流程只交分架构 DMG，不生成/发布自动更新 ZIP、latest-mac.yml 或 Universal 下载别名；
+不能因缺这些资产让两份正确内测 DMG 失败。需要自动更新是另一项实现/验收任务。
 
-```bash
-APP_ARCH=arm64  # Intel 原生测试填写 x64；须与本次 Electron 运行记录一致
-test "$(node -p process.arch)" = "$APP_ARCH"
-NATIVE_RESOURCES="$RESOURCES/native/darwin-$APP_ARCH"
-# 仅在本脚本已按第 2.1 节适配双树后执行；当前脚本仍读取平面 browser-engine。
-node scripts/smoke-browser-bundle.mjs --resources "$RESOURCES" --target "darwin-$APP_ARCH"
-OMB_SMOKE_DIST="$RESOURCES/server" node scripts/smoke-packaged-server.mjs \
-  --browser-default-enabled --browser-bundle "$NATIVE_RESOURCES/browser-engine"
-```
+自动化现在会将最终 DMG 中的 App 复制到隔离 Applications 目录，在两种原生 CPU 上逐一验证文件哈希、符号链接、权限、签名和包内运行依赖；随后测试替换安装、旧文件消失及移除 App 后保留数据，记录各阶段耗时。
+证据为 `evidence-macos-<arch>-<run>/macos-<arch>-install-lifecycle.json`。任一步失败阻止该平台交付与整批自动发布。
+自动化仍不代替 Finder 交互、Gatekeeper、模型/飞书账号、IM、Keychain、屏幕录制、辅助功能与真实历史用户数据升级。
+两种 CPU 都必须再按 [真人验收指南](03-macOS真人验收测试指导.md) 测最终安装 App。
+没有 Intel 实机或账号就如实写环境阻塞，不继承 Windows/arm64 的结果。
 
-核对更新 owner WYunS；检查 ui/index.html、server/index.js、ruijie-computer-proxy.js、
-companion/index.js、speech helper、cua-driver/cua-sdk、cloudflared、browser-engine、licenses。
-Mac tuantuan-feishu 已接入主进程/预加载桥、arm64/x64 Mach-O 与 tar.gz、私有目录和包内依赖。
-`build:feishu:mac` 为两个架构分别生成 `dist-native/feishu-runtime/darwin-<arch>`，
-只准备当前架构可用 `node scripts/prepare-feishu-runtime.mjs --current`。
-许可清单已有独立 Mac arm64/x64 精确记录，复核见 `connectors/feishu/licenses/MAC_AUDIT.md`；
-包含 go-keyring 平台增量通知与两个限定 MPL 例外，不自动继承 Windows 或未来哈希。
-许可工程复核不等于运行代码已在 Mac 验收通过；打包仍需原生与签名后证据。
-包内 CLI/Node 不可缺失或借用 Homebrew/PATH；签名前验来源哈希，签名后验主 App 闭包和同 Team。
-同时复测默认中文回复、浏览器后台恢复及 Harness“继续”上下文；不要只测启动页面。
-中文规则存在与真实回复合格分开记录；欢迎语、进度、最终回复分别检查，不能只看最后一句中文。
-浏览器额外执行通用指南第 2 节的 MCP 优先和 `--viewer-first` 两种启动顺序：
-人工/机器人交替操作不得因 daemon 超时配置不同而重启或断流。arm64/x64 Actions 分别运行，
-Windows 的通过不能替代 Mac；最终签名安装版仍须连续 60 秒原流和接管/交还验收。
-公开插件服务地址可通过 `RUIJIE_COMPOSIO_BROKER_URL` 烘焙进包，必须与验收记录一致；
-禁止把项目 API key、个人安装 token 或 VPN 配置写进元数据。
-服务自身要求代理时允许用户使用代理；必须按通用指南验证离线首启、开启代理后点击重试、
-连接入口恢复和只读调用，不以重新安装代替恢复，也不要求本轮部署自建服务。
-按通用指南补运行时、资源、路径、架构和签名验证；其他功能逐项按 Mac 原生证据验收。
+## 7. 失败与交付
 
-上述只验证 unpacked tree。必须挂载**最终 DMG**，从其中 `.app` 重做架构、资源和完整签名检查；
-已公证包还要 `xcrun stapler validate` 与 `spctl --assess --type execute`。
-把 DMG 内容安装到获授权测试账户的 Applications，再执行真人指南，不能启动源码替代。
-M 系列与 Intel 必须测试 **SHA-256 相同的最终 DMG**；两份分别重打的包不能证明一个 Universal 包兼容两者。
-签名后的原生文件哈希会变，不能拿签名前的 vendor 文件哈希判签名包损坏。
-Finder/DMG 图标输入为 `build/icon.icns`，运行时 Dock 使用 `electron/resources/app-icon.png`；
-两者均应为产品图标。Windows 开发运行时的 Electron 原子图标不属于 Mac 打包输入。
+先按 [通用失败表](04-通用回归与发布门禁.md#5-失败时先查第一条错误不要反复重打) 找首个失败阶段。
+EMFILE 不是 js.map 缺失；签名时缺 chrome_crashpad_handler 的签名不是缺其源文件；
+publish 缺 manifest 先查 build/verify 是否成功及 collector 版本，不重编译 Harness 来修收集问题。
 
-## 6. 交付和不能声称的结论
+thin 包装要求新的 staging 目录；失败后保留证据，在独立干净检出重试，
+不要对工作区执行无差别清理。新代码必须新发起运行，旧 Run 的重试不会切换新提交。
 
-打包必须保留 `package:prepare` 生成的 desktop-build.json：beforePack 检查当前源码与构建内容，
-afterPack 检查实际包内 UI/server，拒绝旧产物。开发预览与安装包共用编译内容/固定依赖，
-但数据身份仍独立；Windows 预览不替代 Mac 原生和签名后的验收。
-
-```bash
-git rev-parse HEAD
-git status --short
-shasum -a 256 release/*.dmg release/*.zip
-```
-
-交付记录：完整 SHA、Bot 版本、Universal 目标及两个实际测试架构、Node/pnpm、构建配置、签名类型/Team ID、
-公证状态、最终 DMG/ZIP SHA-256、静态审计与真人报告。不得包含私钥、token、账户信息。
-需要自动更新时另交 post-staple 的最新 ZIP/blockmap/latest-mac.yml，并复核实际字节。
-本轮仅更新指南，未实施 Universal、运行打包或创建/上传应用安装包 Release，也未替打包者完成 Mac 实机验收。
-
-Windows 已验证的浏览器超时、删除、Harness 桥接修复不能冒充 Mac 已通过。
-没有兼容 Harness 安装版或测试账号时标“未执行/环境阻塞”，不以空模型列表作为验收完成。
+交付两份 DMG、各自大小/SHA-256、同批 BUILD-MANIFEST、运行日志和分别的真人报告。
+不要承诺拆分后固定大小；历史 Universal 约 2 GB，不代表新包实测值。
+CPU 不符、缺依赖、签名不完整、同版权限循环或数据问题必须阻断；
+ad-hoc 升级可能重新授权须如实说明，不宣传正式签名的持续身份保证。

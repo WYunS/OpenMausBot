@@ -41,7 +41,14 @@ export async function isLegacyFeishuEntry(entry, currentScript = fileURLToPath(n
   if (typeof script !== 'string' || script.length > 4096 || !path.isAbsolute(script) ||
       script !== path.resolve(script) || script.startsWith('\\\\') ||
       !Array.isArray(keys) || keys.length !== 2 || [...keys].sort().some((key, index) => key !== bridgeKeys[index]) ||
-      path.basename(script) !== 'mcp.mjs' || path.basename(path.dirname(script)) !== 'tuantuan-feishu' ||
+      path.basename(script) !== 'mcp.mjs') return false;
+  // A moved development checkout can retain a junction at its previous path.
+  // Recognize only aliases of this exact shipped bridge, never another program
+  // merely sharing its name or source contents.
+  try {
+    if (path.isAbsolute(currentScript) && canonical(await realpath(script)) === canonical(await realpath(currentScript))) return true;
+  } catch { /* A removed package still needs the legacy receipt below. */ }
+  if (path.basename(path.dirname(script)) !== 'tuantuan-feishu' ||
       path.basename(path.dirname(path.dirname(script))) !== 'resources') return false;
   try {
     for (const name of ['mcp.mjs', 'tools.mjs']) {

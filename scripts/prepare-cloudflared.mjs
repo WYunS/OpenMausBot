@@ -15,9 +15,9 @@ import {
   mkdtempSync,
   readFileSync,
   renameSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -246,6 +246,12 @@ export async function releaseBytes(asset) {
   }
 }
 
+export async function removeStagingDirectory(directory) {
+  // Node 24's native rmSync can return EPERM immediately on Windows even
+  // with maxRetries. The async implementation retries transient file locks.
+  await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+}
+
 async function stageTarget(root, target) {
   const asset = CLOUDFLARED_ASSETS[target];
   if (!asset) throw new Error(`No pinned cloudflared asset for ${target}`);
@@ -300,13 +306,13 @@ async function stageTarget(root, target) {
       `${JSON.stringify(expectedManifest(target), null, 2)}\n`,
       { mode: 0o600 },
     );
-    rmSync(finalDirectory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    await removeStagingDirectory(finalDirectory);
     renameSync(stagedDirectory, finalDirectory);
     console.log(`staged cloudflared ${CLOUDFLARED_VERSION} for ${target}`);
   } finally {
     // Windows Defender can briefly retain the executable after the version
     // probe exits. Node retries EPERM for recursive removals when asked.
-    rmSync(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    await removeStagingDirectory(scratch);
   }
 }
 

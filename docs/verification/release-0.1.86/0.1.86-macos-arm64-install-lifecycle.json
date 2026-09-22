@@ -1,0 +1,29 @@
+{
+  "version": "0.1.86",
+  "sourceSha": "1648996ffded608efe73627cd8fa8aa0ac171efa",
+  "target": "macos-arm64",
+  "status": "passed",
+  "stages": [
+    {
+      "name": "install",
+      "seconds": 25.06,
+      "entries": 43705,
+      "allPayloadHashesAndLinksMatch": true,
+      "installedRuntimeSmoke": "passed"
+    },
+    {
+      "name": "replace",
+      "seconds": 21.455,
+      "entries": 43705,
+      "allPayloadHashesAndLinksMatch": true,
+      "installedRuntimeSmoke": "passed"
+    },
+    {
+      "name": "remove",
+      "seconds": 2.623,
+      "userDataPreserved": true,
+      "independentAppPreserved": true
+    }
+  ],
+  "scope": "Final DMG copy, replace, runtime smoke and removal in an isolated Applications directory; Finder, Gatekeeper and TCC require human acceptance"
+}

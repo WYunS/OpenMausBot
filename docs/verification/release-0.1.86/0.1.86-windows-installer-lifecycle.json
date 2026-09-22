@@ -1,0 +1,26 @@
+{
+  "version": "0.1.86",
+  "sourceSha": "1648996ffded608efe73627cd8fa8aa0ac171efa",
+  "installerSha256": "9d3619cf6a49f61a8ee4e903dbec65c5ee0e7b9da8732ba8eca8d0bdec127fa5",
+  "status": "passed",
+  "stages": [
+    {
+      "name": "install",
+      "seconds": 112.092,
+      "payloadFiles": 39039,
+      "allPayloadHashesMatch": true
+    },
+    {
+      "name": "reinstall",
+      "seconds": 131.122,
+      "payloadFiles": 39039,
+      "allPayloadHashesMatch": true
+    },
+    {
+      "name": "uninstall",
+      "seconds": 11.899,
+      "programFilesRemoved": true,
+      "userDataPreserved": true
+    }
+  ]
+}

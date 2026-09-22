@@ -63,15 +63,20 @@ test("syncing downstream main cannot create desktop releases or publish a Docker
   assert.deepEqual(Object.keys(release.on), ["workflow_dispatch"], "desktop release must be explicitly dispatched");
   const docker = parse(await readFile(new URL("../.github/workflows/docker.yml", import.meta.url), "utf8"));
   assert.equal(docker.jobs.publish.if,
-    "startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')",
+    "startsWith(github.ref, 'refs/tags/v') && github.event_name == 'workflow_dispatch'",
     "branch pushes may build/smoke but must never publish an image");
+  assert.equal(docker.on.push.tags, undefined, "desktop tags must not trigger container builds");
+  const npm = parse(await readFile(new URL("../.github/workflows/npm-package.yml", import.meta.url), "utf8"));
+  assert.equal(npm.on.push, undefined, "desktop tags must not trigger npm publication");
+  assert(npm.on.pull_request, "retain unrelated pull-request checks");
+  assert.equal(npm.jobs['publish-npm'].if, "startsWith(github.ref, 'refs/tags/v') && github.event_name == 'workflow_dispatch'");
 });
 
 test("release workflows pin and stage the credential-migration Harness runtime", async () => {
   for (const name of ["release.yml", "package-win.yml"]) {
     const source = await readFile(new URL(`../.github/workflows/${name}`, import.meta.url), "utf8");
     assert.match(source, /AI-Applications-Team\/ruijie-harness/);
-    assert.match(source, /38fc3f4a79a5bab30a6a07d852c4ed3ef832d3b3/);
+    assert.match(source, /f48fe5cb09e37c1bcb4ed2c19f75ce5e1bf8aeae/);
     assert.match(source, /RUIJIE_HARNESS_BUNDLE_SOURCE_/);
   }
 });

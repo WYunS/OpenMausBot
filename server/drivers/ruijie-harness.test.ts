@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseDocument } from "yaml";
 import {
   computerActionRequested,
   computerMutationRequested,
@@ -174,6 +175,32 @@ describe("Ruijie Harness driver", () => {
   afterEach(() => {
     calls.length = 0;
     vi.unstubAllGlobals();
+  });
+
+  it("mounts custom tools through the result gate while keeping agent capabilities scoped", async () => {
+    const dshHome = await mkdtemp(join(tmpdir(), "openmaus-rjh-custom-"));
+    const instance = await RuijieHarnessDriver.create({
+      instanceId: "ruijieHarness", displayName: "Fixture", enabled: true, environment: {},
+      config: { endpoint: "http://127.0.0.1:49724", expectedAccountEmail: "wangyunshang@ruijie.com.cn", dshHome },
+    });
+    try {
+      await instance.adapter.sendTurn({ threadId: "custom-thread", text: "List notes", integrations: {
+        agents: { command: process.execPath, args: ["agents-fixture"], env: { OMB_COMMS_TOKEN: "scoped-fixture" } },
+        custom: { notes: { command: process.execPath, args: ["notes-fixture"], env: { NOTES_TOKEN: "private-fixture" } } },
+      } });
+      expect(instance.adapter.capabilities.customMcp).toBe(true);
+      const created = calls.find(call => call.method === "session.create");
+      const content = await readFile(join(dshHome, ".agent-presets", created!.payload.agentPreset, "agent.cordis.yml"), "utf8");
+      const rows = parseDocument(content).toJS() as Array<{ name: string; config?: { serverName: string; args: string[]; env: Record<string, string>; failOnStartupError: boolean } }>;
+      const custom = rows.find(row => (JSON.stringify(row.config?.env) ?? "").includes("notes-fixture"))?.config;
+      const agents = rows.find(row => row.config?.env?.OMB_COMMS_TOKEN === "scoped-fixture")?.config;
+      expect(custom?.failOnStartupError).toBe(true);
+      expect(custom?.args.join(" ")).not.toContain("private-fixture");
+      expect(JSON.stringify(custom?.env)).toContain("notes-fixture");
+      expect(agents?.env.OMB_COMMS_TOKEN).toBe("scoped-fixture");
+      expect(JSON.stringify(custom)).not.toContain("scoped-fixture");
+      await instance.adapter.interruptTurn("custom-thread");
+    } finally { await instance.dispose(); await rm(dshHome, { recursive: true, force: true }); }
   });
 
   it("only requires computer evidence for action requests", () => {

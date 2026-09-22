@@ -1,9 +1,11 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { inspect } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { GroupGoalRunStatus } from "../shared/group-goal-run.ts";
+import * as atomic from "./atomic.ts";
 import {
   nextOccurrence,
   RoutineManager,
@@ -104,6 +106,154 @@ function harness(start = new Date(2026, 7, 17, 8, 0, 0).getTime()) {
 afterEach(() => {
   vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+describe("routine storage recovery", () => {
+  it.each(["routines", "runs"] as const)("keeps valid work and receipts when %s contains invalid records", async (collection) => {
+    const h = harness();
+    h.setBot("busy");
+    const request = {
+      requestId: "storage-review",
+      messageId: "storage-card",
+      botId: "storage-bot",
+      threadId: "storage-thread",
+      action: "create" as const,
+      fingerprintVersion: 1 as const,
+      fingerprint: "a".repeat(64),
+    };
+    const routine = h.manager.create({
+      name: "Keep this routine",
+      prompt: "Keep the original task",
+      botId: "storage-bot",
+      schedule: { type: "daily", time: "09:00", weekdays: [1] },
+    }, request);
+    const run = h.manager.runNow(routine.id)!;
+    await h.manager.tick();
+    const file = h.options.file!;
+    const stored = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown[]>;
+    const webhookReceipt = {
+      webhookId: "storage-hook",
+      deliveryId: "storage-delivery",
+      runId: run.id,
+      acceptedAt: routine.createdAt,
+    };
+    stored.webhookRunReceipts = [webhookReceipt];
+    const validRecord = stored[collection]![0];
+    if (!validRecord || typeof validRecord !== "object" || Array.isArray(validRecord)) throw new Error("Missing valid fixture record");
+    stored[collection]!.push(null, { id: "incomplete-record" },
+      { ...validRecord, id: "invalid-target", target: "unknown-target" },
+      { ...validRecord, id: "missing-room", target: "room-goal", groupId: null });
+    const damagedBytes = Buffer.from(JSON.stringify(stored));
+    const invalidIdOffset = damagedBytes.indexOf("invalid-target");
+    expect(invalidIdOffset).toBeGreaterThanOrEqual(0);
+    damagedBytes[invalidIdOffset] = 0xff;
+    const damaged = damagedBytes.toString("utf8");
+    writeFileSync(file, damagedBytes);
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const restored = new RoutineManager(h.options);
+    expect(restored.listRoutines()).toMatchObject([{ id: routine.id, name: "Keep this routine" }]);
+    expect(restored.listRuns()).toMatchObject([{ id: run.id, status: "queued" }]);
+    expect(readFileSync(file, "utf8")).toBe(damaged);
+    const backups = readdirSync(dirname(file)).filter((name) => name !== "routines.json");
+    expect(backups).toHaveLength(1);
+    expect(readFileSync(join(dirname(file), backups[0]!))).toEqual(damagedBytes);
+    if (process.platform !== "win32") expect(statSync(join(dirname(file), backups[0]!)).mode & 0o777).toBe(0o600);
+    expect(diagnostic).toHaveBeenCalled();
+
+    restored.create({
+      name: "A later routine",
+      prompt: "Do not erase earlier work",
+      botId: "storage-bot",
+      enabled: false,
+      schedule: { type: "daily", time: "10:00", weekdays: [2] },
+    });
+    const saved = JSON.parse(readFileSync(file, "utf8")) as {
+      routines: Array<{ id: string }>;
+      runs: Array<{ id: string }>;
+      routineRequestReceipts: Array<{ requestId: string; resultId: string }>;
+      webhookRunReceipts: typeof webhookReceipt[];
+    };
+    expect(saved.routines.map((item) => item.id)).toContain(routine.id);
+    expect(saved.runs.map((item) => item.id)).toContain(run.id);
+    expect(saved.routineRequestReceipts).toMatchObject([{ requestId: request.requestId, resultId: routine.id }]);
+    expect(saved.webhookRunReceipts).toEqual([webhookReceipt]);
+    expect(new RoutineManager(h.options).listRoutines()).toHaveLength(2);
+    expect(readdirSync(dirname(file)).filter((name) => name !== "routines.json")).toEqual(backups);
+  });
+
+  it.each([
+    "{",
+    "null",
+    "[]",
+    "{}",
+    '{"version":1}',
+    '{"version":1,"routines":{}}',
+    '{"version":1,"routines":[],"runs":42}',
+    '{"version":2,"routines":[],"runs":[]}',
+  ])("refuses an unreadable storage shape instead of resetting it: %s", (damaged) => {
+    const file = tempFile();
+    writeFileSync(file, damaged);
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() => new RoutineManager({
+      file, botState: () => "ready", createTask: () => null, startTurn: async () => {},
+    })).toThrow(/routine/i);
+    expect(readFileSync(file, "utf8")).toBe(damaged);
+    expect(diagnostic).toHaveBeenCalled();
+  });
+
+  it("distinguishes a missing store from a filesystem read failure", () => {
+    const file = tempFile();
+    const options: RoutineManagerOptions = {
+      file, botState: () => "ready", createTask: () => null, startTurn: async () => {},
+    };
+    expect(new RoutineManager(options).listRoutines()).toEqual([]);
+    mkdirSync(file);
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() => new RoutineManager(options)).toThrow(/routine/i);
+    expect(statSync(file).isDirectory()).toBe(true);
+    expect(diagnostic).toHaveBeenCalled();
+  });
+
+  it("does not echo malformed store contents through startup diagnostics or error causes", () => {
+    const file = tempFile();
+    writeFileSync(file, "PRIVATE_SENTINEL_NOT_JSON");
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+    let failure: unknown;
+    try {
+      new RoutineManager({
+        file, botState: () => "ready", createTask: () => null, startTurn: async () => {},
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect(inspect(failure)).not.toContain("PRIVATE");
+    expect(inspect(diagnostic.mock.calls)).not.toContain("PRIVATE");
+  });
+
+  it("refuses recovery when the original damaged data cannot be preserved", () => {
+    const h = harness();
+    const file = h.options.file!;
+    h.manager.create({
+      name: "Keep the only valid routine",
+      prompt: "Do not hide a failed recovery",
+      botId: "storage-bot",
+      schedule: { type: "daily", time: "09:00", weekdays: [1] },
+    });
+    const stored = JSON.parse(readFileSync(file, "utf8")) as { routines: unknown[] };
+    stored.routines.push(null);
+    const damaged = JSON.stringify(stored);
+    writeFileSync(file, damaged);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(atomic, "writeFileAtomic").mockImplementationOnce(() => {
+      throw Object.assign(new Error("backup blocked"), { code: "EACCES" });
+    });
+
+    expect(() => new RoutineManager(h.options)).toThrow(/backup blocked/);
+    expect(readFileSync(file, "utf8")).toBe(damaged);
+    expect(readdirSync(dirname(file))).toEqual(["routines.json"]);
+  });
 });
 
 describe("cron routines use the existing persistent scheduler", () => {

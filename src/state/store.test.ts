@@ -22,6 +22,13 @@ import { openLiveEvents, type LiveEventSourceLike, type LiveEventsPlatform } fro
 import type { RoutineRun } from "../lib/routines";
 
 describe("partial provider refresh", () => {
+  it("opens the chosen channel when switching a historical channel task from another view", () => {
+    const next = reducer({ ...initialState, selectedId: "other", activeView: "routines" }, {
+      type: "switchGroupTask", groupId: "channel", threadId: "historical-thread",
+    });
+    expect(next.selectedId).toBe("channel");
+    expect(next.activeView).toBe("chat");
+  });
   it("updates only the refreshed Harness row and preserves every other engine", () => {
     const codex = {
       instanceId: "codex", driverKind: "codex", displayName: "Codex", enabled: true,

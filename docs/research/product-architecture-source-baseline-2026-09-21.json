@@ -1,0 +1,58 @@
+{
+  "head": "ecac4d337e414c0daffce7b409a4a70ad71c33c9",
+  "scope": "Read-only working-tree evidence; includes pre-existing uncommitted changes",
+  "files": [
+    {
+      "path": "server/routines.ts",
+      "sha256": "2d03b6e642224de7c6de9ecc99b99364266b050260a3818c830e00f8f3cde36f"
+    },
+    {
+      "path": "server/index.ts",
+      "sha256": "a537599796d51ce6c1ef497604a6571d426727f790c42019aea3b51122d871ba"
+    },
+    {
+      "path": "server/contracts.ts",
+      "sha256": "8703f4efd4fe0955e3b8e644bf6db6edb921cea6d8171b8d6dae9b5d3b90e641"
+    },
+    {
+      "path": "server/store.ts",
+      "sha256": "5f11fed193ddfb3215892b730e5fc83067f144a44c9a1fe239c4d4a94f9de066"
+    },
+    {
+      "path": "server/delegations.ts",
+      "sha256": "8c715e9206fe9ab18318025c65b248f564a4b2e666d62b3914949e28389a67f9"
+    },
+    {
+      "path": "server/computer-turn-queue.ts",
+      "sha256": "afe6e67be0e0a7e84b990cbde819c6d3a3291dd4b833b71c3dff8234b99583d7"
+    },
+    {
+      "path": "electron/main.mjs",
+      "sha256": "209b8ae1176d0a41a8d7f54ac11e979a1ed943e4f6f55236ad79f99b81eaa946"
+    },
+    {
+      "path": "electron/capabilities.cjs",
+      "sha256": "0a17b980ce0e7189257ab389e0a661990eb98dede75976ef47705f8a119cb2da"
+    },
+    {
+      "path": "electron/local-origin.cjs",
+      "sha256": "8c2fb1d9f2a97fe362a76c5fdcb1e88fd45e59a5986667024a136ace390e8ab3"
+    },
+    {
+      "path": "electron/environments.cjs",
+      "sha256": "6938cd3b918fdd4641a2dac4d5629c8242d8255a10a75bb05a4583d2b4d480c5"
+    },
+    {
+      "path": "electron/desktop-companion-client.mjs",
+      "sha256": "63e6640b04ca6dacbf7bf34b5e0d4a96317e6bd232843f8165617f9db9e131fb"
+    },
+    {
+      "path": "cloudflare/control-plane/README.md",
+      "sha256": "6ff7158c9a4b8ef3db387f9e187af0975d84664ebf59d10e02f344b5e753a2c8"
+    },
+    {
+      "path": "deploy/docker-compose.yml",
+      "sha256": "7a00d351814e8911d052523556c21925630c0470b2cf2d094b6beba6a2735b9a"
+    }
+  ]
+}
